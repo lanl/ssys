@@ -143,7 +143,7 @@ def _expand_exps_through_factors(exps, factor_map):
 def product_expr(coeff, exps):
     """Build symbolic product expression from coefficient and exponents."""
     expr = sp.Float(coeff)
-    for s, e in sorted(exps.items(), key=lambda kv: kv[0].name):
+    for s, e in sorted(exps.items(), key=lambda kv: str(kv[0])):
         expr *= s**sp.Float(e)
     return sp.simplify(expr)
 
@@ -303,7 +303,9 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400):
     # One code cell per case
     for name, ant_path, recast_path in cases:
         nb.cells.append(new_markdown_cell(f"## {name}"))
-        call = f"load_and_report({repr(ant_path)}, {repr(recast_path)})"
+        # Make recast path relative to notebook location (basename only)
+        recast_basename = os.path.basename(recast_path)
+        call = f"load_and_report({repr(ant_path)}, {repr(recast_basename)})"
         nb.cells.append(new_code_cell(call))
 
     out_nb = os.path.join(out_dir, "recast_report.ipynb")

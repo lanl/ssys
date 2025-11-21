@@ -1,0 +1,32 @@
+model Monod_chemostat()
+
+  // Original general ODE model (not the S-system recast).
+  // Source: Savageau (1988), "Introduction to S-Systems and the Underlying Power-Law Formalism",
+  // Proc. 6th Int. Conf. on Mathematical Modelling, pp. 549–550, Eq. (19).
+  // This version keeps the paper’s normalization: time scaled by dilution rate D (so D=1),
+  // substrate X2 normalized by Monod constant K_s (so K_s=1).
+
+  // Variables (species)
+  species X1, X2;
+
+  // Parameters
+  // alpha1    : max specific growth rate (in excess substrate)
+  // beta2     : alpha1 / Y (Y = yield), treated here as independent parameter
+  // Xr        : reservoir substrate concentration (normalized)
+  alpha1 = 1.0;
+  beta2  = 0.5;
+  Xr     = 2.0;
+
+  // Dynamics (exactly as Eq. (19) in the paper)
+  X1' = alpha1*X1*X2/(X2 + 1) - X1;
+  X2' = (Xr - X2) - beta2*X1*X2/(X2 + 1);
+
+  // Initial conditions (placeholders; adjust as needed)
+  X1 = 0.1;
+  X2 = 0.1;
+
+  // Notes:
+  // * Positive orthant invariance expected for X1, X2 given positive ICs/params.
+  // * This file represents the ORIGINAL model.
+  // * If you want to match a particular data set, set alpha1, beta2 (=alpha1/Y), and Xr accordingly.
+end

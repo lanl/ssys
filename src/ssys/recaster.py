@@ -288,9 +288,160 @@ def term_to_coeff_exps(term: sp.Expr) -> Tuple[float, Dict[sp.Symbol, float]]:
 
 def product_expr(coeff: float, exps: Dict[sp.Symbol, float]) -> sp.Expr:
     expr = sp.Float(coeff)
-    for s, e in sorted(exps.items(), key=lambda kv: kv[0].name):
+    for s, e in sorted(exps.items(), key=lambda kv: str(kv[0])):
         expr *= s**sp.Float(e)
     return sp.simplify(expr)
+
+
+def find_rational_denominators(expr: sp.Expr) -> Set[sp.Expr]:
+    """
+    Find all unique non-trivial denominators in an expression.
+    Returns set of denominator expressions that need auxiliary variables.
+    
+    A denominator is "non-trivial" if it's not:
+    - A constant
+    - A single variable (already power-law)
+    """
+    denoms = set()
+    
+    def visit(e):
+        if isinstance(e, sp.Pow):
+            base, exp = e.args
+            # Check for negative exponents (divisions)
+            if exp.is_number and float(exp) < 0:
+                # If base is not a simple symbol, it needs lifting
+                if not isinstance(base, sp.Symbol):
+                    denoms.add(base)
+            # Recurse into base
+            visit(base)
+        elif isinstance(e, (sp.Add, sp.Mul)):
+            for arg in e.args:
+                visit(arg)
+    
+    visit(expr)
+    return denoms
+
+
+def create_auxiliary_for_denominator(
+    denom: sp.Expr,
+    var_odes: Dict[sp.Symbol, sp.Expr],
+    aux_counter: int,
+    prefix: str = "W"
+) -> Tuple[sp.Symbol, sp.Expr]:
+    """
+    Create auxiliary W = 1/denom and compute W' via chain rule.
+    
+    For W = 1/D(X):
+        W' = -W^2 * dD/dt
+    where dD/dt = sum_i (∂D/∂X_i) * dX_i/dt
+    
+    Returns: (W_symbol, W_ode)
+    """
+    # Create auxiliary symbol
+    W = sp.symbols(f"{prefix}_{aux_counter}", positive=True)
+    
+    # Compute dD/dt using chain rule
+    denom_prime = sp.Integer(0)
+    for var, var_ode in var_odes.items():
+        if var in denom.free_symbols:
+            partial = sp.diff(denom, var)
+            denom_prime += partial * var_ode
+    
+    # W' = -W^2 * dD/dt
+    W_ode = -W**2 * denom_prime
+    W_ode = sp.simplify(W_ode)
+    
+    return W, W_ode
+
+
+def lift_rational_functions(sym: SymSystem) -> SymSystem:
+    """
+    Augment system with auxiliary variables for all rational terms.
+    
+    For each unique non-trivial denominator D(X):
+    1. Create auxiliary W = 1/D
+    2. Add ODE: W' = -W^2 * dD/dt (chain rule)
+    3. Replace 1/D with W in all ODEs
+    4. Set W(0) = 1/D(X(0))
+    
+    Returns augmented SymSystem with rational terms eliminated.
+    """
+    # Find all unique denominators across all ODEs
+    all_denoms = set()
+    for var, ode in sym.odes.items():
+        denoms = find_rational_denominators(ode)
+        all_denoms.update(denoms)
+    
+    if not all_denoms:
+        # No rational functions to lift
+        return sym
+    
+    # Create auxiliary symbols for each denominator
+    denom_to_aux: Dict[sp.Expr, sp.Symbol] = {}
+    aux_counter = 1
+    
+    for denom in sorted(all_denoms, key=str):
+        W = sp.symbols(f"W_{aux_counter}", positive=True)
+        denom_to_aux[denom] = W
+        aux_counter += 1
+    
+    # Substitute auxiliaries in original ODEs
+    # Replace D^(-1) with W for each denominator D
+    new_odes: Dict[sp.Symbol, sp.Expr] = {}
+    for var, ode in sym.odes.items():
+        new_ode = ode
+        for denom, W in denom_to_aux.items():
+            # Replace denom^(-n) with W^n for any n
+            new_ode = new_ode.replace(denom**(-1), W)
+            # Handle other negative powers if present
+            for n in range(2, 6):  # Check powers -2 through -5
+                if denom**(-n) in new_ode.atoms():
+                    new_ode = new_ode.replace(denom**(-n), W**n)
+        new_odes[var] = sp.simplify(new_ode)
+    
+    # NOW compute W' using the LIFTED ODEs (not the original ones)
+    new_aux_odes: Dict[sp.Symbol, sp.Expr] = {}
+    for denom, W in denom_to_aux.items():
+        # Compute dD/dt using the lifted ODEs
+        denom_prime = sp.Integer(0)
+        for var in sym.vars:
+            if var in denom.free_symbols:
+                partial = sp.diff(denom, var)
+                # Use the NEW (lifted) ODE for var, not the original
+                denom_prime += partial * new_odes[var]
+        
+        # W' = -W^2 * dD/dt
+        W_ode = -W**2 * denom_prime
+        new_aux_odes[W] = sp.simplify(W_ode)
+    
+    # Combine original and auxiliary ODEs
+    combined_odes = {**new_odes, **new_aux_odes}
+    
+    # Compute initial conditions for auxiliaries
+    new_initials = dict(sym.initials)
+    for denom, W in denom_to_aux.items():
+        # Evaluate denominator at t=0
+        denom_at_0 = denom
+        for var in sym.vars:
+            if var in denom.free_symbols:
+                denom_at_0 = denom_at_0.subs(var, sym.initials.get(var, 1.0))
+        # W(0) = 1/D(X(0))
+        try:
+            W_init = float(1.0 / denom_at_0)
+        except:
+            W_init = 1.0  # Fallback if evaluation fails
+        new_initials[W] = W_init
+    
+    # Create new variable list: keep original vars, add W auxiliaries
+    # Original vars come first, then the new W auxiliaries
+    new_vars = list(sym.vars) + list(denom_to_aux.values())
+    
+    return SymSystem(
+        vars=new_vars,
+        params=sym.params,
+        odes=combined_odes,
+        initials=new_initials
+    )
 
 def recast_to_ssystem(sym: 'SymSystem') -> 'RecastResult':
     """
@@ -300,7 +451,12 @@ def recast_to_ssystem(sym: 'SymSystem') -> 'RecastResult':
         V_j' = 0 - u_j * (∏_{ℓ≠j} V_ℓ)^(-1) if coeff < 0
       where u_j = |coeff_j| * ∏ original^{exp}.
       Then X = ∏_j V_j, and d/dt(∏ V_j) = ∑ s_j exactly.
+    
+    Automatically lifts rational functions before recasting.
     """
+    # Lift rational functions first (if any)
+    sym = lift_rational_functions(sym)
+    
     new_equations: List[SSysEquation] = []
     new_variables: List[sp.Symbol] = []
     new_initials: Dict[sp.Symbol, float] = dict(sym.initials)   # keep params and originals
@@ -382,13 +538,15 @@ def product_to_antimony(coeff: float, exps: Dict[sp.Symbol, float]) -> str:
         parts.append(f"{coeff:g}")
     elif coeff == 0.0:
         return "0"
-    for s, e in sorted(exps.items(), key=lambda kv: kv[0].name):
+    for s, e in sorted(exps.items(), key=lambda kv: str(kv[0])):
         if abs(e) < 1e-14:
             continue
+        # Handle both Symbol and complex expressions
+        s_name = s.name if hasattr(s, 'name') else str(s)
         if abs(e - 1.0) < 1e-14:
-            parts.append(f"{s.name}")
+            parts.append(f"{s_name}")
         else:
-            parts.append(f"{s.name}^{e:g}")
+            parts.append(f"{s_name}^{e:g}")
     if not parts:
         return "0"
     return "*".join(parts)
@@ -426,12 +584,6 @@ def latex_odes(sym: 'SymSystem') -> str:
         rhs = sp.simplify(sym.odes[v])
         lines.append(r"\dot{%s} = %s" % (sp.latex(v), sp.latex(rhs)))
     return r"\\begin{aligned}" + r"\\\\\n".join(lines) + r"\\end{aligned}"
-
-def product_expr(coeff: float, exps: Dict[sp.Symbol, float]) -> sp.Expr:
-    expr = sp.Float(coeff)
-    for s, e in sorted(exps.items(), key=lambda kv: kv[0].name):
-        expr *= s**sp.Float(e)
-    return sp.simplify(expr)
 
 def latex_ssys(result: 'RecastResult') -> str:
     lines = []
