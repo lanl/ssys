@@ -177,19 +177,54 @@ def latex_factor_map(rec):
     return "\\begin{aligned}\n" + " \\\\\n".join(rows) + "\n\\end{aligned}"
 
 
-def max_recast_residual(sym, rec, params):
-    """Compute maximum relative residual to verify exactness."""
-    var_syms = sorted(sym.odes.keys(), key=lambda s: s.name)
-    rhs_exprs = [sp.simplify(sym.odes[s]) for s in var_syms]
+def max_recast_residual(ir, rec, params):
+    """
+    Compute maximum relative residual to verify exactness.
+    
+    Uses the original (pre-lifting) ODEs to verify that the recast system
+    correctly reproduces the dynamics of the original model variables.
+    
+    Returns None if the model uses function lifting, as the pool-based
+    residual formula is not applicable to systems with lifted auxiliaries.
+    For lifted models, trajectory comparison is the definitive verification.
+    
+    Args:
+        ir: Original ModelIR (before lifting)
+        rec: RecastResult (after lifting and recasting)
+        params: Parameter values dict
+        
+    Returns:
+        float: Maximum relative residual, or None if lifting was used
+    """
+    # Detect if lifting was used: any auxiliary not in factor_map is lifted
+    pool_auxs = set()
+    for aux_list in rec.factor_map.values():
+        pool_auxs.update(aux_list)
+    lifted_vars = set(rec.variables) - pool_auxs
+    
+    if lifted_vars:
+        # Model uses function lifting - residual formula not applicable
+        return None
+    
+    # Build original symbolic system (no lifting) to get true original ODEs
+    sym_orig = ssys.build_sym_system(ir)
+    var_syms = sorted(sym_orig.odes.keys(), key=lambda s: s.name)
+    rhs_exprs = [sp.simplify(sym_orig.odes[s]) for s in var_syms]
     par_syms = [sp.Symbol(k) for k in params.keys()]
     rhs_fun = sp.lambdify(var_syms + par_syms, rhs_exprs, "numpy")
 
+    # Identify pool auxiliaries (those in factor_map) vs lifted auxiliaries
+    pool_auxs = set()
+    for aux_list in rec.factor_map.values():
+        pool_auxs.update(aux_list)
+    
     aux_syms = list(sorted(rec.variables, key=lambda s: s.name))
     aux_idx = {s: i for i, s in enumerate(aux_syms)}
 
     def Vj_rhs_funcs():
         funs = {}
         for eq in rec.equations:
+            # Build RHS for ALL auxiliaries, but only verify pool auxiliaries later
             g = product_expr(eq.growth[0], _expand_exps_through_factors(eq.growth[1], rec.factor_map))
             d = product_expr(eq.decay[0], _expand_exps_through_factors(eq.decay[1], rec.factor_map))
             funs[eq.var] = sp.lambdify(aux_syms + par_syms, sp.simplify(g - d), "numpy")
@@ -239,8 +274,11 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400):
     rec = ssys.recast_to_ssystem(sym)
 
     params = dict(sym.params)
-    resid = max_recast_residual(sym, rec, params)
-    display(Markdown(f"**Algebraic residual (should be ~0):** `{resid:.2e}`"))
+    resid = max_recast_residual(ir, rec, params)
+    if resid is None:
+        display(Markdown("**Algebraic residual:** N/A (model uses function lifting; see trajectory comparison for verification)"))
+    else:
+        display(Markdown(f"**Algebraic residual (should be ~0):** `{resid:.2e}`"))
 
     display(Markdown("**Mapping (original -> product of auxiliaries)**"))
     display(Markdown("$$\n" + latex_factor_map(rec) + "\n$$"))

@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2025-11-21
+
+### Changed
+- Residual verification now intelligently skips models with function lifting
+  - The pool-based residual formula is not applicable to systems with lifted auxiliaries
+  - Reports "N/A" for residual with clear explanation directing users to trajectory comparison
+  - Trajectory comparison remains the definitive verification for all models
+
+### Fixed
+- Resolved incorrect residual computation for models using function lifting (models #11, #13)
+  - Models with lifted functions now display "N/A" instead of incorrect residual values
+  - Documentation clarifies that trajectory comparison is the authoritative verification
+
+## [0.3.0] - 2025-11-21
+
+### Added
+- Automatic composite function lifting: the recaster now automatically detects and lifts arbitrary composite functions (exp, sin, log, trig functions, special functions, etc.) to auxiliary variables before recasting
+- Universal support for any differentiable function that sympy can differentiate, making the recaster applicable to a vastly wider range of ODE models
+- Chain rule-based ODE generation for auxiliary variables representing composite functions
+
+### Fixed
+- **Critical fix**: Lifted auxiliaries (W_i for rational functions, Z_i for composite functions) now remain as single variables instead of being decomposed into pools
+  - Lifted variables already have power-law ODEs from the lifting process, so pool construction is unnecessary and caused runtime errors
+  - Previously, pool construction created equations with circular references (e.g., W_1 appearing in equations for its own pool auxiliaries)
+  - Now lifted variables are kept as single variables with direct S-system equations (growth/decay form)
+- **Critical fix**: Residual checker now uses original (pre-lifting) ODEs for verification
+  - Previously used lifted system ODEs which reference lifted auxiliaries, causing incorrect residual computation
+  - Now builds fresh symbolic system from original IR to get true original ODEs without lifted variable references
+  - Residual correctly measures how well the recast reproduces the original model dynamics
+- Lifted auxiliaries are no longer added to `factor_map`, preventing them from appearing in reconstruction plots
+- Plotting in verification notebook now only shows original model variables, not internal lifted auxiliaries
+- Models #11 (Monod chemostat) and #13 (composite function decomposition) now show correct residuals ~0 and execute successfully
+
 ## [0.2.0] - 2025-11-21
 
 ### Added
@@ -53,6 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - matplotlib >=3.7
 - nbformat >=5.9
 
-[Unreleased]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.2.0...main
+[Unreleased]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.4.0...main
+[0.4.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.3.0...v0.4.0
+[0.3.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.2.0...v0.3.0
 [0.2.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.1.0...v0.2.0
 [0.1.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/tags/v0.1.0

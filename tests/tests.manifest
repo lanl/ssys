@@ -9,3 +9,5 @@
 /Users/hlavacek/Code/ssys/tests/09_A_plus_B_to_C.ant
 /Users/hlavacek/Code/ssys/tests/10_van_der_Pol.ant
 /Users/hlavacek/Code/ssys/tests/11_Monod_chemostat.ant
+/Users/hlavacek/Code/ssys/tests/12_toy_mass_action.ant 
+/Users/hlavacek/Code/ssys/tests/13_composite_func_decomp.ant 

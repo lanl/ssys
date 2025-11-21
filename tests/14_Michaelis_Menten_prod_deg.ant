@@ -1,0 +1,22 @@
+model Michaelis_Menten_prod_deg()
+
+  // Michaelis–Menten production/degradation example
+  // Source: Marin-Sanguino et al. (2007), Optimization of biotechnological systems through GP.
+  // See derivation around Eqs. (14–16): dX1/dt = Vmax1 * X0/(Km1 + X0) - Vmax2 * X1/(Km2 + X1)
+  // X0 is treated as an independent (constant) input.
+
+  species X1;
+
+  // Parameters (positive)
+  Vmax1 = 1.0;
+  Km1   = 1.0;
+  Vmax2 = 0.8;
+  Km2   = 1.0;
+  X0    = 1.0;   // independent input (constant)
+
+  // Dynamics
+  X1' = (Vmax1*X0)/(Km1 + X0) - (Vmax2*X1)/(Km2 + X1);
+
+  // Initial condition
+  X1 = 0.1;
+end

@@ -1,8 +1,8 @@
 
 # ODE → S‑System Recast (Antimony → Antimony)
 
-**Version:** v0.2  
-**Date:** 2025-11-18
+**Version:** v0.3.0  
+**Date:** 2025-11-21
 
 This toolkit converts ordinary differential equation (ODE) models written in **Antimony** into **canonical S‑System** form and writes the result back to Antimony. It also ships with a **testing harness** that batch‑recasts a manifest of models and generates a **Jupyter notebook** that shows Antimony (before/after), LaTeX ODEs (before/after), and numerical simulations for both the original and the recast system.
 
@@ -48,15 +48,17 @@ This follows Savageau & Voit (1987): positive orthant assumption, decomposition 
 
 ---
 
-## Antimony subset supported (v0.2)
+## Antimony subset supported (v0.3.0)
 
 - Reactions: `A + B -> C; k*A*B`  
 - Initializations: `X = 2.5`, `k = 0.1`  
 - Explicit rate rules: `X' = ...`  
 - Boundary species marked with `$X` on reaction sides (not dynamic)  
 - Parameters are treated as positive constants
+- Elementary functions: `exp`, `log`, `sin`, `cos`, `tan`, `sqrt`
+- Rational functions: e.g., `X/(Y+1)`
 
-> Not yet: modules, reversible shorthand `<->` semantics beyond two one‑way reactions, general assignment rules `:=` with symbolic RHS, piecewise/conditionals.
+> Not yet supported: modules, reversible shorthand `<->` semantics beyond two one‑way reactions, general assignment rules `:=` with symbolic RHS, piecewise/conditionals.
 
 ---
 
@@ -125,9 +127,10 @@ python /mnt/data/ode_to_ssys/harness.py   --manifest /path/to/manifest.txt   --o
 
 ## Limitations / roadmap
 
-- **Elementary functions** (`exp`, `log`, `sin`, …): not decomposed yet. Add a chain‑rule state per composite factor (paper’s Step C), then run the same sum‑splitting.  
-- **Positive orthant**: S‑systems assume positivity. Add a preprocessing translation for variables that can cross zero (paper’s Step B).  
-- **Stiff systems**: built‑in RK4 in the notebook is fine for moderate problems. If stiffness appears, plug in SciPy’s adaptive solvers.  
+- **Elementary functions** (`exp`, `log`, `sin`, `cos`, `tan`, `sqrt`): ✅ **Now supported!** (v0.3.0) Composite functions are automatically lifted into auxiliary variables using the chain rule, allowing models with transcendental functions to be recast into S-system form.
+- **Rational functions**: ✅ **Now supported!** Expressions like `X/(Y+1)` are automatically lifted into auxiliary variables.
+- **Positive orthant**: S‑systems assume positivity. Add a preprocessing translation for variables that can cross zero (paper's Step B).  
+- **Stiff systems**: built‑in RK4 in the notebook is fine for moderate problems. If stiffness appears, plug in SciPy's adaptive solvers.  
 - **Antimony grammar**: extend to modules, reversible shorthands, and assignment rules with non‑numeric RHS.
 
 ---

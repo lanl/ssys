@@ -25,7 +25,7 @@ from ssys.recaster import (
     canonicalize_aux_names,
 )
 
-__version__ = "0.1.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "ModelIR",

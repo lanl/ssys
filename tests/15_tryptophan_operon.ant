@@ -1,0 +1,38 @@
+model tryptophan_operon()
+
+  // Tryptophan operon model (ORIGINAL ODE form before ancillary-variable recast)
+  // Source: Marin-Sanguino et al. (2007), Fig. 4 and Eqs. (41–42).
+  // States: X1 (mRNA), X2 (enzyme), X3 (tryptophan).
+  // X4–X7 are treated as independent (constant) variables affecting the rates.
+
+  species X1, X2, X3;
+
+  // Independent variables (constants)
+  X4 = 0.003;     // regulator
+  X5 = 1.0;       // auxiliary factor
+  X6 = 2000.0;    // saturation scale
+  X7 = 1000.0;    // growth/excretion factor
+
+  // Dynamics via original rational-rate definitions (Eq. 42)
+  // v1 = (X3 + 1) / (1 + (1 + X5) * X3)
+  // v2 = (0.9 + X4) * X1
+  // v3 = X1
+  // v4 = (0.02 + X4) * X2
+  // v5 = (X3^2 * X6^2) / (X6^2 + X3^2)
+  // v6 = X3 * X4
+  // v7 = 0.0022 * X3 * X5 / (1 + X3)
+  // v8 = (1 - 7.5*X4) * X3 * X7 / (X3 + 0.005)
+
+  X1' = (X3 + 1)/(1 + (1 + X5)*X3) - (0.9 + X4)*X1;
+  X2' = (0.9 + X4)*X1 - (X1);
+  X3' = -(X1) - (0.02 + X4)*X2
+        - ( (X3**2 * X6**2) / (X6**2 + X3**2) )
+        - (X3*X4)
+        + (0.0022 * X3 * X5)/(1 + X3)
+        + ( (1 - 7.5*X4) * X3 * X7 )/(X3 + 0.005);
+
+  // Initial conditions
+  X1 = 0.185;
+  X2 = 7.99;
+  X3 = 100.0;
+end

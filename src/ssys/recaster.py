@@ -322,6 +322,38 @@ def find_rational_denominators(expr: sp.Expr) -> Set[sp.Expr]:
     return denoms
 
 
+def find_composite_functions(expr: sp.Expr) -> Set[sp.Expr]:
+    """
+    Find all composite functions (non-algebraic functions) in an expression.
+    Returns set of function applications that need auxiliary variables.
+    
+    A composite function is any sympy function application (exp, sin, log, etc.)
+    that is not a simple algebraic operation (Add, Mul, Pow with numeric exponent).
+    """
+    functions = set()
+    
+    def visit(e):
+        # Check if this is a function application
+        if isinstance(e, sp.Function):
+            # This is a function like exp(X), sin(X), etc.
+            functions.add(e)
+            # Also recurse into arguments
+            for arg in e.args:
+                visit(arg)
+        elif isinstance(e, sp.Pow):
+            # Recurse into base and exponent
+            visit(e.args[0])
+            if not e.args[1].is_number:
+                visit(e.args[1])
+        elif isinstance(e, (sp.Add, sp.Mul)):
+            for arg in e.args:
+                visit(arg)
+        # Note: we don't add Symbol, Number, or Pow with numeric exponent
+    
+    visit(expr)
+    return functions
+
+
 def create_auxiliary_for_denominator(
     denom: sp.Expr,
     var_odes: Dict[sp.Symbol, sp.Expr],
@@ -443,6 +475,96 @@ def lift_rational_functions(sym: SymSystem) -> SymSystem:
         initials=new_initials
     )
 
+def lift_composite_functions(sym: SymSystem) -> SymSystem:
+    """
+    Augment system with auxiliary variables for all composite functions.
+    
+    For each unique composite function f(X) (exp, sin, log, etc.):
+    1. Create auxiliary Z = f(X)
+    2. Add ODE: Z' = df/dX * X' (chain rule)
+    3. Replace f(X) with Z in all ODEs
+    4. Set Z(0) = f(X(0))
+    
+    This is a general implementation that works for any differentiable function
+    that sympy knows how to differentiate.
+    
+    Returns augmented SymSystem with composite functions eliminated.
+    """
+    # Find all unique composite functions across all ODEs
+    all_functions = set()
+    for var, ode in sym.odes.items():
+        funcs = find_composite_functions(ode)
+        all_functions.update(funcs)
+    
+    if not all_functions:
+        # No composite functions to lift
+        return sym
+    
+    # Create auxiliary symbols for each function
+    func_to_aux: Dict[sp.Expr, sp.Symbol] = {}
+    aux_counter = 1
+    
+    for func in sorted(all_functions, key=str):
+        Z = sp.symbols(f"Z_{aux_counter}", positive=True)
+        func_to_aux[func] = Z
+        aux_counter += 1
+    
+    # Substitute auxiliaries in original ODEs
+    new_odes: Dict[sp.Symbol, sp.Expr] = {}
+    for var, ode in sym.odes.items():
+        new_ode = ode
+        for func, Z in func_to_aux.items():
+            new_ode = new_ode.replace(func, Z)
+        new_odes[var] = sp.simplify(new_ode)
+    
+    # Compute Z' using chain rule with the LIFTED ODEs
+    new_aux_odes: Dict[sp.Symbol, sp.Expr] = {}
+    for func, Z in func_to_aux.items():
+        # Compute df/dt using chain rule: df/dt = sum_i (∂f/∂X_i) * dX_i/dt
+        func_prime = sp.Integer(0)
+        for var in sym.vars:
+            if var in func.free_symbols:
+                partial = sp.diff(func, var)
+                # Use the NEW (lifted) ODE for var
+                func_prime += partial * new_odes[var]
+        
+        # Now substitute all composite functions with their auxiliaries in Z'
+        Z_ode = func_prime
+        for other_func, other_Z in func_to_aux.items():
+            Z_ode = Z_ode.replace(other_func, other_Z)
+        
+        Z_ode = sp.simplify(Z_ode)
+        new_aux_odes[Z] = Z_ode
+    
+    # Combine original and auxiliary ODEs
+    combined_odes = {**new_odes, **new_aux_odes}
+    
+    # Compute initial conditions for auxiliaries
+    new_initials = dict(sym.initials)
+    for func, Z in func_to_aux.items():
+        # Evaluate function at t=0
+        func_at_0 = func
+        for var in sym.vars:
+            if var in func.free_symbols:
+                func_at_0 = func_at_0.subs(var, sym.initials.get(var, 1.0))
+        # Z(0) = f(X(0))
+        try:
+            Z_init = float(func_at_0)
+        except:
+            Z_init = 1.0  # Fallback if evaluation fails
+        new_initials[Z] = Z_init
+    
+    # Create new variable list: keep original vars, add Z auxiliaries
+    new_vars = list(sym.vars) + list(func_to_aux.values())
+    
+    return SymSystem(
+        vars=new_vars,
+        params=sym.params,
+        odes=combined_odes,
+        initials=new_initials
+    )
+
+
 def recast_to_ssystem(sym: 'SymSystem') -> 'RecastResult':
     """
     Canonical S-system recast using log-derivative 'pool' auxiliaries:
@@ -452,10 +574,19 @@ def recast_to_ssystem(sym: 'SymSystem') -> 'RecastResult':
       where u_j = |coeff_j| * ∏ original^{exp}.
       Then X = ∏_j V_j, and d/dt(∏ V_j) = ∑ s_j exactly.
     
-    Automatically lifts rational functions before recasting.
+    Automatically lifts rational and composite functions before recasting.
     """
-    # Lift rational functions first (if any)
+    # Track original variables before lifting
+    original_vars = set(sym.vars)
+    
+    # Lift composite functions first (exp, sin, log, etc.)
+    sym = lift_composite_functions(sym)
+    
+    # Then lift rational functions (1/(X+1), etc.)
     sym = lift_rational_functions(sym)
+    
+    # Identify lifted auxiliaries (those added during lifting)
+    lifted_vars = set(sym.vars) - original_vars
     
     new_equations: List[SSysEquation] = []
     new_variables: List[sp.Symbol] = []
@@ -463,6 +594,56 @@ def recast_to_ssystem(sym: 'SymSystem') -> 'RecastResult':
     factor_map: Dict[sp.Symbol, List[sp.Symbol]] = {}
 
     for Xi in sorted(sym.vars, key=lambda s: s.name):
+        # Lifted auxiliaries: keep as single variables (already power-law)
+        if Xi in lifted_vars:
+            # Lifted vars already have power-law ODEs from the lifting process
+            # No need for pool construction - just convert to growth/decay form
+            rhs = sp.simplify(sym.odes[Xi])
+            rhs = _numeric_param_subs(rhs, sym.params)
+            terms = expand_to_terms(rhs)
+            
+            # Separate positive and negative terms for growth/decay
+            growth_terms = []
+            decay_terms = []
+            for t in terms:
+                if t == 0:
+                    continue
+                coeff, exps = term_to_coeff_exps(t)
+                if coeff >= 0:
+                    growth_terms.append((coeff, exps))
+                else:
+                    decay_terms.append((abs(coeff), exps))
+            
+            # Combine growth terms (sum coefficients, average exponents)
+            if growth_terms:
+                g_coeff = sum(c for c, _ in growth_terms)
+                g_exps = {}
+                for c, e in growth_terms:
+                    weight = c / g_coeff
+                    for s, exp in e.items():
+                        g_exps[s] = g_exps.get(s, 0.0) + weight * exp
+            else:
+                g_coeff, g_exps = 0.0, {}
+            
+            # Combine decay terms (sum coefficients, average exponents)
+            if decay_terms:
+                d_coeff = sum(c for c, _ in decay_terms)
+                d_exps = {}
+                for c, e in decay_terms:
+                    weight = c / d_coeff
+                    for s, exp in e.items():
+                        d_exps[s] = d_exps.get(s, 0.0) + weight * exp
+            else:
+                d_coeff, d_exps = 0.0, {}
+            
+            # Add the lifted variable itself with its equation
+            new_variables.append(Xi)
+            new_equations.append(SSysEquation(Xi, (g_coeff, g_exps), (d_coeff, d_exps)))
+            
+            # Do NOT add to factor_map - lifted vars are not reconstructed
+            continue
+        
+        # Original variables: apply pool construction
         # 1) decompose RHS into signed monomial terms over ORIGINAL symbols
         rhs = sp.simplify(sym.odes[Xi])
         rhs = _numeric_param_subs(rhs, sym.params)
