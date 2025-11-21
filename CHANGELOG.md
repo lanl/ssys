@@ -1,0 +1,47 @@
+# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+## [0.1.0] - 2024-11-21
+
+### Added
+- Initial release of ssys package
+- Core recasting algorithm using pool-auxiliary construction
+- Antimony parser for input models
+- Symbolic ODE system builder
+- Exact algebraic transformation to canonical S-system form
+- CLI tool (`ssys-recast`) for batch processing
+- Jupyter notebook report generation with:
+  - Side-by-side trajectory comparison
+  - LaTeX rendering of ODEs and S-systems
+  - Algebraic residual verification
+  - Factor mapping visualization
+- Test suite with 10 biological/dynamical models
+- MIT license
+- Basic documentation in README
+- CITATION.cff for academic citation
+- Modern Python packaging with pyproject.toml
+
+### Features
+- Parse reactions, assignments, and explicit derivative rules from Antimony syntax
+- Build symbolic ODE systems with parameters
+- Recast arbitrary ODEs to canonical S-system form (growth - decay)
+- Canonical auxiliary variable naming (X_1, X_2, ...)
+- Export recast systems back to Antimony format
+- Numerical integration and comparison (RK4)
+- Residual checking for exactness verification
+
+### Dependencies
+- Python >=3.9
+- sympy >=1.12
+- numpy >=1.24
+- matplotlib >=3.7
+- nbformat >=5.9
+
+[Unreleased]: https://github.com/yourusername/ssys/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/yourusername/ssys/releases/tag/v0.1.0

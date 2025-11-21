@@ -1,0 +1,10 @@
+/Users/hlavacek/Code/ssys/tests/01_exp_decay.ant
+/Users/hlavacek/Code/ssys/tests/02_logistic.ant
+/Users/hlavacek/Code/ssys/tests/03_Lotka_Volterra.ant
+/Users/hlavacek/Code/ssys/tests/04_mass_action_branch.ant
+/Users/hlavacek/Code/ssys/tests/05_three_term_sum.ant
+/Users/hlavacek/Code/ssys/tests/06_feedback.ant
+/Users/hlavacek/Code/ssys/tests/07_SIR.ant
+/Users/hlavacek/Code/ssys/tests/08_Bertalanffy.ant
+/Users/hlavacek/Code/ssys/tests/09_A_plus_B_to_C.ant
+/Users/hlavacek/Code/ssys/tests/10_van_der_Pol.ant

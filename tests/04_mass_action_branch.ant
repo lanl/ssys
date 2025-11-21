@@ -1,0 +1,9 @@
+// Based on Antimony example (branched pathway) with reversible-like rate
+model branch()
+A = 5; B = 0; C = 0; D = 0
+k1 = 0.1; k2 = 0.2; k3 = 0.15; k4 = 0.3
+A -> B; k1*A
+B -> C; k2*B
+B -> D; k3*B
+D -> B; k4*D
+end

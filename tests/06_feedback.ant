@@ -1,0 +1,31 @@
+// negative feedback
+// ODEs: 
+//   dX1/dt = a - c*X2 - b*X1
+//   dX2/dt = b*X1 - b*X2
+// ICs: X1(0)=0, X2(0)=0
+// Params: a=5 (M/s), b=1 (/s), c=4 (/s)
+
+model feedback()
+  // initial conditions
+  X1 = 0
+  X2 = 0
+
+  // parameters
+  a = 5
+  b = 1
+  c = 4
+
+  // reactions (mass-action style)
+  // 0 -> X1  with rate a - c*X2
+  J1: ->  X1; a - c*X2
+
+  // X1 -> X2 with rate b*X1
+  J2: X1 -> X2; b*X1
+
+  // X2 -> 0  with rate b*X2
+  J3: X2 ->   ; b*X2
+  
+  // Analytic functions, kept as comments so the parser ignores them:
+  // X1_analytic(t) = (a/(b+c)) * (1 + (sqrt(c/b)*sin(t*sqrt(b*c)) - cos(t*sqrt(b*c))) * exp(-b*t))
+  // X2_analytic(t) = (a/(b+c)) * (1 - (sqrt(b/c)*sin(t*sqrt(b*c)) + cos(t*sqrt(b*c))) * exp(-b*t))
+end

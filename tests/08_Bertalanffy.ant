@@ -1,0 +1,24 @@
+// Bertalanffy growth with linear loss
+// ODEs:
+//   x' = p*x^a - q*x
+// ICs: x(0)=10
+// Params: p=7, a=2/3, q=2
+// Note: mmax = (p/q)^(1/(1-a)) = (7/2)^(3) = 42.875 (not used directly)
+
+// Analytic solution (for reference only; not parsed):
+//   x(t) = mmax * ( 1 - (1 - (x(0)/mmax)^(1-a)) * exp(-q*(1-a)*t) )^(1/(1-a))
+
+model Bertalanffy()
+  // initial conditions
+  x = 10
+
+  // parameters
+  p = 7
+  a = 2/3
+  q = 2
+  // mmax = 42.875
+
+  // flows
+  G:  -> x; p*x^a      // growth
+  L:  x -> ; q*x       // linear loss
+end

@@ -1,0 +1,6 @@
+// Simple first-order decay: S' = -k*S
+model exp_decay()
+S = 10
+k = 0.3
+S' = -k*S
+end

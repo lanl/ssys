@@ -1,0 +1,20 @@
+// A + B -> C  (irreversible, mass-action)
+// ODEs:
+//   A' = -kf*A*B
+//   B' = -kf*A*B
+//   C' =  kf*A*B
+// ICs: A(0)=10, B(0)=8, C(0)=0
+// Params: kf = 0.01 (units depend on the concentration/time units)
+
+model A_plus_B_to_C()
+  // initial conditions
+  A = 10
+  B = 8
+  C = 0
+
+  // parameter
+  kf = 0.01
+
+  // reaction
+  R1: A + B -> C; kf*A*B
+end

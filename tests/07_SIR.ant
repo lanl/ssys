@@ -1,0 +1,27 @@
+// SIR model
+// States and ICs (NYC-scale):
+//   S(0) = 2e7 - 1 = 19999999
+//   I(0) = 1
+//   R(0) = 0
+// Parameters:
+//   beta  = 1 / S0 = 5e-8   [/d/person]
+//   gamma = 1/7 ≈ 0.142857 [/d]
+
+model SIR()
+  // initial conditions
+  S = 19999999
+  I = 1
+  R = 0
+
+  // parameters
+  S0 = 20000000
+  I0 = 1
+  beta = 5e-8
+  gamma = 1/7
+
+  // infection: S -> I at rate beta * S * I
+  R1: S -> I; beta*S*I
+
+  // recovery: I -> R at rate gamma * I
+  R2: I -> R; gamma*I
+end

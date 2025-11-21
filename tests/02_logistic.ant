@@ -1,0 +1,7 @@
+// Logistic growth: X' = r*X*(1 - X/K)
+model logistic()
+X = 1
+r = 0.5
+K = 5
+X' = r*X*(1 - X/K)
+end
