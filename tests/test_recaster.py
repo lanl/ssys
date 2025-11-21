@@ -146,7 +146,7 @@ class TestRecasting:
     def test_canonical_naming(self):
         """Test that auxiliaries are named canonically (X_1, X_2, ...)."""
         text = """
-        A' = k1*A - k2*A
+        A' = k1*A - k2*A^2
         k1 = 1.0
         k2 = 0.5
         A = 1.0

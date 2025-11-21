@@ -39,7 +39,7 @@ Enhancement suggestions are welcome! Please open an issue with:
 
 ```bash
 # Clone your fork
-git clone https://github.com/yourusername/ssys.git
+git clone https://lisdi-git.lanl.gov/hlavacek/ssys.git
 cd ssys
 
 # Create a virtual environment

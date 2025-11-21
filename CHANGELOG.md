@@ -7,7 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] - 2024-11-21
+### Fixed
+- Bug in `test_canonical_naming` test case where the test expected two auxiliaries for a simplified single-term equation. Updated the test to use non-combinable terms, ensuring proper testing of canonical naming with two distinct auxiliaries.
+
+## [0.1.0] - 2025-11-21
 
 ### Added
 - Initial release of ssys package
@@ -22,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Algebraic residual verification
   - Factor mapping visualization
 - Test suite with 10 biological/dynamical models
-- MIT license
+- BSD license
 - Basic documentation in README
 - CITATION.cff for academic citation
 - Modern Python packaging with pyproject.toml
@@ -43,5 +46,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - matplotlib >=3.7
 - nbformat >=5.9
 
-[Unreleased]: https://github.com/yourusername/ssys/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/yourusername/ssys/releases/tag/v0.1.0
+[Unreleased]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.1.0...main
+[0.1.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/tags/v0.1.0

@@ -1,5 +1,5 @@
 """
-ssys: Exact algebraic recasting of general ODEs to canonical S-system form.
+ssys: Exact algebraic recasting of ODEs to canonical S-system form.
 
 This package provides tools to automatically transform arbitrary ordinary differential
 equations (ODEs) into canonical S-system form using exact algebraic recasting. S-systems

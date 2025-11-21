@@ -1,5 +1,5 @@
 ---
-title: 'ssys: Exact recasting of ODE models into canonical S-system form with reproducible reports'
+title: 'ssys: Exact recasting of ODE models into canonical S-system form'
 tags:
   - systems biology
   - dynamical systems
@@ -7,13 +7,13 @@ tags:
   - Antimony
   - model transformation
 authors:
-  - name: Your Name
-    orcid: 0000-0000-0000-0000
+  - name: William S. Hlavacek
+    orcid: 0000-0003-4383-8711
     affiliation: 1
 affiliations:
-  - name: Your Institution, Department, City, Country
+  - name: Theoretical Biology & Biophysics Group, Theoretical Division, Los Alamos National Laboratory, Los Alamos, NM 87545, USA
     index: 1
-date: 2025-11-18
+date: 2025-11-21
 bibliography: paper.bib
 ---
 
