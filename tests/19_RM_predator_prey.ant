@@ -1,0 +1,10 @@
+model Rosenzweig_MacArthur_predator_prey()
+
+  species x, y
+  r = 1.0; K = 10.0; a = 0.5; h = 0.4; e = 0.6; m = 0.2;
+
+  x' = r*x*(1 - x/K) - (a*x*y)/(1 + a*h*x);
+  y' = e*(a*x*y)/(1 + a*h*x) - m*y;
+
+  x = 2; y = 1;
+end

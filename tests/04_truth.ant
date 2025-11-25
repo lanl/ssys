@@ -1,0 +1,27 @@
+model branch_SSystem_exact()
+
+  species X1, X2, X3, X4, X5  // A=X1, B=X2*X3, D=X4, C=X5
+  k1 = 0.1; k2 = 0.2; k3 = 0.15; k4 = 0.3;
+
+  epsA = 1; eps2 = 1; epsC = 1;   // any >0
+
+  // A' = -k1*A
+  X1' =  epsA*X1                - (epsA + k1)*X1;
+
+  // B' = k1*A + k4*D - (k2+k3)*B
+  // (B=X2*X3) ⇒ B' = X2'*X3 + X2*X3'
+  X2' = (eps2 + k1)*X1*(X3^(-1)) -  eps2*X1*(X3^(-1));    // net = k1*A/X3
+  X3' =  k4*X4*(X2^(-1))         -  (k2 + k3)*X3;         // ⇒ B' matches exactly
+
+  // D' = k3*B - k4*D
+  X4' =  k3*X2*X3                -  k4*X4;
+
+  // C' = k2*B
+  X5' = (epsC + k2)*X2*X3        -  epsC*X2*X3;
+
+  // ICs (must use positive factors; if B(0)=0, set X2(0)=δ, X3(0)=0/δ is not allowed; use tiny δ, B≈0)
+  X1 = 5;
+  X2 = 1e-9; X3 = 1;   // B≈0
+  X4 = 0;              // D(0)=0
+  X5 = 0;              // C(0)=0
+end

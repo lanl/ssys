@@ -91,3 +91,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [0.3.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.2.0...v0.3.0
 [0.2.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.1.0...v0.2.0
 [0.1.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/tags/v0.1.0
+
+## [Unreleased]
+
+### Fixed
+- Fixed handling of symbolic expressions in S-system recasting
+- Improved handling of rational functions and composite functions
+- Corrected parameter substitution in direct S-system recasting
+- Updated auxiliary variable naming process
+- Enhanced Antimony output generation for complex expressions

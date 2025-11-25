@@ -1,0 +1,16 @@
+model logistic_SSystem_exact()
+
+   // The original model is already in canonical S-system form. Recasting should not change anything substantive. 
+
+  species X;
+
+  // parameters
+  r = 0.5
+  K = 5
+
+  // canonical S-system (two monomials: production − degradation)
+  X' = r * (X^1) - (r/K) * (X^2)
+
+  // initial condition
+  X = 1
+end

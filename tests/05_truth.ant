@@ -1,0 +1,33 @@
+model m5_SSystem_exact()
+
+  // Original: Z' = a1*Z^(2/3) - a2*Z^2 - a3*Z^(1/2)
+  // Exact recast via Z = X*Y. Each ODE is two monomials (canonical S-system).
+
+  // Parameters (positive)
+  a1 = 0.2;
+  a2 = 0.1;
+  a3 = 0.05;
+
+  // Slack for canonical two-term form (keeps both coefficients >0)
+  eps = 1.0;   // any eps>0 works; dynamics of Z are independent of its value
+
+  // States (positive)
+  species X, Y;
+
+  // Canonical S-system dynamics
+  // X' = a1 * X^(2/3) * Y^(-1/3)   −   a2 * X^2 * Y^1
+  X' =  a1*(X^(2/3))*(Y^(-1/3))  -  a2*(X^2)*Y;
+
+  // Y' = eps * X^(-1/2) * Y^(-1/2)   −   (eps + a3) * X^(-1/2) * Y^(-1/2)
+  //     ⇒ net = -a3 * X^(-1/2) * Y^(-1/2)
+  Y' =  eps*(X^(-1/2))*(Y^(-1/2))  -  (eps + a3)*(X^(-1/2))*(Y^(-1/2));
+
+  // Observable: original variable
+  var Z_obs;
+  Z_obs := X*Y;
+
+  // Initial conditions: choose any positive X0, Y0 with X0*Y0 = Z0 (here Z0 = 2)
+  X = 2;      // e.g., X0=2
+  Y = 1;      //       Y0=1  → Z_obs(0)=2
+
+end

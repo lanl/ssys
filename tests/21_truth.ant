@@ -1,0 +1,38 @@
+model Haldane_chemostat_GMA_exact()
+
+  // ===== States =====
+  species X, S, Y    // Y := KS + S + S^2/KI
+
+  // ===== Parameters (positive) =====
+  mu_max = 1.0; KS = 0.5; KI = 2.0;
+  Yxs = 0.5;
+  D = 0.1;  Sin = 5.0;
+
+  // ===== Exact GMA dynamics (no condensation) =====
+  // Original:
+  //   mu = mu_max * S / (KS + S + S^2/KI) = mu_max * S / Y
+  //   X' = (mu - D) X
+  //   S' = D(Sin - S) - (1/Yxs) mu X
+  //
+  // Rewritten as sums of power-law monomials:
+  X' =  mu_max * X * S * (Y^(-1))  -  D * X;
+
+  S' =  D * Sin
+      - D * S
+      - (mu_max / Yxs) * X * S * (Y^(-1));
+
+  // Y = KS + S + S^2/KI  ⇒  Y' = (1 + 2S/KI) * S'
+  // Expand explicitly to keep GMA form (sum of monomials):
+  Y' =  D * Sin
+      + (2*D/KI) * S
+      - D * S
+      - (2*D/KI) * (S^2)
+      - (mu_max / Yxs) * X * S * (Y^(-1))
+      - (2*mu_max / (KI*Yxs)) * X * (S^2) * (Y^(-1));
+
+  // ===== Initial conditions (consistent with Y definition) =====
+  X = 0.1;
+  S = 4.0;
+  Y = KS + S + (S^2)/KI;   // = 0.5 + 4 + 16/2 = 12.5
+
+end

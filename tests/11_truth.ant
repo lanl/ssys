@@ -1,0 +1,33 @@
+model Monod_chemostat_GMA_exact()
+
+  // There is no exact recasting of the original model into canonical S-system form.
+  
+  // Parameters (carry-over)
+  alpha1 = 1.0;   // max specific growth rate
+  beta2  = 0.5;   // alpha1 / Y (yield-based), treated independent
+  Xr     = 2.0;   // reservoir substrate (normalized)
+
+  // States
+  species X1, X2, Y;   // Y := 1 + X2
+
+  // Dynamics (all terms are power-law monomials; negatives appear via subtraction)
+  // X1' = alpha1 * X1 * X2 / (1 + X2) - X1  =>  alpha1*X1*X2*Y^(-1) - 1*X1
+  X1' =  alpha1 * X1 * X2 * (Y^(-1))
+       - 1 * X1;
+
+  // X2' = Xr - X2 - beta2 * X1 * X2 / (1 + X2)
+  X2' =  Xr
+       - 1 * X2
+       - beta2 * X1 * X2 * (Y^(-1));
+
+  // Ancillary identity (exact): Y = 1 + X2  ⇒  Y' = X2'
+  Y'  =  Xr
+       - 1 * X2
+       - beta2 * X1 * X2 * (Y^(-1));
+
+  // Initial conditions (consistent with your original)
+  X1 = 0.1;
+  X2 = 0.1;
+  Y  = 1 + X2;
+
+end

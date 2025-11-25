@@ -13,8 +13,8 @@ model A_plus_B_to_C()
   C = 0
 
   // parameter
-  kf = 0.01
+  k_f = 0.01
 
   // reaction
-  R1: A + B -> C; kf*A*B
+  R_1: A + B -> C; k_f*A*B
 end

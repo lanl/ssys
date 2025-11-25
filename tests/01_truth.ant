@@ -1,0 +1,14 @@
+model exp_decay_SSystem_exact()
+
+  species S;
+  k = 0.3
+
+  // Positive slack keeps both coefficients > 0; dynamics are unchanged.
+  eps = 1.0
+
+  // Canonical S-system: two single monomials
+  S' =  eps * (S^1)  -  (eps + k) * (S^1)
+
+  // Initial condition
+  S = 10
+end

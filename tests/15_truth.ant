@@ -1,0 +1,86 @@
+model tryptophan_operon_GMA_exact()
+
+  // Exact GMA (power-law) recast of the original trp-operon ODEs.
+  // There is no exact recasting of the original model into canonical S-system form.
+
+  // ===== Independent constants =====
+  cX4 = 0.003;
+  cX5 = 1.0;
+  cX6 = 2000.0;
+  cX7 = 1000.0;
+
+  // ===== Derived constants (assignment rules) =====
+  cX6sq := cX6^2;
+  X8    := 1 + cX5;        // 1 + cX5
+  X11   := 0.9 + cX4;
+  X12   := 0.02 + cX4;
+  X15   := 1 - 7.5*cX4;
+  alpha5 := 0.0022 * cX5;
+
+  // ===== Dynamic states =====
+  species X1, X2, X3;           // original species
+  species X9, X10, X13, X14;    // ancillaries depending on X3
+
+  // ===== ODEs for original species (all terms are monomials) =====
+  // v1 = (X3+1)/(1+(1+cX5)X3)  =  X9 * X10^(-1)
+  // v2 = (0.9 + cX4) * X1      =  X11 * X1
+  // v3 = X1
+  // v4 = (0.02 + cX4) * X2     =  X12 * X2
+  // v5 = (X3^2 cX6^2)/(cX6^2 + X3^2) = cX6^2 * X3^2 * X13^(-1)
+  // v6 = cX4 * X3
+  // v7 = 0.0022 * cX5 * X3 / (1+X3)  = alpha5 * X3 * X9^(-1)
+  // v8 = (1 - 7.5*cX4) * X3 * cX7 / (X3 + 0.005) = (X15*cX7) * X3 * X14^(-1)
+
+  X1' =  (X9 * (X10^(-1))) - (X11 * X1);
+  X2' =  (X11 * X1)        - (1 * X1);
+  X3' =  alpha5*X3*(X9^(-1))
+       + (X15*cX7)*X3*(X14^(-1))
+       - X1
+       - X12*X2
+       - cX6sq*(X3^2)*(X13^(-1))
+       - cX4*X3;
+
+  // ===== Ancillary identity ODEs (exact via chain rule) =====
+  // X9  = X3 + 1        => X9'  = X3'
+  // X10 = 1 + X8*X3     => X10' = X8 * X3'
+  // X14 = X3 + 0.005    => X14' = X3'
+  // X13 = cX6^2 + X3^2  => X13' = 2*X3*X3'
+
+  X9'  =  alpha5*X3*(X9^(-1))
+       + (X15*cX7)*X3*(X14^(-1))
+       - X1
+       - X12*X2
+       - cX6sq*(X3^2)*(X13^(-1))
+       - cX4*X3;
+
+  X10' =  X8*( alpha5*X3*(X9^(-1))
+             + (X15*cX7)*X3*(X14^(-1))
+             - X1
+             - X12*X2
+             - cX6sq*(X3^2)*(X13^(-1))
+             - cX4*X3 );
+
+  X14' =  alpha5*X3*(X9^(-1))
+       + (X15*cX7)*X3*(X14^(-1))
+       - X1
+       - X12*X2
+       - cX6sq*(X3^2)*(X13^(-1))
+       - cX4*X3;
+
+  X13' =  2*X3*( alpha5*X3*(X9^(-1))
+               + (X15*cX7)*X3*(X14^(-1))
+               - X1
+               - X12*X2
+               - cX6sq*(X3^2)*(X13^(-1))
+               - cX4*X3 );
+
+  // ===== Initial conditions (match your original) =====
+  X1 = 0.185;
+  X2 = 7.99;
+  X3 = 100.0;
+  X9  = X3 + 1;
+  X10 = 1 + X8*X3;
+  X13 = cX6sq + X3^2;
+  X14 = X3 + 0.005;
+
+end

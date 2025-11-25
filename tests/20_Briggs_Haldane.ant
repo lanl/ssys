@@ -1,0 +1,14 @@
+model Briggs_Haldane()
+
+  species S, C, P
+  // enzyme conservation: E = E_T - C (implicit)
+  E_T = 1.0;
+  k_1 = 1.0; k_m_1 = 0.5; k_2 = 0.3;
+
+  // S' = -k_1*S*E + k_m_1*C   with E = E_T - C
+  S'  = -k_1*S*(E_T - C) + k_m_1*C;
+  C' =  k_1*S*(E_T - C) - (k_m_1 + k_2)*C;
+  P'  =  k_2*C;
+
+  S = 1.0; C = 0.0; P = 0.0;
+end

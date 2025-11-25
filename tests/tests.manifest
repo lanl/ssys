@@ -11,3 +11,12 @@
 /Users/hlavacek/Code/ssys/tests/11_Monod_chemostat.ant
 /Users/hlavacek/Code/ssys/tests/12_toy_mass_action.ant 
 /Users/hlavacek/Code/ssys/tests/13_composite_func_decomp.ant 
+/Users/hlavacek/Code/ssys/tests/14_Michaelis_Menten_prod_deg.ant 
+/Users/hlavacek/Code/ssys/tests/15_tryptophan_operon.ant 
+/Users/hlavacek/Code/ssys/tests/16_normal.ant
+/Users/hlavacek/Code/ssys/tests/17_central_t.ant
+/Users/hlavacek/Code/ssys/tests/18_Goodwin.ant
+/Users/hlavacek/Code/ssys/tests/19_RM_predator_prey.ant
+/Users/hlavacek/Code/ssys/tests/20_Briggs_Haldane.ant
+/Users/hlavacek/Code/ssys/tests/21_Haldane_chemostat.ant
+/Users/hlavacek/Code/ssys/tests/22_Brusselator.ant

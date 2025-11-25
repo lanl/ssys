@@ -1,0 +1,19 @@
+model feedback_SSystem_exact()
+
+  species X1_, X2_, X3_, X4_, X5_   // X1 = X1_*X2_*X3_,  X2 = X4_*X5_
+  a = 5; b = 1; c = 4;
+  eps1 = 1; eps2 = 1; eps3 = 1; eps4 = 1; eps5 = 1;
+
+  // X1' = a - b*X1 - c*X2  (enforced via product rule)
+  X1_' = (eps1 + a)* (X2_^(-1))*(X3_^(-1))  -  eps1*(X2_^(-1))*(X3_^(-1));
+  X2_' =  eps2*X2_                           -  (eps2 + b)*X2_;
+  X3_' =  eps3*(X1_^(-1))*(X2_^(-1))*X4_*X5_*c  -  (eps3 + c)*(X1_^(-1))*(X2_^(-1))*X4_*X5_;
+
+  // X2' = b*X1 - b*X2
+  X4_' = (eps4 + b)*X1_*X2_*X3_* (X5_^(-1))  -  eps4*X1_*X2_*X3_* (X5_^(-1));
+  X5_' =  eps5*X5_                           -  (eps5 + b)*X5_;
+
+  // ICs: choose all factors >0 (you used ~1e-9 for zeros; that’s fine)
+  X1_ = 1e-9; X2_ = 1; X3_ = 1;
+  X4_ = 1e-9; X5_ = 1;
+end

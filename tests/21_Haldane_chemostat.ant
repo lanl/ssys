@@ -1,0 +1,14 @@
+model Haldane_chemostat()
+
+  species X, S
+  mu_max = 1.0; K_S = 0.5; K_I = 2.0;  // kinetics
+  Y_xs = 0.5;                           // yield
+  D = 0.1;  S_in = 5.0;                 // chemostat
+
+  mu := mu_max * S / (K_S + S + (S^2)/K_I);
+
+  X' = (mu - D) * X;
+  S' = D*(S_in - S) - (1/Y_xs)*mu*X;
+
+  X = 0.1; S = 4.0;
+end

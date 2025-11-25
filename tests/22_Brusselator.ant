@@ -1,0 +1,10 @@
+model Brusselator()
+
+  species x, y
+  A = 1.0; B = 3.0;
+
+  x' =  A - (B + 1)*x + x^2*y;
+  y' =  B*x - x^2*y;
+
+  x = 1; y = 1;
+end

@@ -1,0 +1,9 @@
+model normal_density_original()
+  // f'(t) = -t f(t); t is the independent variable
+  species t, f
+  t' = 1                   // march along the abscissa
+  f' = -t * f              // original linear ODE
+  // ICs (example)
+  t = 0
+  f = 1/sqrt(2*pi)         // standard normal at 0
+end

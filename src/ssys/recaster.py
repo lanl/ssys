@@ -2,6 +2,7 @@
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Set, Optional
+from enum import Enum
 import sympy as sp
 
 arrow_pat = re.compile(r"<->|->")
@@ -37,9 +38,9 @@ def _expand_exps_through_factors(exps, factor_map):
     for s, e in exps.items():
         if s in factor_map:
             for v in factor_map[s]:
-                new[v] = new.get(v, 0.0) + float(e)
+                new[v] = new.get(v, sp.sympify(0)) + e
         else:
-            new[s] = new.get(s, 0.0) + float(e)
+            new[s] = new.get(s, sp.sympify(0)) + e
     return new
 
 def _numeric_param_subs(expr: sp.Expr, params: Dict[str, float]) -> sp.Expr:
@@ -65,6 +66,7 @@ class ModelIR:
     initial: Dict[str, float] = field(default_factory=dict)
     reactions: List[Reaction] = field(default_factory=list)
     explicit_rates: Dict[str, str] = field(default_factory=dict)
+    assignment_rules: Dict[str, str] = field(default_factory=dict)
     raw_lines: List[str] = field(default_factory=list)
 
 def parse_antimony(text: str) -> ModelIR:
@@ -131,11 +133,12 @@ def parse_antimony(text: str) -> ModelIR:
                 ir.initial[left] = val if val is not None else 0.0
                 continue
 
-            # (Optional) ignore assignment rules ':=' for now, or treat as params
+            # Assignment rules: name := expression
             if ":=" in stmt:
                 left, right = stmt.split(":=", 1)
                 left = left.strip()
-                ir.params[left] = float(0.0)
+                right = right.strip()
+                ir.assignment_rules[left] = right
                 continue
 
     # promote non-species initializations to parameters
@@ -159,9 +162,18 @@ def build_sym_system(ir: ModelIR) -> SymSystem:
         if nm in var_syms:
             continue
         param_syms[nm] = sp.symbols(nm, positive=True)
+    
+    # Parse assignment rules into symbolic expressions
+    assignment_exprs: Dict[str, sp.Expr] = {}
+    for name, expr_str in ir.assignment_rules.items():
+        assignment_exprs[name] = sp.sympify(expr_str, locals={**var_syms, **param_syms})
+    
     odes: Dict[sp.Symbol, sp.Expr] = {var_syms[nm]: sp.Integer(0) for nm in var_syms}
     for rxn in ir.reactions:
         rate = sp.sympify(rxn.rate_expr, locals={**var_syms, **param_syms})
+        # Substitute assignment rules into rate expression
+        for name, rule_expr in assignment_exprs.items():
+            rate = rate.subs(sp.Symbol(name), rule_expr)
         lhs_sto = {nm: coeff for coeff, nm in rxn.lhs}
         rhs_sto = {nm: coeff for coeff, nm in rxn.rhs}
         all_sp = set(lhs_sto) | set(rhs_sto)
@@ -175,7 +187,11 @@ def build_sym_system(ir: ModelIR) -> SymSystem:
     for nm, expr in ir.explicit_rates.items():
         if nm not in var_syms:
             continue
-        odes[var_syms[nm]] += sp.sympify(expr, locals={**var_syms, **param_syms})
+        rate = sp.sympify(expr, locals={**var_syms, **param_syms})
+        # Substitute assignment rules into explicit rate expression
+        for name, rule_expr in assignment_exprs.items():
+            rate = rate.subs(sp.Symbol(name), rule_expr)
+        odes[var_syms[nm]] += rate
     initials: Dict[sp.Symbol, float] = {}
     for nm, sym in var_syms.items():
         initials[sym] = float(ir.initial.get(nm, 0.0))
@@ -195,15 +211,262 @@ def expand_to_terms(expr: sp.Expr) -> List[sp.Expr]:
 @dataclass
 class SSysEquation:
     var: sp.Symbol
-    growth: Tuple[float, Dict[sp.Symbol, float]]  # α, {sym: exponent}
-    decay: Tuple[float, Dict[sp.Symbol, float]]   # β, {sym: exponent}
+    growth: Tuple[sp.Expr, Dict[sp.Symbol, float]]  # coefficient (symbolic), {sym: exponent}
+    decay: Tuple[sp.Expr, Dict[sp.Symbol, float]]   # coefficient (symbolic), {sym: exponent}
+
+@dataclass
+class GMAEquation:
+    """Generalized Mass Action equation with multiple production/degradation terms"""
+    var: sp.Symbol
+    production: List[Tuple[sp.Expr, Dict[sp.Symbol, float]]]  # [(coeff, {sym: exp}), ...]
+    degradation: List[Tuple[sp.Expr, Dict[sp.Symbol, float]]]  # [(coeff, {sym: exp}), ...]
+
+
+class RecastStatus(Enum):
+    """Status of recasting operation"""
+    CANONICAL_SSYSTEM = "canonical_ssystem"
+    GMA = "gma"
+    FAILED = "failed"
+
+
+class SystemClass(Enum):
+    """Classification of system form"""
+    SSYSTEM = "S-system"  # 1-2 positive monomial terms per equation
+    CANONICAL_SSYSTEM = "Canonical S-system"  # Exactly 2 positive terms (1 growth + 1 decay)
+    GMA = "GMA"  # All monomials, but multiple incompatible terms
+    GENERAL = "General"  # Contains non-monomial terms
+
 
 @dataclass
 class RecastResult:
+    status: RecastStatus
     equations: List[SSysEquation]
     initials: Dict[sp.Symbol, float]
     variables: List[sp.Symbol]
     factor_map: Dict[sp.Symbol, List[sp.Symbol]] = field(default_factory=dict)
+    gma_equations: List[GMAEquation] = field(default_factory=list)
+    params: Dict[str, float] = field(default_factory=dict)
+    error_message: Optional[str] = None
+    blockers: Dict[str, List[str]] = field(default_factory=dict)
+
+def classify_system(sym: SymSystem) -> SystemClass:
+    """
+    Classify a SymSystem based on its structure.
+    
+    Returns:
+        SystemClass enum indicating the system type
+    """
+    is_canonical = True
+    is_ssystem = True
+    is_gma = True
+    
+    for var, ode in sym.odes.items():
+        terms = expand_to_terms(sp.expand(ode))
+        
+        # Separate into positive and negative monomial terms
+        pos_monomials = []
+        neg_monomials = []
+        
+        for term in terms:
+            if term == 0:
+                continue
+            
+            # Check if term is a monomial
+            if not _is_term_monomial(term):
+                # Has non-monomial terms - must be GENERAL
+                return SystemClass.GENERAL
+            
+            # Determine sign
+            sign = _get_coefficient_sign(term)
+            if sign > 0:
+                pos_monomials.append(term)
+            else:
+                neg_monomials.append(term)
+        
+        # Check canonical S-system: exactly 1 positive + 1 negative
+        if len(pos_monomials) != 1 or len(neg_monomials) != 1:
+            is_canonical = False
+        
+        # Check S-system: 1-2 total terms
+        total_terms = len(pos_monomials) + len(neg_monomials)
+        if total_terms < 1 or total_terms > 2:
+            is_ssystem = False
+        
+        # Check GMA: may have multiple terms, but all must be monomials
+        # (already verified above)
+    
+    # Return most specific classification
+    if is_canonical:
+        return SystemClass.CANONICAL_SSYSTEM
+    elif is_ssystem:
+        return SystemClass.SSYSTEM
+    elif is_gma:
+        return SystemClass.GMA
+    else:
+        return SystemClass.GENERAL
+
+
+def classify_result(result: RecastResult, mode: str = "simplified") -> SystemClass:
+    """
+    Classify a RecastResult based on its output structure.
+    
+    Args:
+        result: The RecastResult to classify
+        mode: Output mode ('simplified' or 'canonical')
+              In canonical mode, epsilon slack is added to zero coefficients,
+              converting S-systems to Canonical S-systems
+    
+    Returns:
+        SystemClass enum indicating the output type
+    """
+    if result.status == RecastStatus.GMA:
+        # GMA format - validate it's truly GMA, not just canonical
+        has_multi_term = False
+        for eq in result.gma_equations:
+            # Check if production or degradation has multiple incompatible terms
+            if len(eq.production) > 1:
+                # Multiple production terms - check if they have same exponents
+                if len(eq.production) > 1:
+                    first_exps = eq.production[0][1]
+                    for _, exps in eq.production[1:]:
+                        if not _exponents_match(first_exps, exps):
+                            has_multi_term = True
+                            break
+            
+            if len(eq.degradation) > 1:
+                # Multiple degradation terms - check if they have same exponents
+                first_exps = eq.degradation[0][1]
+                for _, exps in eq.degradation[1:]:
+                    if not _exponents_match(first_exps, exps):
+                        has_multi_term = True
+                        break
+            
+            if has_multi_term:
+                break
+        
+        if has_multi_term:
+            return SystemClass.GMA
+        
+        # All terms are compatible - could be canonical
+        # Check if each equation has exactly 1 production + 1 degradation
+        for eq in result.gma_equations:
+            if len(eq.production) != 1 or len(eq.degradation) != 1:
+                return SystemClass.GMA
+        return SystemClass.CANONICAL_SSYSTEM
+    
+    elif result.status == RecastStatus.CANONICAL_SSYSTEM:
+        # Count actual non-zero terms in each equation
+        # An equation is canonical if it has exactly 2 non-zero terms (1 growth + 1 decay)
+        # An equation is S-system if it has 1-2 non-zero terms
+        # 
+        # IMPORTANT: In canonical mode, epsilon slack is added to zero coefficients,
+        # converting equations like X' = 0 - h*X into X' = epsilon*X - (epsilon+h)*X
+        # So we need to account for this transformation when classifying
+        
+        is_canonical = True
+        is_ssystem = True
+        
+        for eq in result.equations:
+            g_coeff = eq.growth[0]
+            d_coeff = eq.decay[0]
+            
+            # Check if growth coefficient is non-zero
+            g_nonzero = False
+            if isinstance(g_coeff, (int, float)):
+                g_nonzero = (g_coeff != 0)
+            elif isinstance(g_coeff, sp.Expr):
+                g_nonzero = (g_coeff != sp.Integer(0))
+            
+            # Check if decay coefficient is non-zero
+            d_nonzero = False
+            if isinstance(d_coeff, (int, float)):
+                d_nonzero = (d_coeff != 0)
+            elif isinstance(d_coeff, sp.Expr):
+                d_nonzero = (d_coeff != sp.Integer(0))
+            
+            # In canonical mode, check if epsilon will be added
+            # If either coefficient is zero, epsilon makes it canonical
+            if mode == "canonical":
+                # If we have 1 or 2 terms and one is zero, epsilon will make it canonical
+                has_zero = (not g_nonzero) or (not d_nonzero)
+                has_nonzero = g_nonzero or d_nonzero
+                
+                if has_zero and has_nonzero:
+                    # This will become canonical with epsilon: e.g., 0 - h*X becomes epsilon*X - (epsilon+h)*X
+                    # Count as 2 terms for canonical check
+                    nonzero_count = 2
+                else:
+                    # Both nonzero or both zero - count actual terms
+                    nonzero_count = (1 if g_nonzero else 0) + (1 if d_nonzero else 0)
+            else:
+                # Simplified mode: count actual non-zero terms
+                nonzero_count = (1 if g_nonzero else 0) + (1 if d_nonzero else 0)
+            
+            # Check canonical: exactly 2 terms (actual or after epsilon)
+            if nonzero_count != 2:
+                is_canonical = False
+            
+            # Check S-system: 1-2 terms
+            if nonzero_count < 1 or nonzero_count > 2:
+                is_ssystem = False
+        
+        # Return most specific classification
+        if is_canonical:
+            return SystemClass.CANONICAL_SSYSTEM
+        elif is_ssystem:
+            return SystemClass.SSYSTEM
+        else:
+            return SystemClass.GMA
+    
+    else:
+        return SystemClass.GENERAL
+
+
+def _is_term_monomial(term: sp.Expr) -> bool:
+    """
+    Check if a term is a monomial (product of powers).
+    
+    A monomial is a product of:
+    - Numeric constants
+    - Symbols (can be parameters or state variables)
+    - Powers with symbol bases (exponents can be numeric or symbolic)
+    
+    What makes it NON-monomial:
+    - Functions (exp, sin, log, etc.)
+    - Sums/differences in the base
+    - Division by non-constant expressions
+    """
+    if term.is_Number:
+        return True
+    if isinstance(term, sp.Symbol):
+        return True
+    if isinstance(term, sp.Pow):
+        base, exp = term.args
+        # Base must be a symbol (state var or parameter)
+        # Exponent can be numeric or symbolic (parameters are OK)
+        return isinstance(base, sp.Symbol)
+    if term.is_Mul:
+        # All factors must be monomials
+        for factor in term.args:
+            if not _is_term_monomial(factor):
+                return False
+        return True
+    return False
+
+
+def _get_coefficient_sign(term: sp.Expr) -> int:
+    """Get the sign of a term's coefficient. Returns 1 for positive, -1 for negative."""
+    if term.is_Number:
+        return 1 if float(term) >= 0 else -1
+    if term.is_Mul:
+        # Extract numeric coefficient
+        coeff = 1.0
+        for factor in term.args:
+            if factor.is_Number:
+                coeff *= float(factor)
+        return 1 if coeff >= 0 else -1
+    return 1  # Assume positive if no numeric coefficient
+
 
 # --- CANONICALIZE AUX NAMES: must be placed below the dataclasses ---
 def canonicalize_aux_names(res: 'RecastResult', prefix: str = "X") -> 'RecastResult':
@@ -221,19 +484,20 @@ def canonicalize_aux_names(res: 'RecastResult', prefix: str = "X") -> 'RecastRes
     # 2) Map old aux -> new canonical aux
     name_map = {old: sp.Symbol(f"{prefix}_{i}") for i, old in enumerate(aux_order, start=1)}
 
-    def remap_exps(exps: Dict[sp.Symbol, float]) -> Dict[sp.Symbol, float]:
-        out: Dict[sp.Symbol, float] = {}
+    def remap_exps(exps: Dict[sp.Symbol, sp.Expr]) -> Dict[sp.Symbol, sp.Expr]:
+        out: Dict[sp.Symbol, sp.Expr] = {}
         for s, e in exps.items():
-            out[name_map.get(s, s)] = float(e)
+            out[name_map.get(s, s)] = e
         return out
 
     # 3) Remap equations (var and exponent maps)
     new_eqs: List[SSysEquation] = []
     for eq in res.equations:
+        # Keep coefficients in their original form (symbolic or numeric)
         new_eqs.append(SSysEquation(
             var=name_map.get(eq.var, eq.var),
-            growth=(float(eq.growth[0]), remap_exps(eq.growth[1])),
-            decay =(float(eq.decay[0]),  remap_exps(eq.decay[1])),
+            growth=(eq.growth[0], remap_exps(eq.growth[1])),
+            decay=(eq.decay[0], remap_exps(eq.decay[1])),
         ))
 
     # 4) Remap initials (keys)
@@ -249,47 +513,115 @@ def canonicalize_aux_names(res: 'RecastResult', prefix: str = "X") -> 'RecastRes
     new_variables = [name_map[old] for old in aux_order]
 
     return RecastResult(
+        status=RecastStatus.CANONICAL_SSYSTEM,
         equations=new_eqs,
         initials=new_initials,
         variables=new_variables,
         factor_map=new_factor_map,
+        params=res.params
     )
 # --- end canonicalize_aux_names ---
 
-def term_to_coeff_exps(term: sp.Expr) -> Tuple[float, Dict[sp.Symbol, float]]:
+def term_to_coeff_exps(term: sp.Expr, state_vars: Optional[Set[sp.Symbol]] = None) -> Tuple[sp.Expr, Dict[sp.Symbol, float]]:
+    """
+    Extract coefficient and exponents from a power-law monomial term.
+    Now returns symbolic coefficient (sp.Expr) instead of float.
+    
+    Args:
+        term: The term to decompose
+        state_vars: Set of state variable symbols. If provided, only these symbols
+                   are treated as variables with exponents; all others go into coefficient.
+    
+    Returns: (coeff_expr, {symbol: exponent})
+    """
     term = sp.simplify(term)
-    coeff = 1.0
+    coeff = sp.Integer(1)
     exps: Dict[sp.Symbol, float] = {}
+    
     if term.is_Number:
-        return float(term), exps
+        return term, exps
+    
     if isinstance(term, sp.Symbol):
-        exps[term] = exps.get(term, 0.0) + 1.0
+        # Check if this is a state variable or a parameter
+        if state_vars is None or term in state_vars:
+            exps[term] = 1.0
+        else:
+            coeff = term
         return coeff, exps
+    
     if term.is_Mul:
         for f in term.args:
             if f.is_Number:
-                coeff *= float(f)
+                coeff *= f
             elif isinstance(f, sp.Symbol):
-                exps[f] = exps.get(f, 0.0) + 1.0
+                # Only treat as variable if it's in state_vars
+                if state_vars is None or f in state_vars:
+                    exps[f] = exps.get(f, 0.0) + 1.0
+                else:
+                    # It's a parameter - add to coefficient
+                    coeff *= f
             elif isinstance(f, sp.Pow):
-                base, exp = f.args
-                exps[base] = exps.get(base, 0.0) + float(exp)
+                base, exp_val = f.args
+                if isinstance(base, sp.Symbol):
+                    # Check if base is a state variable
+                    if state_vars is None or base in state_vars:
+                        # Handle both numeric and symbolic exponents
+                        if exp_val.is_number:
+                            exps[base] = exps.get(base, 0.0) + float(exp_val)
+                        else:
+                            # Symbolic exponent - keep base as variable with symbolic exp
+                            exps[base] = exps.get(base, 0) + exp_val
+                    else:
+                        # It's a parameter raised to a power - keep in coefficient
+                        coeff *= f
+                else:
+                    # Complex base - keep in coefficient
+                    coeff *= f
             else:
-                raise ValueError(f"Cannot monomialize factor: {f}")
+                # Non-power-law factor - keep in coefficient
+                coeff *= f
         return coeff, exps
+    
     if isinstance(term, sp.Pow):
-        base, exp = term.args
-        exp_num = sp.nsimplify(exp)
-        if not exp_num.is_number:
-            raise ValueError(f"Exponent must be numeric after parameter substitution, got {exp}")
-        exps[base] = exps.get(base, 0.0) + float(exp_num)
-        return coeff, exps
-    raise ValueError(f"Unsupported term: {term}")
+        base, exp_val = term.args
+        if isinstance(base, sp.Symbol):
+            # Check if this is a state variable
+            if state_vars is None or base in state_vars:
+                if exp_val.is_number:
+                    exps[base] = float(exp_val)
+                    return coeff, exps
+        # Not a state variable or complex - return as coefficient
+        return term, exps
+    
+    # If we can't decompose it, return as pure coefficient
+    return term, exps
 
-def product_expr(coeff: float, exps: Dict[sp.Symbol, float]) -> sp.Expr:
-    expr = sp.Float(coeff)
+def product_expr(coeff, exps: Dict[sp.Symbol, float]) -> sp.Expr:
+    """
+    Build symbolic product expression from coefficient and exponents.
+    coeff can be either float or sp.Expr (symbolic).
+    """
+    # Handle coefficient (numeric or symbolic)
+    if isinstance(coeff, sp.Expr):
+        expr = coeff
+    else:
+        # Numeric coefficient - convert to appropriate sympy type
+        if isinstance(coeff, int) or (isinstance(coeff, float) and coeff == int(coeff)):
+            expr = sp.Integer(int(coeff))
+        else:
+            expr = sp.Float(coeff)
+    
+    # Add power-law terms
     for s, e in sorted(exps.items(), key=lambda kv: str(kv[0])):
-        expr *= s**sp.Float(e)
+        if abs(e) < 1e-14:
+            continue
+        # Convert exponent to appropriate sympy type
+        if isinstance(e, int) or (isinstance(e, float) and e == int(e)):
+            exp_sym = sp.Integer(int(e))
+        else:
+            exp_sym = sp.Float(e)
+        expr *= s**exp_sym
+    
     return sp.simplify(expr)
 
 
@@ -390,90 +722,149 @@ def lift_rational_functions(sym: SymSystem) -> SymSystem:
     """
     Augment system with auxiliary variables for all rational terms.
     
+    Strategy:
+    1. First substitute all constant denominators with their numeric values
+    2. Then lift dynamic denominators that depend on state variables
+    3. Recursively repeat until no more rational functions remain
+    
     For each unique non-trivial denominator D(X):
-    1. Create auxiliary W = 1/D
-    2. Add ODE: W' = -W^2 * dD/dt (chain rule)
-    3. Replace 1/D with W in all ODEs
-    4. Set W(0) = 1/D(X(0))
+    - If D depends only on constants: substitute its numeric value directly
+    - If D depends on state variables:
+       a. Create auxiliary Y = D (denominator itself)
+       b. Add ODE: Y' = dD/dt
+       c. Replace D with Y in all ODEs, use Y^(-1) for 1/D
+       d. Set Y(0) = D(X(0))
+    
+    This produces exact S-system form with negative exponents.
     
     Returns augmented SymSystem with rational terms eliminated.
     """
-    # Find all unique denominators across all ODEs
-    all_denoms = set()
-    for var, ode in sym.odes.items():
-        denoms = find_rational_denominators(ode)
-        all_denoms.update(denoms)
-    
-    if not all_denoms:
-        # No rational functions to lift
-        return sym
-    
-    # Create auxiliary symbols for each denominator
-    denom_to_aux: Dict[sp.Expr, sp.Symbol] = {}
+    max_iterations = 10  # Prevent infinite loops
+    iteration = 0
     aux_counter = 1
     
-    for denom in sorted(all_denoms, key=str):
-        W = sp.symbols(f"W_{aux_counter}", positive=True)
-        denom_to_aux[denom] = W
-        aux_counter += 1
-    
-    # Substitute auxiliaries in original ODEs
-    # Replace D^(-1) with W for each denominator D
-    new_odes: Dict[sp.Symbol, sp.Expr] = {}
-    for var, ode in sym.odes.items():
-        new_ode = ode
-        for denom, W in denom_to_aux.items():
-            # Replace denom^(-n) with W^n for any n
-            new_ode = new_ode.replace(denom**(-1), W)
-            # Handle other negative powers if present
-            for n in range(2, 6):  # Check powers -2 through -5
-                if denom**(-n) in new_ode.atoms():
-                    new_ode = new_ode.replace(denom**(-n), W**n)
-        new_odes[var] = sp.simplify(new_ode)
-    
-    # NOW compute W' using the LIFTED ODEs (not the original ones)
-    new_aux_odes: Dict[sp.Symbol, sp.Expr] = {}
-    for denom, W in denom_to_aux.items():
-        # Compute dD/dt using the lifted ODEs
-        denom_prime = sp.Integer(0)
-        for var in sym.vars:
-            if var in denom.free_symbols:
-                partial = sp.diff(denom, var)
-                # Use the NEW (lifted) ODE for var, not the original
-                denom_prime += partial * new_odes[var]
+    while iteration < max_iterations:
+        iteration += 1
         
-        # W' = -W^2 * dD/dt
-        W_ode = -W**2 * denom_prime
-        new_aux_odes[W] = sp.simplify(W_ode)
-    
-    # Combine original and auxiliary ODEs
-    combined_odes = {**new_odes, **new_aux_odes}
-    
-    # Compute initial conditions for auxiliaries
-    new_initials = dict(sym.initials)
-    for denom, W in denom_to_aux.items():
-        # Evaluate denominator at t=0
-        denom_at_0 = denom
+        # Find all unique denominators across all ODEs
+        all_denoms = set()
+        for var, ode in sym.odes.items():
+            denoms = find_rational_denominators(ode)
+            all_denoms.update(denoms)
+        
+        if not all_denoms:
+            # No more rational functions to lift
+            break
+        
+        # Separate denominators into constant vs. dynamic
+        state_vars = set(sym.vars)
+        const_denoms = set()  # denominators that depend only on constants
+        dynamic_denoms = set()  # denominators that depend on state variables
+        
+        for denom in all_denoms:
+            denom_vars = denom.free_symbols & state_vars
+            if not denom_vars:
+                # Denominator has no state variables - it's constant
+                const_denoms.add(denom)
+            else:
+                # Denominator involves state variables - needs lifting
+                dynamic_denoms.add(denom)
+        
+        # First, substitute constant denominators with their numeric values
+        new_odes: Dict[sp.Symbol, sp.Expr] = {}
+        for var, ode in sym.odes.items():
+            new_ode = ode
+            # Substitute constant denominators directly with their reciprocal values
+            for denom in const_denoms:
+                # Evaluate denominator numerically
+                denom_val = denom
+                for param_name, param_val in sym.params.items():
+                    param_sym = sp.Symbol(param_name)
+                    if param_sym in denom.free_symbols:
+                        denom_val = denom_val.subs(param_sym, param_val)
+                try:
+                    recip_val = float(1.0 / denom_val)
+                    # Replace 1/D with its numeric value
+                    new_ode = new_ode.replace(denom**(-1), sp.Float(recip_val))
+                    # Handle other negative powers if present
+                    for n in range(2, 6):
+                        if denom**(-n) in new_ode.atoms():
+                            new_ode = new_ode.replace(denom**(-n), sp.Float(recip_val**n))
+                except:
+                    pass  # If evaluation fails, leave it as is
+            new_odes[var] = new_ode
+        
+        # Now create auxiliary symbols only for dynamic denominators
+        # Y = D (denominator itself, not reciprocal)
+        denom_to_aux: Dict[sp.Expr, sp.Symbol] = {}
+        
+        for denom in sorted(dynamic_denoms, key=str):
+            Y = sp.symbols(f"Y_{aux_counter}", positive=True)
+            denom_to_aux[denom] = Y
+            aux_counter += 1
+        
+        # Substitute dynamic denominators with auxiliaries
+        # Replace D with Y in all ODEs (this keeps D^(-1) as Y^(-1))
         for var in sym.vars:
-            if var in denom.free_symbols:
-                denom_at_0 = denom_at_0.subs(var, sym.initials.get(var, 1.0))
-        # W(0) = 1/D(X(0))
-        try:
-            W_init = float(1.0 / denom_at_0)
-        except:
-            W_init = 1.0  # Fallback if evaluation fails
-        new_initials[W] = W_init
+            new_ode = new_odes[var]
+            for denom, Y in denom_to_aux.items():
+                # Replace the denominator D with Y everywhere it appears
+                new_ode = new_ode.subs(denom, Y)
+            new_odes[var] = sp.simplify(new_ode)
+        
+        # Compute Y' for dynamic auxiliaries using the LIFTED ODEs
+        # Y' = dD/dt (direct derivative, no chain rule needed)
+        new_aux_odes: Dict[sp.Symbol, sp.Expr] = {}
+        for denom, Y in denom_to_aux.items():
+            # Compute dD/dt using the lifted ODEs
+            denom_prime = sp.Integer(0)
+            for var in sym.vars:
+                if var in denom.free_symbols:
+                    partial = sp.diff(denom, var)
+                    # Use the NEW (lifted) ODE for var
+                    denom_prime += partial * new_odes[var]
+            
+            # Now substitute D with Y in the derivative expression
+            Y_ode = denom_prime.subs(denom, Y)
+            new_aux_odes[Y] = sp.simplify(Y_ode)
+        
+        # Combine original and auxiliary ODEs
+        combined_odes = {**new_odes, **new_aux_odes}
+        
+        # Compute initial conditions for auxiliaries
+        new_initials = dict(sym.initials)
+        for denom, Y in denom_to_aux.items():
+            # Evaluate denominator at t=0
+            denom_at_0 = denom
+            # First substitute state variables
+            for var in sym.vars:
+                if var in denom.free_symbols:
+                    denom_at_0 = denom_at_0.subs(var, sym.initials.get(var, 1.0))
+            # Then substitute parameters - use actual symbols from expression
+            for param_sym in denom_at_0.free_symbols:
+                param_name = param_sym.name
+                if param_name in sym.params:
+                    denom_at_0 = denom_at_0.subs(param_sym, sym.params[param_name])
+            # Y(0) = D(X(0))
+            try:
+                Y_init = float(denom_at_0)
+            except:
+                Y_init = 1.0  # Fallback if evaluation fails
+            new_initials[Y] = Y_init
+        
+        # Create new variable list: keep original vars, add Y auxiliaries
+        new_vars = list(sym.vars) + list(denom_to_aux.values())
+        
+        # Update sym for next iteration
+        sym = SymSystem(
+            vars=new_vars,
+            params=sym.params,
+            odes=combined_odes,
+            initials=new_initials
+        )
     
-    # Create new variable list: keep original vars, add W auxiliaries
-    # Original vars come first, then the new W auxiliaries
-    new_vars = list(sym.vars) + list(denom_to_aux.values())
-    
-    return SymSystem(
-        vars=new_vars,
-        params=sym.params,
-        odes=combined_odes,
-        initials=new_initials
-    )
+    # Return final system after all iterations
+    return sym
 
 def lift_composite_functions(sym: SymSystem) -> SymSystem:
     """
@@ -565,16 +956,90 @@ def lift_composite_functions(sym: SymSystem) -> SymSystem:
     )
 
 
-def recast_to_ssystem(sym: 'SymSystem') -> 'RecastResult':
+def _exponents_match(exps1: Dict[sp.Symbol, float], exps2: Dict[sp.Symbol, float]) -> bool:
+    """Check if two exponent patterns match (within tolerance)."""
+    all_vars = set(exps1.keys()) | set(exps2.keys())
+    for var in all_vars:
+        e1 = exps1.get(var, 0.0)
+        e2 = exps2.get(var, 0.0)
+        if abs(e1 - e2) > 1e-10:
+            return False
+    return True
+
+
+def _analyze_ode_terms(terms: List[sp.Expr], state_vars: Optional[Set[sp.Symbol]] = None) -> Tuple[List[Tuple[sp.Expr, Dict]], List[Tuple[sp.Expr, Dict]]]:
     """
-    Canonical S-system recast using log-derivative 'pool' auxiliaries:
-      For X' = sum_j s_j (signed monomials), create one aux V_j per term with
-        V_j' = + u_j * (∏_{ℓ≠j} V_ℓ)^(-1)   if coeff > 0
-        V_j' = 0 - u_j * (∏_{ℓ≠j} V_ℓ)^(-1) if coeff < 0
-      where u_j = |coeff_j| * ∏ original^{exp}.
-      Then X = ∏_j V_j, and d/dt(∏ V_j) = ∑ s_j exactly.
+    Analyze ODE terms and separate into growth and decay.
     
-    Automatically lifts rational and composite functions before recasting.
+    Args:
+        terms: List of terms from the ODE
+        state_vars: Set of state variable symbols
+    
+    Returns: (growth_terms, decay_terms) where each term is (coeff, exps)
+    """
+    growth_terms = []
+    decay_terms = []
+    
+    for t in terms:
+        if t == 0:
+            continue
+        try:
+            coeff, exps = term_to_coeff_exps(t, state_vars)
+            if sp.sign(coeff) >= 0:
+                growth_terms.append((coeff, exps))
+            else:
+                decay_terms.append((sp.Abs(coeff), exps))
+        except:
+            continue
+    
+    return growth_terms, decay_terms
+
+
+def _requires_gma(sym: SymSystem) -> bool:
+    """
+    Check if system requires GMA format (cannot be exact canonical S-system).
+    Returns True if any ODE has multiple terms with different exponent patterns.
+    """
+    for var, ode in sym.odes.items():
+        terms = expand_to_terms(sp.simplify(ode))
+        growth_terms, decay_terms = _analyze_ode_terms(terms)
+        
+        # Check if multiple growth terms have different exponent patterns
+        if len(growth_terms) > 1:
+            first_exps = growth_terms[0][1]
+            for coeff, exps in growth_terms[1:]:
+                if not _exponents_match(first_exps, exps):
+                    return True
+        
+        # Check if multiple decay terms have different exponent patterns
+        if len(decay_terms) > 1:
+            first_exps = decay_terms[0][1]
+            for coeff, exps in decay_terms[1:]:
+                if not _exponents_match(first_exps, exps):
+                    return True
+    
+    return False
+
+
+def recast_to_ssystem(sym: 'SymSystem', mode: str = "simplified") -> 'RecastResult':
+    """
+    Recast system to canonical S-system or GMA format.
+    
+    Strategy:
+    1. Lift composite functions (exp, sin, log, etc.)
+    2. Lift rational functions (1/(X+1), etc.)
+    3. Attempt canonical S-system recast:
+       - If lifting occurred: use direct form
+       - Otherwise: use pool construction
+    4. Check if output has GMA characteristics (multi-term incompatible)
+    5. If canonical failed, fall back to GMA format
+    
+    Args:
+        sym: SymSystem to recast
+        mode: Output mode ('simplified' or 'canonical')
+    
+    Returns:
+        RecastResult with status indicating output form
     """
     # Track original variables before lifting
     original_vars = set(sym.vars)
@@ -588,14 +1053,189 @@ def recast_to_ssystem(sym: 'SymSystem') -> 'RecastResult':
     # Identify lifted auxiliaries (those added during lifting)
     lifted_vars = set(sym.vars) - original_vars
     
+    # Always attempt canonical S-system recast
+    if lifted_vars:
+        # Lifted systems use direct form
+        result = _direct_ssystem_recast(sym, original_vars, mode=mode)
+    else:
+        # Pure polynomial systems use pool construction
+        result = _pool_ssystem_recast(sym, mode=mode)
+    
+    # Check if the result actually has GMA characteristics
+    # (direct_ssystem_recast already does this check internally)
+    # The result.status will be set correctly by the recast methods
+    
+    return result
+
+
+def _gma_recast(sym: SymSystem, original_vars: Set[sp.Symbol]) -> RecastResult:
+    """
+    GMA (Generalized Mass Action) recast for systems with multiple flux channels.
+    
+    Preserves all production and degradation terms exactly without forcing them
+    into canonical S-system form. Each ODE can have multiple terms on each side.
+    """
+    gma_equations: List[GMAEquation] = []
+    new_initials: Dict[sp.Symbol, float] = dict(sym.initials)
+    new_variables: List[sp.Symbol] = list(sym.vars)
+    factor_map: Dict[sp.Symbol, List[sp.Symbol]] = {}
+    
+    for var in sorted(sym.vars, key=lambda s: s.name):
+        # Get ODE - keep parameters symbolic
+        rhs = sp.simplify(sym.odes[var])
+
+        # Expand to terms
+        terms = expand_to_terms(rhs)
+        growth_terms, decay_terms = _analyze_ode_terms(terms)
+
+        # Create GMA equation preserving all terms
+        gma_equations.append(GMAEquation(
+            var=var,
+            production=growth_terms,
+            degradation=decay_terms
+        ))
+        
+        # Original variables map to themselves
+        if var in original_vars:
+            factor_map[var] = [var]
+    
+    return RecastResult(
+        status=RecastStatus.GMA,
+        equations=[],  # GMA doesn't use SSysEquation format
+        initials=new_initials,
+        variables=new_variables,
+        factor_map=factor_map,
+        gma_equations=gma_equations,
+        params=sym.params
+    )
+
+
+def _direct_ssystem_recast(sym: 'SymSystem', original_vars: Set[sp.Symbol], mode: str = "simplified") -> 'RecastResult':
+    """
+    Direct S-system recast for systems with lifted rational/composite functions.
+    
+    Simply converts each ODE to growth-decay form without pool construction.
+    This preserves the mathematical relationships of lifted auxiliaries.
+    
+    IMPORTANT: Checks if any equation has >2 monomial terms with different
+    exponent patterns. If so, returns GMA format instead of claiming canonical.
+    
+    Args:
+        sym: SymSystem to recast
+        original_vars: Set of original variables before lifting
+        mode: Output mode ('simplified' or 'canonical')
+    """
+    new_equations: List[SSysEquation] = []
+    new_variables: List[sp.Symbol] = []
+    new_initials: Dict[sp.Symbol, float] = dict(sym.initials)
+    factor_map: Dict[sp.Symbol, List[sp.Symbol]] = {}
+    state_vars = set(sym.vars)
+    
+    # Check if any ODE has multiple terms with different exponent patterns
+    # If so, we need GMA format, not canonical S-system
+    needs_gma = False
+    
+    for var in sorted(sym.vars, key=lambda s: s.name):
+        new_variables.append(var)
+        
+        # Get ODE - keep parameters symbolic
+        rhs = sp.simplify(sym.odes[var])
+        
+        # Expand to terms
+        terms = expand_to_terms(rhs)
+        
+        # Separate positive and negative terms for growth/decay
+        growth_terms = []
+        decay_terms = []
+        for t in terms:
+            if t == 0:
+                continue
+            try:
+                coeff, exps = term_to_coeff_exps(t, state_vars)
+                # Check sign of coefficient (works for both symbolic and numeric)
+                if sp.sign(coeff) >= 0:
+                    growth_terms.append((coeff, exps))
+                else:
+                    decay_terms.append((sp.Abs(coeff), exps))
+            except ValueError:
+                # If we can't convert to monomial form, skip this term
+                continue
+        
+        # Check if growth terms have different exponent patterns
+        if len(growth_terms) > 1:
+            first_exps = growth_terms[0][1]
+            for _, exps in growth_terms[1:]:
+                if not _exponents_match(first_exps, exps):
+                    needs_gma = True
+                    break
+        
+        # Check if decay terms have different exponent patterns
+        if len(decay_terms) > 1:
+            first_exps = decay_terms[0][1]
+            for _, exps in decay_terms[1:]:
+                if not _exponents_match(first_exps, exps):
+                    needs_gma = True
+                    break
+        
+        # Combine growth terms (sum coefficients, keep as symbolic)
+        if growth_terms:
+            g_coeff = sum((c for c, _ in growth_terms), sp.Integer(0))
+            # For direct mode: don't average exponents, just use first term's exponents
+            # (all terms should have same structure after lifting)
+            g_exps = growth_terms[0][1] if growth_terms else {}
+        else:
+            g_coeff, g_exps = sp.Integer(0), {}
+        
+        # Combine decay terms (sum coefficients, keep as symbolic)
+        if decay_terms:
+            d_coeff = sum((c for c, _ in decay_terms), sp.Integer(0))
+            # For direct mode: use first term's exponents
+            d_exps = decay_terms[0][1] if decay_terms else {}
+        else:
+            d_coeff, d_exps = sp.Integer(0), {}
+        
+        # Add equation
+        new_equations.append(SSysEquation(var, (g_coeff, g_exps), (d_coeff, d_exps)))
+        
+        # Original variables map to themselves (no factorization)
+        if var in original_vars:
+            factor_map[var] = [var]
+    
+    # If any equation needs GMA, return GMA format instead
+    if needs_gma:
+        return _gma_recast(sym, original_vars)
+    
+    # Build result (no name canonicalization needed for direct form)
+    return RecastResult(
+        status=RecastStatus.CANONICAL_SSYSTEM,
+        equations=new_equations,
+        initials=new_initials,
+        variables=new_variables,
+        factor_map=factor_map,
+        params=sym.params
+    )
+
+
+def _pool_ssystem_recast(sym: 'SymSystem', mode: str = "simplified") -> 'RecastResult':
+    """
+    Pool construction S-system recast for pure polynomial systems.
+    
+    This is the original pool method that works well for systems without
+    rational or composite functions.
+    
+    Args:
+        sym: SymSystem to recast
+        mode: Output mode ('simplified' or 'canonical')
+    """
     new_equations: List[SSysEquation] = []
     new_variables: List[sp.Symbol] = []
     new_initials: Dict[sp.Symbol, float] = dict(sym.initials)   # keep params and originals
     factor_map: Dict[sp.Symbol, List[sp.Symbol]] = {}
 
     for Xi in sorted(sym.vars, key=lambda s: s.name):
-        # Lifted auxiliaries: keep as single variables (already power-law)
-        if Xi in lifted_vars:
+        # Original variables: apply pool construction
+        # (No lifted variables in this path)
+        if False:  # This branch never executes - kept for structural consistency
             # Lifted vars already have power-law ODEs from the lifting process
             # No need for pool construction - just convert to growth/decay form
             rhs = sp.simplify(sym.odes[Xi])
@@ -646,13 +1286,14 @@ def recast_to_ssystem(sym: 'SymSystem') -> 'RecastResult':
         # Original variables: apply pool construction
         # 1) decompose RHS into signed monomial terms over ORIGINAL symbols
         rhs = sp.simplify(sym.odes[Xi])
-        rhs = _numeric_param_subs(rhs, sym.params)
+        # Keep parameters symbolic - DO NOT substitute
         terms = expand_to_terms(rhs)
+        state_vars = set(sym.vars)
         mono_terms: List[Tuple[float, Dict[sp.Symbol, float]]] = []
         for t in terms:
             if t == 0:
                 continue
-            coeff, exps = term_to_coeff_exps(t)  # coeff may be ±
+            coeff, exps = term_to_coeff_exps(t, state_vars)  # coeff may be ±
             mono_terms.append((coeff, exps))
 
         # Handle degenerate X' == 0
@@ -683,18 +1324,18 @@ def recast_to_ssystem(sym: 'SymSystem') -> 'RecastResult':
                     continue
                 exps[Vk] = exps.get(Vk, 0.0) - 1.0
 
-            # Assign growth/decay by sign of coeff
-            if coeff >= 0:
+            # Assign growth/decay by sign of coeff (works for symbolic and numeric)
+            if sp.sign(coeff) >= 0:
                 new_equations.append(SSysEquation(
                     var=Vj,
-                    growth=(abs(coeff), exps),
-                    decay=(0.0, {})
+                    growth=(sp.Abs(coeff), exps),
+                    decay=(sp.Integer(0), {})
                 ))
             else:
                 new_equations.append(SSysEquation(
                     var=Vj,
-                    growth=(0.0, {}),
-                    decay=(abs(coeff), exps)
+                    growth=(sp.Integer(0), {}),
+                    decay=(sp.Abs(coeff), exps)
                 ))
 
         # 4) mapping X = ∏_j V_j and initial consistency at t=0
@@ -706,49 +1347,239 @@ def recast_to_ssystem(sym: 'SymSystem') -> 'RecastResult':
 
     # 5) build result and canonicalize names to X_1, X_2, ...
     res = RecastResult(
+        status=RecastStatus.CANONICAL_SSYSTEM,
         equations=new_equations,
         initials=new_initials,
         variables=new_variables,
         factor_map=factor_map,
+        params=sym.params,
     )
     return canonicalize_aux_names(res, prefix="X")
 
-def product_to_antimony(coeff: float, exps: Dict[sp.Symbol, float]) -> str:
+def product_to_antimony(coeff, exps: Dict[sp.Symbol, float]) -> str:
+    """
+    Format coefficient and exponents as Antimony expression string.
+    coeff can be either float or sp.Expr (symbolic).
+    Exponents can also be symbolic expressions.
+    """
     parts: List[str] = []
-    if coeff not in (0.0, 1.0):
-        parts.append(f"{coeff:g}")
-    elif coeff == 0.0:
-        return "0"
+    
+    # Handle coefficient (numeric or symbolic)
+    if isinstance(coeff, sp.Expr):
+        # Symbolic coefficient - format it cleanly
+        coeff_simplified = sp.simplify(coeff)
+        if coeff_simplified == 0:
+            return "0"
+        elif coeff_simplified != 1:
+            # Check if coefficient is a sum (needs parentheses)
+            if coeff_simplified.is_Add:
+                # Format as a single parenthesized expression
+                parts.append(f"({coeff_simplified})")
+            else:
+                # Break symbolic coefficient into factors for clean formatting
+                coeff_factors = _format_symbolic_coeff(coeff_simplified)
+                if coeff_factors:
+                    parts.extend(coeff_factors)
+    else:
+        # Numeric coefficient
+        if coeff == 0.0:
+            return "0"
+        elif coeff != 1.0:
+            parts.append(f"{coeff:g}")
+    
+    # Add power-law terms
     for s, e in sorted(exps.items(), key=lambda kv: str(kv[0])):
-        if abs(e) < 1e-14:
-            continue
-        # Handle both Symbol and complex expressions
-        s_name = s.name if hasattr(s, 'name') else str(s)
-        if abs(e - 1.0) < 1e-14:
-            parts.append(f"{s_name}")
+        # Handle both numeric and symbolic exponents
+        if isinstance(e, sp.Expr):
+            e_simplified = sp.simplify(e)
+            if e_simplified == 0:
+                continue
+            # Check if it's effectively 1.0 (including sympy Float)
+            elif e_simplified == 1 or (e_simplified.is_Number and abs(float(e_simplified) - 1.0) < 1e-10):
+                parts.append(s.name)
+            else:
+                # Format as integer if it's an integer value
+                if e_simplified.is_Number:
+                    e_val = float(e_simplified)
+                    if abs(e_val - round(e_val)) < 1e-10:
+                        parts.append(f"{s.name}^{int(round(e_val))}")
+                    else:
+                        parts.append(f"{s.name}^{e_simplified}")
+                else:
+                    # Symbolic exponent - add parentheses if it's a sum/difference
+                    if e_simplified.is_Add:
+                        parts.append(f"{s.name}^({e_simplified})")
+                    else:
+                        parts.append(f"{s.name}^{e_simplified}")
         else:
-            parts.append(f"{s_name}^{e:g}")
+            # Numeric exponent
+            if abs(e) < 1e-14:
+                continue
+            s_name = s.name if hasattr(s, 'name') else str(s)
+            if abs(e - 1.0) < 1e-14:
+                parts.append(f"{s_name}")
+            else:
+                parts.append(f"{s_name}^{e:g}")
+    
     if not parts:
         return "0"
     return "*".join(parts)
 
-def ssystem_to_antimony(result, model_name: str = "recast") -> str:
+
+def _format_symbolic_coeff(coeff: sp.Expr) -> List[str]:
+    """
+    Format a symbolic coefficient cleanly by extracting factors.
+    Returns list of string parts to be joined with '*'.
+    """
+    parts: List[str] = []
+    
+    # If it's a multiplication, extract factors
+    if coeff.is_Mul:
+        for factor in coeff.args:
+            part = _format_factor(factor)
+            if part:
+                parts.append(part)
+    else:
+        # Single factor
+        part = _format_factor(coeff)
+        if part:
+            parts.append(part)
+    
+    return parts
+
+
+def _format_factor(factor: sp.Expr) -> str:
+    """Format a single factor from a coefficient."""
+    # Pure number
+    if factor.is_Number:
+        val = float(factor)
+        if val == int(val):
+            return str(int(val))
+        else:
+            return f"{val:g}"
+    
+    # Symbol (parameter)
+    if isinstance(factor, sp.Symbol):
+        return factor.name
+    
+    # Power: base^exp
+    if isinstance(factor, sp.Pow):
+        base, exp = factor.args
+        
+        # Check if exponent is 1.0 (skip the exponent entirely)
+        if exp.is_Number:
+            exp_val = float(exp)
+            if abs(exp_val - 1.0) < 1e-10:
+                return _format_factor(base)
+        
+        # Format base
+        if isinstance(base, sp.Symbol):
+            base_str = base.name
+        elif base.is_Number:
+            base_str = f"{float(base):g}"
+        else:
+            base_str = f"({_format_factor(base)})"
+        
+        # Format exponent
+        if exp.is_Number:
+            exp_val = float(exp)
+            if exp_val == int(exp_val):
+                exp_str = str(int(exp_val))
+            else:
+                exp_str = f"{exp_val:g}"
+        else:
+            exp_str = str(exp)
+        
+        return f"{base_str}^{exp_str}"
+    
+    # Anything else - fallback to string representation
+    return str(factor)
+
+def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
+    """
+    Format GMA equations to Antimony with clear labeling.
+    Preserves all production/degradation terms exactly.
+    """
+    lines: List[str] = []
+    lines.append(f"model {model_name}()")
+    lines.append("// GMA (Generalized Mass Action) format")
+    lines.append("// Multiple flux channels with different kinetic orders preserved exactly")
+    lines.append("// Cannot be reduced to canonical S-system form without loss of information")
+    lines.append("")
+    
+    # Initial assignments
+    for s, v in sorted(result.initials.items(), key=lambda kv: kv[0].name):
+        lines.append(f"{s.name} = {float(v):g}")
+    
+    lines.append("")
+    
+    # GMA ODEs with multiple terms per side
+    for eq in result.gma_equations:
+        # Format production terms
+        if eq.production:
+            prod_strs = [product_to_antimony(c, e) for c, e in eq.production]
+            production = " + ".join(prod_strs)
+        else:
+            production = "0"
+        
+        # Format degradation terms
+        if eq.degradation:
+            deg_strs = [product_to_antimony(c, e) for c, e in eq.degradation]
+            degradation = " + ".join(deg_strs)
+        else:
+            degradation = "0"
+        
+        # Write ODE
+        if degradation == "0":
+            lines.append(f"{eq.var.name}' = {production}")
+        else:
+            lines.append(f"{eq.var.name}' = {production} - ({degradation})")
+    
+    lines.append("end")
+    return "\n".join(lines)
+
+
+def ssystem_to_antimony(result, model_name: str = "recast", mode: str = "simplified") -> str:
+    """
+    Format canonical S-system or GMA to Antimony based on result status.
+    
+    Args:
+        result: RecastResult to format
+        model_name: Name for the output model
+        mode: Output mode ('simplified' or 'canonical')
+            - 'simplified': Basic format with comments
+            - 'canonical': Enhanced format with species declarations, observables, and detailed comments
+    """
+    # Check if this is GMA format
+    if result.status == RecastStatus.GMA:
+        return gma_to_antimony(result, model_name)
+    
+    # Route to appropriate formatter based on mode
+    if mode == "canonical":
+        return _ssystem_to_antimony_canonical(result, model_name)
+    else:
+        return _ssystem_to_antimony_simplified(result, model_name)
+
+
+def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
+    """Format S-system in simplified mode (original format)."""
     lines: List[str] = []
     lines.append(f"model {model_name}()")
 
     # --- mapping: original → product of auxiliaries ---
-    lines.append("// Mapping from original variables to canonical auxiliaries (product form)")
-    for orig in sorted(result.factor_map.keys(), key=lambda s: s.name):
-        aux = result.factor_map[orig]
-        rhs = "*".join(a.name for a in aux) if aux else "1"
-        lines.append(f"// {orig.name} = {rhs}")
-    lines.append("// --- end mapping ---")
+    if result.factor_map:
+        lines.append("// Mapping from original variables to canonical auxiliaries (product form)")
+        for orig in sorted(result.factor_map.keys(), key=lambda s: s.name):
+            aux = result.factor_map[orig]
+            rhs = "*".join(a.name for a in aux) if aux else "1"
+            lines.append(f"// {orig.name} = {rhs}")
+        lines.append("// --- end mapping ---")
 
-    # initial assignments (as before)
+    # initial assignments
     for s, v in sorted(result.initials.items(), key=lambda kv: kv[0].name):
         lines.append(f"{s.name} = {float(v):g}")
 
-    # canonical S-system ODEs (aux-only exponents already expanded)
+    # canonical S-system ODEs
     for eq in result.equations:
         g_exps = _expand_exps_through_factors(eq.growth[1], result.factor_map)
         h_exps = _expand_exps_through_factors(eq.decay[1], result.factor_map)
@@ -759,6 +1590,123 @@ def ssystem_to_antimony(result, model_name: str = "recast") -> str:
     lines.append("end")
     return "\n".join(lines)
 
+
+def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
+    """
+    Format S-system in canonical mode with enhanced annotations.
+    
+    Features:
+    - Species declarations for all auxiliary variables
+    - Observable variables showing original-to-auxiliary mappings
+    - Detailed explanatory comments
+    - Clean equation formatting
+    """
+    lines: List[str] = []
+    
+    # Model declaration with _SSystem suffix
+    if not model_name.endswith("_SSystem") and not model_name.endswith("_SSystem_exact"):
+        model_name = f"{model_name}_SSystem_exact"
+    lines.append(f"model {model_name}()")
+    lines.append("")
+    
+    # Identify auxiliary and original variables
+    aux_vars = [v for v in result.variables]
+    orig_vars = sorted(result.factor_map.keys(), key=lambda s: s.name)
+    
+    # Species declarations for auxiliary variables
+    if aux_vars:
+        species_names = ", ".join([v.name for v in aux_vars])
+        lines.append(f"  species {species_names};")
+        lines.append("")
+    
+    # Parameter declarations (from result.params)
+    if result.params:
+        lines.append("  // Parameters")
+        for param_name in sorted(result.params.keys()):
+            param_val = result.params[param_name]
+            lines.append(f"  {param_name} = {param_val:g};")
+        lines.append("")
+    
+    # Add slack variable if needed (for pure decay terms)
+    needs_slack = False
+    for eq in result.equations:
+        g_coeff = eq.growth[0]
+        d_coeff = eq.decay[0]
+        # Check if we have a pure decay (growth is 0)
+        if (isinstance(g_coeff, (int, float)) and g_coeff == 0) or \
+           (isinstance(g_coeff, sp.Expr) and g_coeff == sp.Integer(0)):
+            needs_slack = True
+            break
+    
+    if needs_slack:
+        lines.append("  // Slack variable (keeps both coefficients >0)")
+        lines.append("  epsilon = 1.0;")
+        lines.append("")
+    
+    # Canonical S-system dynamics with clean formatting and slack variables
+    lines.append("  // Canonical S-system dynamics (two monomials per ODE)")
+    for eq in result.equations:
+        g_exps = _expand_exps_through_factors(eq.growth[1], result.factor_map)
+        h_exps = _expand_exps_through_factors(eq.decay[1], result.factor_map)
+        g_coeff = eq.growth[0]
+        h_coeff = eq.decay[0]
+        
+        # Check if growth or decay is zero (need slack variable)
+        g_is_zero = (isinstance(g_coeff, (int, float)) and g_coeff == 0) or \
+                    (isinstance(g_coeff, sp.Expr) and g_coeff == sp.Integer(0))
+        h_is_zero = (isinstance(h_coeff, (int, float)) and h_coeff == 0) or \
+                    (isinstance(h_coeff, sp.Expr) and h_coeff == sp.Integer(0))
+        
+        if g_is_zero and not h_is_zero:
+            # Pure decay: X' = 0 - h  =>  X' = epsilon*monomial - (epsilon + h)*monomial
+            # Use the decay exponents for both terms
+            g_str = product_to_antimony(sp.Symbol('epsilon'), h_exps)
+            # Combine epsilon + h_coeff symbolically
+            if isinstance(h_coeff, sp.Expr):
+                combined_coeff = sp.Symbol('epsilon') + h_coeff
+            else:
+                combined_coeff = sp.Symbol('epsilon') + sp.Float(h_coeff)
+            h_str = product_to_antimony(combined_coeff, h_exps)
+            lines.append(f"  {eq.var.name}' = {g_str} - {h_str};")
+        elif h_is_zero and not g_is_zero:
+            # Pure growth: X' = g - 0  =>  X' = (g + epsilon)*monomial - epsilon*monomial
+            # Use the growth exponents for both terms
+            if isinstance(g_coeff, sp.Expr):
+                combined_coeff = g_coeff + sp.Symbol('epsilon')
+            else:
+                combined_coeff = sp.Float(g_coeff) + sp.Symbol('epsilon')
+            g_str = product_to_antimony(combined_coeff, g_exps)
+            h_str = product_to_antimony(sp.Symbol('epsilon'), g_exps)
+            lines.append(f"  {eq.var.name}' = {g_str} - {h_str};")
+        else:
+            # Both terms present (or both zero) - use as-is
+            g = product_to_antimony(g_coeff, g_exps)
+            h = product_to_antimony(h_coeff, h_exps)
+            lines.append(f"  {eq.var.name}' = {g} - {h};")
+    lines.append("")
+    
+    # Observable variables for original variables (if factorized)
+    if orig_vars and any(len(result.factor_map[orig]) > 1 for orig in orig_vars):
+        lines.append("  // Observable: original variable(s)")
+        for orig in orig_vars:
+            aux_list = result.factor_map[orig]
+            if len(aux_list) > 1:  # Only show non-trivial mappings
+                obs_name = f"{orig.name}_obs"
+                rhs = " * ".join([a.name for a in aux_list])
+                lines.append(f"  var {obs_name};")
+                lines.append(f"  {obs_name} := {rhs};")
+        lines.append("")
+    
+    # Initial conditions
+    lines.append("  // Initial conditions")
+    for v in aux_vars:
+        if v in result.initials:
+            val = result.initials[v]
+            lines.append(f"  {v.name} = {float(val):g};")
+    
+    lines.append("end")
+    return "\n".join(lines)
+
 def latex_odes(sym: 'SymSystem') -> str:
     lines = []
     for v in sorted(sym.odes.keys(), key=lambda s: s.name):
@@ -766,10 +1714,105 @@ def latex_odes(sym: 'SymSystem') -> str:
         lines.append(r"\dot{%s} = %s" % (sp.latex(v), sp.latex(rhs)))
     return r"\\begin{aligned}" + r"\\\\\n".join(lines) + r"\\end{aligned}"
 
+def _latex_power_law(coeff, exps: Dict[sp.Symbol, float]) -> str:
+    """
+    Format a power-law term as clean LaTeX.
+    - Skip coefficients of 1
+    - Skip exponents of 1
+    - Display integers as integers (not floats)
+    """
+    parts = []
+    
+    # Handle coefficient
+    if isinstance(coeff, sp.Expr):
+        coeff_simplified = sp.simplify(coeff)
+        if coeff_simplified == 0:
+            return "0"
+        elif coeff_simplified != 1:
+            # Use sympy's latex for symbolic coefficients
+            parts.append(sp.latex(coeff_simplified))
+    else:
+        # Numeric coefficient
+        if coeff == 0:
+            return "0"
+        elif coeff != 1:
+            # Display integers as integers
+            if isinstance(coeff, int) or (isinstance(coeff, float) and coeff == int(coeff)):
+                parts.append(str(int(coeff)))
+            else:
+                parts.append(f"{coeff:g}")
+    
+    # Handle power-law terms
+    for s, e in sorted(exps.items(), key=lambda kv: str(kv[0])):
+        if abs(e) < 1e-14:
+            continue
+        
+        var_latex = sp.latex(s)
+        
+        # Skip exponent if it's 1
+        if abs(e - 1.0) < 1e-14:
+            parts.append(var_latex)
+        else:
+            # Display integer exponents as integers
+            if isinstance(e, int) or (isinstance(e, float) and e == int(e)):
+                parts.append(f"{var_latex}^{{{int(e)}}}")
+            else:
+                parts.append(f"{var_latex}^{{{e:g}}}")
+    
+    if not parts:
+        return "0"
+    
+    # Join with space (LaTeX handles multiplication)
+    return " ".join(parts)
+
 def latex_ssys(result: 'RecastResult') -> str:
+    """
+    Generate clean LaTeX representation of S-system equations.
+    - Skip coefficients of 1
+    - Skip exponents of 1  
+    - Display integers as integers
+    - Apply slack variable transformation for canonical form (matches Antimony output)
+    """
     lines = []
     for eq in result.equations:
-        g = product_expr(eq.growth[0], eq.growth[1])
-        h = product_expr(eq.decay[0], eq.decay[1])
-        lines.append(r"\dot{%s} = %s - %s" % (sp.latex(eq.var), sp.latex(g), sp.latex(h)))
-    return r"\\begin{aligned}" + r"\\\\\n".join(lines) + r"\\end{aligned}"
+        # Expand exponents through factor map
+        g_exps = _expand_exps_through_factors(eq.growth[1], result.factor_map)
+        h_exps = _expand_exps_through_factors(eq.decay[1], result.factor_map)
+        g_coeff = eq.growth[0]
+        h_coeff = eq.decay[0]
+        
+        # Check if growth or decay is zero (need slack variable transformation)
+        g_is_zero = (isinstance(g_coeff, (int, float)) and g_coeff == 0) or \
+                    (isinstance(g_coeff, sp.Expr) and g_coeff == sp.Integer(0))
+        h_is_zero = (isinstance(h_coeff, (int, float)) and h_coeff == 0) or \
+                    (isinstance(h_coeff, sp.Expr) and h_coeff == sp.Integer(0))
+        
+        if g_is_zero and not h_is_zero:
+            # Pure decay: X' = 0 - h  =>  X' = epsilon*monomial - (epsilon + h)*monomial
+            # Use the decay exponents for both terms
+            g_latex = _latex_power_law(sp.Symbol('epsilon'), h_exps)
+            # Combine epsilon + h_coeff symbolically
+            if isinstance(h_coeff, sp.Expr):
+                combined_coeff = sp.Symbol('epsilon') + h_coeff
+            else:
+                combined_coeff = sp.Symbol('epsilon') + sp.Float(h_coeff)
+            h_latex = _latex_power_law(combined_coeff, h_exps)
+        elif h_is_zero and not g_is_zero:
+            # Pure growth: X' = g - 0  =>  X' = (g + epsilon)*monomial - epsilon*monomial
+            # Use the growth exponents for both terms
+            if isinstance(g_coeff, sp.Expr):
+                combined_coeff = g_coeff + sp.Symbol('epsilon')
+            else:
+                combined_coeff = sp.Float(g_coeff) + sp.Symbol('epsilon')
+            g_latex = _latex_power_law(combined_coeff, g_exps)
+            h_latex = _latex_power_law(sp.Symbol('epsilon'), g_exps)
+        else:
+            # Both terms present (or both zero) - use as-is
+            g_latex = _latex_power_law(g_coeff, g_exps)
+            h_latex = _latex_power_law(h_coeff, h_exps)
+        
+        # Build equation
+        var_latex = sp.latex(eq.var)
+        lines.append(rf"\dot{{{var_latex}}} &= {g_latex} - {h_latex}")
+    
+    return r"\begin{aligned}" + "\\\\\n".join(lines) + r"\end{aligned}"
