@@ -1,22 +1,37 @@
-
 # ODE → S‑System Recast (Antimony → Antimony)
 
-**Version:** v0.3.0  
-**Date:** 2025-11-21
+**Version:** v0.4.0  
+**Date:** 2025-11-25
 
-This toolkit converts ordinary differential equation (ODE) models written in **Antimony** into **canonical S‑System** form and writes the result back to Antimony. It also ships with a **testing harness** that batch‑recasts a manifest of models and generates a **Jupyter notebook** that shows Antimony (before/after), LaTeX ODEs (before/after), and numerical simulations for both the original and the recast system.
+This toolkit converts ordinary differential equation (ODE) models written in **Antimony** into **canonical S‑System** form and writes the result back to Antimony. It provides both a **Python library** and a **command-line interface** for batch processing models and generating **Jupyter notebook** verification reports.
 
 ---
 
 ## Contents
 
 ```
-/mnt/data/ode_to_ssys/
-  ssys_recaster.py        # Core library: parse → build ODEs → recast → emit Antimony
-  harness.py              # Test harness: manifest → recast outputs → notebook report
+ssys/
+  src/ssys/
+    __init__.py           # Package interface
+    cli.py                # Command-line interface
+    recaster.py           # Core library: parse → ODE → recast → Antimony
+    notebook_helpers.py   # Jupyter notebook generation utilities
+  tests/                  # Example Antimony models (22 test cases)
+  literature/             # Reference papers on S-systems
   README.md               # This file
-  /tests                  # Example Antimony inputs
-  /out                    # Example recast outputs
+```
+
+---
+
+## Installation
+
+```bash
+pip install -e .
+```
+
+Or use directly with PYTHONPATH:
+```bash
+export PYTHONPATH=/path/to/ssys/src:$PYTHONPATH
 ```
 
 ---
@@ -25,125 +40,331 @@ This toolkit converts ordinary differential equation (ODE) models written in **A
 
 - Python 3.9+
 - sympy (symbolic math)
-- matplotlib (plots in the generated notebook)
-- nbformat (the harness writes notebooks)
-
-> If you only use the library (no harness), you can skip nbformat.
-
----
-
-## What “recast” means (summary)
-
-Given an ODE of the form
-\[
-\dot X_i = \sum_k c_{ik} \prod_j Z_j^{p_{ikj}},
-\]
-we iteratively **split sums into products** by introducing **auxiliary variables** until every derivative is a **difference of two single power‑law products**:
-\[
-\dot X_i = \alpha_i\,\prod_j X_j^{g_{ij}}\; -\; \beta_i\,\prod_j X_j^{h_{ij}}.
-\]
-Original variables are **replaced by products of auxiliaries**. The **product constraints** are enforced via initial conditions so that, at \(t_0\), the product equals the original initial value.
-
-This follows Savageau & Voit (1987): positive orthant assumption, decomposition of composite functions (future work), and sum‑splitting into canonical S‑systems.
+- matplotlib (plots in generated notebooks)
+- nbformat (notebook generation)
+- jupyter (to run generated notebooks)
 
 ---
 
-## Antimony subset supported (v0.3.0)
+## Command-Line Interface
 
-- Reactions: `A + B -> C; k*A*B`  
-- Initializations: `X = 2.5`, `k = 0.1`  
-- Explicit rate rules: `X' = ...`  
-- Boundary species marked with `$X` on reaction sides (not dynamic)  
-- Parameters are treated as positive constants
-- Elementary functions: `exp`, `log`, `sin`, `cos`, `tan`, `sqrt`
-- Rational functions: e.g., `X/(Y+1)`
+The CLI tool batch-recasts models and generates verification notebooks:
 
-> Not yet supported: modules, reversible shorthand `<->` semantics beyond two one‑way reactions, general assignment rules `:=` with symbolic RHS, piecewise/conditionals.
-
----
-
-## Library usage (programmatic)
-
-```python
-from ssys_recaster import parse_antimony, build_sym_system, recast_to_ssystem, ssystem_to_antimony
-
-text = open("your_model.ant").read()
-ir   = parse_antimony(text)          # parse reactions/inits/rate rules
-sys  = build_sym_system(ir)          # SymPy ODEs
-rec  = recast_to_ssystem(sys)        # recast into canonical S-System (aux variables + factor map)
-out  = ssystem_to_antimony(rec, model_name="your_model_recast")
-
-open("your_model_recast.ant","w").write(out)
-
-# Optional: LaTeX pretty‑printing of ODEs
-from ssys_recaster import latex_odes, latex_ssys
-print(latex_odes(sys))
-print(latex_ssys(rec))
+```bash
+python -m ssys.cli --manifest tests/tests.manifest \
+                   --outdir out_simplified \
+                   --mode simplified
 ```
 
-### Factor map
-`recast_to_ssystem` returns a `factor_map` so you can reconstruct original variables as products of auxiliary variables during simulation/analysis.
+### Arguments
 
----
+- `--manifest`: Path to manifest file (one `.ant` file path per line)
+- `--outdir`: Output directory for recast models and notebook
+- `--mode`: Output mode (default: `simplified`)
+  - `simplified`: Flexible S-system form, preserves zeros
+  - `canonical`: Strict 2-term form with epsilon slack variables
 
-## Testing harness
+### Manifest Format
 
-The harness consumes a **manifest** (plain text, one path to a `.ant` file per line), recasts each model, writes the recast `.ant`, and generates a **Jupyter notebook** report.
-
-### Manifest format
+Plain text file with one Antimony file path per line:
 ```
-/absolute/path/to/model1.ant
-/absolute/path/to/model2.ant
+tests/01_exp_decay.ant
+tests/02_logistic.ant
 # Lines starting with # are ignored
 ```
 
-### Run
-```bash
-python /mnt/data/ode_to_ssys/harness.py   --manifest /path/to/manifest.txt   --outdir   /path/to/outdir   --module   /mnt/data/ode_to_ssys/ssys_recaster.py
+### Output
+
+For each input model:
+- Recast `.ant` file in `--outdir`
+- Verification notebook: `recast_report.ipynb`
+
+The notebook shows for each model:
+- Original and recast Antimony code
+- LaTeX ODEs (original and S-system)
+- Numerical simulation comparison
+- System classification (S-system, Canonical S-system, or GMA)
+
+---
+
+## Output Modes: Simplified vs. Canonical
+
+### Simplified Mode (`--mode simplified`)
+
+**Default behavior.** Produces a flexible S-system form:
+- Preserves mathematical structure of original equations
+- Zero coefficients remain zero (single-term equations allowed)
+- Cleaner output for visualization and analysis
+- Example: Pure decay `X' = -k*X` becomes `X' = 0 - k*X`
+
+**Use when:**
+- You need readable output
+- Analyzing system behavior
+- Visualizing dynamics
+- Zero terms are acceptable
+
+### Canonical Mode (`--mode canonical`)
+
+**Strict S-system form** following Savageau & Voit (1987):
+- Guarantees exactly 2 terms per equation (growth + decay)
+- Adds epsilon slack variables to ensure both terms present
+- Required for certain theoretical analyses
+- Example: Pure decay `X' = -k*X` becomes `X' = ε*X - (ε+k)*X`
+
+**Use when:**
+- Publishing S-system analyses
+- Applying S-system-specific algorithms
+- Theoretical work requiring canonical form
+- Comparing with literature using strict definition
+
+**Technical details:**
+- Epsilon (ε) is a small positive constant (default: 1.0)
+- Transformation preserves dynamics: `ε*X - (ε+k)*X = -k*X`
+- Both growth and decay terms are positive monomials
+
+---
+
+## Library Usage (Programmatic)
+
+### Basic Example
+
+```python
+import ssys
+
+# Load and parse model
+text = open("tests/01_exp_decay.ant").read()
+ir = ssys.parse_antimony(text)
+
+# Build symbolic ODE system
+sym = ssys.build_sym_system(ir)
+
+# Recast to S-system (simplified mode)
+result = ssys.recast_to_ssystem(sym, mode="simplified")
+
+# Generate Antimony output
+out = ssys.ssystem_to_antimony(result, 
+                                model_name="exp_decay_recast",
+                                mode="simplified")
+
+# Save
+open("exp_decay_recast.ant", "w").write(out)
 ```
 
-### Outputs
-- Recast `.ant` files in `--outdir`
-- `recast_report.ipynb` in `--outdir`  
-  Each test section shows:
-  - Original Antimony and recast Antimony (as code blocks)
-  - Original ODEs (LaTeX) and S‑System ODEs (LaTeX)
-  - Two plots: original system trajectories, and **reconstructed** original trajectories obtained by multiplying the auxiliary S‑system states according to the factor map
+### Canonical Mode Example
 
-> Plots are rendered with one figure per panel (no subplots) for clarity.
+```python
+import ssys
+
+text = open("tests/14_Michaelis_Menten_prod_deg.ant").read()
+ir = ssys.parse_antimony(text)
+sym = ssys.build_sym_system(ir)
+
+# Canonical mode with epsilon slack
+result = ssys.recast_to_ssystem(sym, mode="canonical")
+out = ssys.ssystem_to_antimony(result,
+                                model_name="MM_canonical",
+                                mode="canonical")
+
+open("MM_canonical.ant", "w").write(out)
+```
+
+### Classification
+
+```python
+from ssys.recaster import classify_system, classify_result
+
+# Classify input system
+input_class = classify_system(sym)
+print(f"Input: {input_class.value}")
+# Output: "General", "S-system", "Canonical S-system", or "GMA"
+
+# Classify output (mode-aware)
+output_class = classify_result(result, mode="canonical")
+print(f"Output: {output_class.value}")
+```
+
+### LaTeX Output
+
+```python
+from ssys.recaster import latex_odes, latex_ssys
+
+# Original ODEs in LaTeX
+print(latex_odes(sym))
+
+# S-system in LaTeX
+print(latex_ssys(result))
+```
+
+### Factor Map
+
+The `factor_map` allows reconstruction of original variables from auxiliaries:
+
+```python
+result = ssys.recast_to_ssystem(sym)
+
+# result.factor_map: {X: [X_1, X_2, ...]}
+# Meaning: X = X_1 * X_2 * ...
+
+# Reconstruct during simulation
+for orig, aux_list in result.factor_map.items():
+    reconstructed = 1.0
+    for aux in aux_list:
+        reconstructed *= aux_state[aux]
+    # reconstructed now equals original variable X
+```
 
 ---
 
-## Algorithm sketch
+## What "Recast" Means
 
-1. Parse Antimony → intermediate representation (species, parameters, reactions, explicit `S' = …` rules, inits).  
-2. Build SymPy ODEs from reactions + rate rules.  
-3. Expand each RHS into a sum of monomials (products of powers).  
-4. Iterative sum‑splitting: introduce auxiliary variables to express sums through products so that each derivative is a single power‑law product (growth) minus a single product (decay).  
-5. Initial conditions enforce the product constraints at \(t_0\).  
-6. Emit Antimony containing only auxiliary S‑system variables with canonical rate rules.
+Given an ODE of the form:
+```
+Ẋᵢ = Σₖ cᵢₖ ∏ⱼ Zⱼ^(pᵢₖⱼ)
+```
+
+We iteratively **split sums into products** by introducing **auxiliary variables** until every derivative is a **difference of two single power‑law products**:
+
+```
+Ẋᵢ = αᵢ ∏ⱼ Xⱼ^(gᵢⱼ) - βᵢ ∏ⱼ Xⱼ^(hᵢⱼ)
+```
+
+Original variables are **replaced by products of auxiliaries**. The **product constraints** are enforced via initial conditions so that, at t₀, the product equals the original initial value.
+
+This follows Savageau & Voit (1987): positive orthant assumption, decomposition of composite functions, and sum‑splitting into canonical S‑systems.
 
 ---
 
-## Limitations / roadmap
+## Antimony Subset Supported
 
-- **Elementary functions** (`exp`, `log`, `sin`, `cos`, `tan`, `sqrt`): ✅ **Now supported!** (v0.3.0) Composite functions are automatically lifted into auxiliary variables using the chain rule, allowing models with transcendental functions to be recast into S-system form.
-- **Rational functions**: ✅ **Now supported!** Expressions like `X/(Y+1)` are automatically lifted into auxiliary variables.
-- **Positive orthant**: S‑systems assume positivity. Add a preprocessing translation for variables that can cross zero (paper's Step B).  
-- **Stiff systems**: built‑in RK4 in the notebook is fine for moderate problems. If stiffness appears, plug in SciPy's adaptive solvers.  
-- **Antimony grammar**: extend to modules, reversible shorthands, and assignment rules with non‑numeric RHS.
+✅ **Supported:**
+- Reactions: `A + B -> C; k*A*B`
+- Initializations: `X = 2.5`, `k = 0.1`
+- Explicit rate rules: `X' = ...`
+- Boundary species: `$X` (not dynamic)
+- Parameters (treated as positive constants)
+- **Elementary functions**: `exp`, `log`, `sin`, `cos`, `tan`, `sqrt`
+- **Rational functions**: `X/(Y+1)`, `1/(X+Y+Z)`
+- **Assignment rules**: `Z := X + Y` (substituted into ODEs)
+
+❌ **Not yet supported:**
+- Modules
+- Events and piecewise functions
+- Time-dependent forcing
+- Non-positive variables (requires preprocessing)
+
+---
+
+## Algorithm Overview
+
+1. **Parse** Antimony → intermediate representation (species, parameters, reactions, rate rules)
+2. **Build** SymPy ODEs from reactions and rate rules
+3. **Lift composite functions**: exp, sin, log, etc. → auxiliary variables (chain rule)
+4. **Lift rational functions**: denominators → auxiliary variables (exact S-system form)
+5. **Expand** RHS into sum of monomials (products of powers)
+6. **Split sums**: iteratively introduce auxiliaries to express as single growth - single decay
+7. **Mode-specific formatting**:
+   - Simplified: preserve zeros
+   - Canonical: add epsilon slack for strict 2-term form
+8. **Emit** Antimony with auxiliary S‑system variables and canonical rate rules
+
+---
+
+## System Classifications
+
+The tool classifies both input and output systems:
+
+- **General**: Contains non-monomial terms (arbitrary functions)
+- **GMA** (Generalized Mass Action): All monomial terms, may have multiple incompatible terms
+- **S-system**: 1-2 monomial terms per equation (growth and/or decay)
+- **Canonical S-system**: Exactly 2 terms per equation (1 growth + 1 decay)
+
+Classification is mode-aware:
+- Simplified mode: counts actual non-zero terms
+- Canonical mode: accounts for epsilon transformation
+
+---
+
+## Examples
+
+### Example 1: Exponential Decay
+
+**Input** (`01_exp_decay.ant`):
+```
+model exponential_decay()
+  X = 1.0
+  k = 0.5
+  X' = -k*X
+end
+```
+
+**Simplified output**:
+```
+X' = 0 - 0.5*X^1
+```
+
+**Canonical output**:
+```
+X' = epsilon*X^1 - (epsilon + 0.5)*X^1
+```
+
+### Example 2: Michaelis-Menten
+
+**Input** (`14_Michaelis_Menten_prod_deg.ant`):
+```
+S' = -k1*S*E/(Km + S)
+P' = k1*S*E/(Km + S) - k2*P
+```
+
+**Output** (both modes, after lifting):
+```
+S' = 0 - k1*S*E*Y_1^-1
+P' = k1*S*E*Y_1^-1 - k2*P
+
+Y_1' = ... # Auxiliary for (Km + S)
+```
 
 ---
 
 ## Troubleshooting
 
-- “Unexpected symbol” during parsing: likely an unsupported Antimony construct (module, `:=`, piecewise). Simplify the model or extend the parser.  
-- Flat lines in reconstructed plots: check initial conditions—product constraints require correct initial values of auxiliary factors.  
-- Numerical blow‑ups: exponents and parameter values can create large growth. Reduce `tmax`, or switch to an adaptive solver.
+**"Module not found" error:**
+- Ensure `src/` is in PYTHONPATH or install with `pip install -e .`
+
+**"Unexpected symbol" during parsing:**
+- Check for unsupported Antimony constructs (modules, events)
+- Simplify model or extend parser
+
+**Flat lines in reconstructed plots:**
+- Check initial conditions—product constraints require correct auxiliary initial values
+- Verify factor_map is applied correctly
+
+**Numerical blow-ups:**
+- Large exponents can cause rapid growth
+- Reduce simulation time or use adaptive solver
+- Check parameter values for reasonableness
+
+**Classification mismatch:**
+- Ensure mode parameter is passed to both `recast_to_ssystem()` and `classify_result()`
+- Simplified mode preserves zeros, canonical mode adds epsilon
 
 ---
 
 ## References
 
-- Savageau, M. A., & Voit, E. O. (1987). Recasting nonlinear differential equations as S‑systems: a canonical nonlinear form.  
-- Sauro, H. M., et al. Antimony language papers.
+- Savageau, M. A., & Voit, E. O. (1987). Recasting nonlinear differential equations as S‑systems: a canonical nonlinear form. *Mathematical Biosciences*, 87(1), 83-115.
+- Voit, E. O. (2013). Biochemical systems theory: A review. *ISRN Biomathematics*, 2013.
+- Sauro, H. M., et al. Antimony: A modular model definition language. *Bioinformatics*, 2009.
+
+---
+
+## Contributing
+
+See `CONTRIBUTING.md` for guidelines.
+
+## License
+
+See `LICENSE` file.
+
+## Citation
+
+See `CITATION.cff` for citation information.
