@@ -68,6 +68,8 @@ class ModelIR:
     explicit_rates: Dict[str, str] = field(default_factory=dict)
     assignment_rules: Dict[str, str] = field(default_factory=dict)
     raw_lines: List[str] = field(default_factory=list)
+    param_exprs: Dict[str, str] = field(default_factory=dict)  # Store parameter expressions before evaluation
+    initial_exprs: Dict[str, str] = field(default_factory=dict)  # Store initial condition expressions
 
 def parse_antimony(text: str) -> ModelIR:
     ir = ModelIR()
@@ -85,7 +87,7 @@ def parse_antimony(text: str) -> ModelIR:
         if ("->" in line) or ("<->" in line):
             s = line
             before_rate, rate_expr = s.split(";", 1)
-            rate_expr = rate_expr.strip()
+            rate_expr = rate_expr.strip().rstrip(';').strip()
             if ":" in before_rate:
                 rxn_name, stoich = before_rate.split(":", 1)
                 rxn_name = rxn_name.strip()
@@ -123,13 +125,16 @@ def parse_antimony(text: str) -> ModelIR:
                 left, right = stmt.split("=", 1)
                 left = left.strip()
                 right = right.strip()
+                # Store the expression string for later resolution
+                if left.startswith("$"):
+                    left = left[1:].strip()
+                    ir.boundary.add(left)
+                ir.param_exprs[left] = right  # Store expression for all assignments
+                # Try to evaluate immediately (will work for simple numeric constants)
                 try:
                     val = float(sp.sympify(right))
                 except Exception:
                     val = None
-                if left.startswith("$"):
-                    left = left[1:].strip()
-                    ir.boundary.add(left)
                 ir.initial[left] = val if val is not None else 0.0
                 continue
 
@@ -145,8 +150,61 @@ def parse_antimony(text: str) -> ModelIR:
     for nm, val in list(ir.initial.items()):
         if nm not in ir.species:
             ir.params[nm] = val
+    
+    # Resolve parameter dependencies
+    _resolve_parameter_dependencies(ir)
 
     return ir
+
+
+def _resolve_parameter_dependencies(ir: ModelIR) -> None:
+    """
+    Resolve parameter dependencies by evaluating expressions iteratively.
+    
+    This handles cases like:
+        N_A = 6.02e23
+        V = 1e-12
+        K_T = 1e6/(N_A*V)  # Depends on N_A and V
+    
+    Modifies ir.initial and ir.params in place.
+    """
+    max_iterations = 100  # Prevent infinite loops
+    resolved = {}  # Track successfully resolved parameters
+    
+    # Start with parameters that evaluated successfully
+    for name, val in ir.initial.items():
+        if val != 0.0 or name not in ir.param_exprs:
+            resolved[name] = val
+    
+    # Iteratively resolve dependencies
+    for iteration in range(max_iterations):
+        made_progress = False
+        
+        for name, expr_str in ir.param_exprs.items():
+            if name in resolved:
+                continue  # Already resolved
+            
+            try:
+                # Try to evaluate with currently resolved parameters
+                expr = sp.sympify(expr_str)
+                # Substitute known values
+                for resolved_name, resolved_val in resolved.items():
+                    expr = expr.subs(sp.Symbol(resolved_name), resolved_val)
+                
+                # Try to evaluate to a number
+                val = float(expr)
+                resolved[name] = val
+                ir.initial[name] = val
+                if name in ir.params:
+                    ir.params[name] = val
+                made_progress = True
+            except (TypeError, ValueError):
+                # Can't evaluate yet - dependencies not resolved
+                continue
+        
+        if not made_progress:
+            # No progress this iteration - done or stuck
+            break
 
 @dataclass
 class SymSystem:
@@ -248,6 +306,8 @@ class RecastResult:
     params: Dict[str, float] = field(default_factory=dict)
     error_message: Optional[str] = None
     blockers: Dict[str, List[str]] = field(default_factory=dict)
+    auxiliary_defs: Dict[sp.Symbol, sp.Expr] = field(default_factory=dict)  # Y_1 -> K_2 + X_1
+    canonical_refusal_reason: Optional[str] = None  # Why canonical S-system was refused
 
 def classify_system(sym: SymSystem) -> SystemClass:
     """
@@ -469,10 +529,11 @@ def _get_coefficient_sign(term: sp.Expr) -> int:
 
 
 # --- CANONICALIZE AUX NAMES: must be placed below the dataclasses ---
-def canonicalize_aux_names(res: 'RecastResult', prefix: str = "X") -> 'RecastResult':
+def canonicalize_aux_names(res: 'RecastResult', prefix: str = "Z") -> 'RecastResult':
     """
-    Rename every auxiliary variable to X_1, X_2, ... in first-appearance order.
+    Rename every auxiliary variable to Z_1, Z_2, ... in first-appearance order.
     Updates equations, initials, variables, and factor_map consistently.
+    Uses 'Z' prefix by default to avoid collision with original variable names.
     """
     # 1) Determine aux order by first appearance in equations
     aux_order, seen = [], set()
@@ -539,6 +600,16 @@ def term_to_coeff_exps(term: sp.Expr, state_vars: Optional[Set[sp.Symbol]] = Non
     exps: Dict[sp.Symbol, float] = {}
     
     if term.is_Number:
+        # Check if dummy_const is in state_vars - if so, add it with exponent 0
+        # This handles constant terms that were transformed by add_dummy_for_constants
+        if state_vars:
+            dummy_const = None
+            for s in state_vars:
+                if s.name == "dummy_const":
+                    dummy_const = s
+                    break
+            if dummy_const is not None:
+                exps[dummy_const] = 0.0
         return term, exps
     
     if isinstance(term, sp.Symbol):
@@ -718,9 +789,12 @@ def create_auxiliary_for_denominator(
     return W, W_ode
 
 
-def lift_rational_functions(sym: SymSystem) -> SymSystem:
+def lift_rational_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol, sp.Expr]]:
     """
     Augment system with auxiliary variables for all rational terms.
+    
+    Returns:
+        Tuple of (augmented SymSystem, auxiliary_defs dict mapping Y -> definition)
     
     Strategy:
     1. First substitute all constant denominators with their numeric values
@@ -742,6 +816,9 @@ def lift_rational_functions(sym: SymSystem) -> SymSystem:
     max_iterations = 10  # Prevent infinite loops
     iteration = 0
     aux_counter = 1
+    
+    # Accumulate ALL auxiliary definitions across iterations
+    all_aux_defs: Dict[sp.Symbol, sp.Expr] = {}
     
     while iteration < max_iterations:
         iteration += 1
@@ -801,15 +878,19 @@ def lift_rational_functions(sym: SymSystem) -> SymSystem:
         for denom in sorted(dynamic_denoms, key=str):
             Y = sp.symbols(f"Y_{aux_counter}", positive=True)
             denom_to_aux[denom] = Y
+            all_aux_defs[Y] = denom  # Accumulate definitions
             aux_counter += 1
         
         # Substitute dynamic denominators with auxiliaries
-        # Replace D with Y in all ODEs (this keeps D^(-1) as Y^(-1))
+        # ONLY replace when appearing as negative powers (denominators)
+        # NOT a general substitution - that would incorrectly transform -X2 into -Y_1+1
         for var in sym.vars:
             new_ode = new_odes[var]
             for denom, Y in denom_to_aux.items():
-                # Replace the denominator D with Y everywhere it appears
-                new_ode = new_ode.subs(denom, Y)
+                # Replace D^(-n) with Y^(-n) for negative powers
+                # Start with common cases then check atoms
+                for n in [1, 2, 3, 4, 5]:
+                    new_ode = new_ode.replace(denom**(-n), Y**(-n))
             new_odes[var] = sp.simplify(new_ode)
         
         # Compute Y' for dynamic auxiliaries using the LIFTED ODEs
@@ -824,8 +905,9 @@ def lift_rational_functions(sym: SymSystem) -> SymSystem:
                     # Use the NEW (lifted) ODE for var
                     denom_prime += partial * new_odes[var]
             
-            # Now substitute D with Y in the derivative expression
-            Y_ode = denom_prime.subs(denom, Y)
+            # denom_prime is already computed from lifted ODEs (which have Y in them)
+            # No additional substitution needed - it would cause spurious replacements
+            Y_ode = denom_prime
             new_aux_odes[Y] = sp.simplify(Y_ode)
         
         # Combine original and auxiliary ODEs
@@ -863,10 +945,105 @@ def lift_rational_functions(sym: SymSystem) -> SymSystem:
             initials=new_initials
         )
     
-    # Return final system after all iterations
-    return sym
+    # Return final system and ALL accumulated auxiliary definitions
+    return sym, all_aux_defs
 
-def lift_composite_functions(sym: SymSystem) -> SymSystem:
+def add_dummy_for_constants(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol, sp.Expr]]:
+    """
+    Add dummy auxiliary variable for equations with constant terms.
+    
+    S-systems cannot represent constant terms directly. This function transforms:
+        X' = C + other_terms
+    Into:
+        X' = C * dummy^0 + other_terms
+        dummy' = 0
+        dummy(0) = 1
+    
+    Since dummy^0 = 1 for all time, this preserves the mathematical equivalence
+    while expressing the constant in power-law form.
+    
+    This approach follows Voit's literature on S-system recasting.
+    
+    Returns:
+        Tuple of (augmented SymSystem, auxiliary_defs dict mapping dummy -> 1)
+    """
+    # Identify variables with constant terms
+    constant_terms = {}  # {variable: constant_value}
+    for var in sym.vars:
+        ode = sym.odes[var]
+        terms = expand_to_terms(sp.expand(ode))
+        for term in terms:
+            if term.is_Number and term != 0:
+                # Found a non-zero constant term
+                constant_terms[var] = term
+                break  # Only expect one constant per equation
+    
+    if not constant_terms:
+        # No constant terms - return unchanged
+        return sym, {}
+    
+    # Create dummy auxiliary variable
+    dummy = sp.symbols("dummy_const", positive=True)
+    
+    # Transform ODEs: replace constant C with C * dummy^0
+    new_odes = {}
+    for var in sym.vars:
+        old_ode = sym.odes[var]
+        
+        if var in constant_terms:
+            # This variable has a constant term to replace
+            const_value = constant_terms[var]
+            
+            # Expand and process each term
+            terms = expand_to_terms(sp.expand(old_ode))
+            new_terms = []
+            const_replaced = False
+            
+            for term in terms:
+                if term.is_Number and term != 0 and term == const_value and not const_replaced:
+                    # Replace first occurrence of constant with C * dummy^0
+                    # Use Pow with evaluate=False to prevent sympy from simplifying dummy^0 to 1
+                    new_terms.append(const_value * sp.Pow(dummy, 0, evaluate=False))
+                    const_replaced = True
+                else:
+                    new_terms.append(term)
+            
+            # Use sp.Add with evaluate=False to prevent evaluation of dummy^0
+            if len(new_terms) == 0:
+                new_odes[var] = sp.Integer(0)
+            elif len(new_terms) == 1:
+                new_odes[var] = new_terms[0]
+            else:
+                new_odes[var] = sp.Add(*new_terms, evaluate=False)
+        else:
+            # No constant term - keep as is
+            new_odes[var] = old_ode
+    
+    # Add dummy ODE: dummy' = 0 (stays constant)
+    new_odes[dummy] = sp.Integer(0)
+    
+    # Add dummy initial condition: dummy(0) = 1
+    new_initials = dict(sym.initials)
+    new_initials[dummy] = 1.0
+    
+    # Add dummy to variable list
+    new_vars = list(sym.vars) + [dummy]
+    
+    # Auxiliary definition: dummy is constant = 1
+    aux_defs = {dummy: sp.Integer(1)}
+    
+    return (
+        SymSystem(
+            vars=new_vars,
+            params=sym.params,
+            odes=new_odes,
+            initials=new_initials
+        ),
+        aux_defs
+    )
+
+
+def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol, sp.Expr]]:
     """
     Augment system with auxiliary variables for all composite functions.
     
@@ -879,7 +1056,8 @@ def lift_composite_functions(sym: SymSystem) -> SymSystem:
     This is a general implementation that works for any differentiable function
     that sympy knows how to differentiate.
     
-    Returns augmented SymSystem with composite functions eliminated.
+    Returns:
+        Tuple of (augmented SymSystem, auxiliary_defs dict mapping Z -> f(X))
     """
     # Find all unique composite functions across all ODEs
     all_functions = set()
@@ -889,7 +1067,7 @@ def lift_composite_functions(sym: SymSystem) -> SymSystem:
     
     if not all_functions:
         # No composite functions to lift
-        return sym
+        return sym, {}
     
     # Create auxiliary symbols for each function
     func_to_aux: Dict[sp.Expr, sp.Symbol] = {}
@@ -948,11 +1126,18 @@ def lift_composite_functions(sym: SymSystem) -> SymSystem:
     # Create new variable list: keep original vars, add Z auxiliaries
     new_vars = list(sym.vars) + list(func_to_aux.values())
     
-    return SymSystem(
-        vars=new_vars,
-        params=sym.params,
-        odes=combined_odes,
-        initials=new_initials
+    # Invert dictionary to map auxiliary -> function definition
+    aux_to_func = {aux: func for func, aux in func_to_aux.items()}
+    
+    # Return augmented system and auxiliary definitions
+    return (
+        SymSystem(
+            vars=new_vars,
+            params=sym.params,
+            odes=combined_odes,
+            initials=new_initials
+        ),
+        aux_to_func  # Dictionary mapping Z_i -> f(X)
     )
 
 
@@ -1021,6 +1206,73 @@ def _requires_gma(sym: SymSystem) -> bool:
     return False
 
 
+# Safety constraints for pool construction
+MAX_TERMS_PER_EQUATION = 6
+MAX_DIM_FACTOR = 4
+MAX_PRODUCT_LENGTH = 4
+MAX_NEGATIVE_EXPONENT = -2
+
+
+def _should_attempt_pool_construction(sym: SymSystem) -> Tuple[bool, Optional[str]]:
+    """
+    Pre-flight check: Is pool construction worth attempting?
+    
+    Returns: (should_attempt, refusal_reason)
+    """
+    n_vars = len(sym.vars)
+    total_terms = 0
+    max_terms_in_equation = 0
+    
+    for var, ode in sym.odes.items():
+        terms = expand_to_terms(sp.simplify(ode))
+        n_terms = len([t for t in terms if t != 0])
+        
+        # Track max terms per equation
+        if n_terms > max_terms_in_equation:
+            max_terms_in_equation = n_terms
+        
+        # Per-equation check
+        if n_terms > MAX_TERMS_PER_EQUATION:
+            return False, f"equation has {n_terms} terms (max {MAX_TERMS_PER_EQUATION} allowed)"
+        
+        total_terms += n_terms
+    
+    # Dimension explosion check
+    max_allowed_terms = MAX_DIM_FACTOR * n_vars
+    if total_terms > max_allowed_terms:
+        return False, f"would create {total_terms} auxiliaries for {n_vars} variables (>{MAX_DIM_FACTOR}x expansion)"
+    
+    return True, None
+
+
+def _validate_pool_result(result: RecastResult) -> Tuple[bool, Optional[str]]:
+    """
+    Post-construction check: Is the pool result numerically sane?
+    
+    Returns: (is_valid, rejection_reason)
+    """
+    # Check product lengths
+    max_product_length = 0
+    for orig, factors in result.factor_map.items():
+        if len(factors) > max_product_length:
+            max_product_length = len(factors)
+        if len(factors) > MAX_PRODUCT_LENGTH:
+            return False, f"variable {orig.name} mapped to product of {len(factors)} factors (max {MAX_PRODUCT_LENGTH} allowed)"
+    
+    # Check for excessive negative exponents
+    min_exponent = 0.0
+    for eq in result.equations:
+        for exps_dict in [eq.growth[1], eq.decay[1]]:
+            for var, exp in exps_dict.items():
+                exp_val = float(exp) if not isinstance(exp, sp.Expr) else 0.0
+                if exp_val < min_exponent:
+                    min_exponent = exp_val
+                if exp_val < MAX_NEGATIVE_EXPONENT:
+                    return False, f"equation for {eq.var.name} has exponent {exp_val:.1f} (< {MAX_NEGATIVE_EXPONENT})"
+    
+    return True, None
+
+
 def recast_to_ssystem(sym: 'SymSystem', mode: str = "simplified") -> 'RecastResult':
     """
     Recast system to canonical S-system or GMA format.
@@ -1028,27 +1280,42 @@ def recast_to_ssystem(sym: 'SymSystem', mode: str = "simplified") -> 'RecastResu
     Strategy:
     1. Lift composite functions (exp, sin, log, etc.)
     2. Lift rational functions (1/(X+1), etc.)
-    3. Attempt canonical S-system recast:
+    3. Check for constant terms (S-systems cannot represent these)
+    4. Attempt canonical S-system recast:
        - If lifting occurred: use direct form
        - Otherwise: use pool construction
-    4. Check if output has GMA characteristics (multi-term incompatible)
-    5. If canonical failed, fall back to GMA format
+    5. Check if output has GMA characteristics (multi-term incompatible)
+    6. If canonical failed, fall back to GMA format
     
     Args:
         sym: SymSystem to recast
         mode: Output mode ('simplified' or 'canonical')
     
     Returns:
-        RecastResult with status indicating output form
+        RecastResult with status indicating output form and auxiliary definitions
     """
     # Track original variables before lifting
     original_vars = set(sym.vars)
     
+    # Collect auxiliary definitions from lifting operations
+    all_auxiliary_defs: Dict[sp.Symbol, sp.Expr] = {}
+    
     # Lift composite functions first (exp, sin, log, etc.)
-    sym = lift_composite_functions(sym)
+    sym, composite_aux_defs = lift_composite_functions(sym)
+    all_auxiliary_defs.update(composite_aux_defs)
     
     # Then lift rational functions (1/(X+1), etc.)
-    sym = lift_rational_functions(sym)
+    sym, rational_aux_defs = lift_rational_functions(sym)
+    all_auxiliary_defs.update(rational_aux_defs)
+    
+    # Handle constant terms: skip dummy variable in simplified mode for cleaner output
+    # In simplified mode, constant terms like "t' = 1" are acceptable and valid
+    # In canonical mode, we could add dummy if strict power-law form is required
+    if mode == "canonical":
+        # Canonical mode: use dummy variable for strict S-system form
+        sym, dummy_aux_defs = add_dummy_for_constants(sym)
+        all_auxiliary_defs.update(dummy_aux_defs)
+    # else: simplified mode - leave constants as-is
     
     # Identify lifted auxiliaries (those added during lifting)
     lifted_vars = set(sym.vars) - original_vars
@@ -1058,13 +1325,30 @@ def recast_to_ssystem(sym: 'SymSystem', mode: str = "simplified") -> 'RecastResu
         # Lifted systems use direct form
         result = _direct_ssystem_recast(sym, original_vars, mode=mode)
     else:
-        # Pure polynomial systems use pool construction
-        result = _pool_ssystem_recast(sym, mode=mode)
-    
-    # Check if the result actually has GMA characteristics
-    # (direct_ssystem_recast already does this check internally)
-    # The result.status will be set correctly by the recast methods
-    
+        # Pure polynomial systems - attempt pool construction with safety checks
+        
+        # Pre-flight check: would pool construction be reasonable?
+        should_attempt, preflight_reason = _should_attempt_pool_construction(sym)
+        
+        if not should_attempt:
+            # Pre-flight failed - use GMA
+            result = _gma_recast(sym, original_vars)
+            result.canonical_refusal_reason = preflight_reason
+        else:
+            # Attempt pool construction
+            result = _pool_ssystem_recast(sym, mode=mode)
+            
+            # Post-flight validation: is result numerically sane?
+            is_valid, validation_reason = _validate_pool_result(result)
+            
+            if not is_valid:
+                # Pool result invalid - fallback to GMA
+                result = _gma_recast(sym, original_vars)
+                result.canonical_refusal_reason = validation_reason
+
+    # Add auxiliary definitions to result
+    result.auxiliary_defs = all_auxiliary_defs
+
     return result
 
 
@@ -1341,11 +1625,51 @@ def _pool_ssystem_recast(sym: 'SymSystem', mode: str = "simplified") -> 'RecastR
         # 4) mapping X = ∏_j V_j and initial consistency at t=0
         factor_map[Xi] = list(V_list)
         xi0 = float(new_initials.get(Xi, 1.0))
-        # Set the first aux to Xi(0), others to 1.0 (product equals Xi(0))
+        
+        # Set initial conditions for pool auxiliaries
         if V_list:
-            new_initials[V_list[0]] = xi0 if xi0 > 0.0 else EPS_INIT
+            if xi0 > 0.0 and xi0 >= EPS_INIT:
+                # Positive initial condition: first aux = xi0, others = 1.0
+                # This ensures Xi(0) = xi0 * 1 * 1 * ... = xi0
+                new_initials[V_list[0]] = xi0
+                for Vj in V_list[1:]:
+                    new_initials.setdefault(Vj, 1.0)
+            else:
+                # Zero or near-zero initial condition
+                # Only use EPS_INIT if variable appears with negative exponents
+                # (will be determined after all equations are built)
+                new_initials[V_list[0]] = 0.0  # Placeholder, will adjust later
+                for Vj in V_list[1:]:
+                    new_initials.setdefault(Vj, 1.0)
 
-    # 5) build result and canonicalize names to X_1, X_2, ...
+    # 5) Detect which variables have negative exponents
+    vars_with_neg_exp = set()
+    for eq in new_equations:
+        # Check growth exponents
+        for var, exp in eq.growth[1].items():
+            if isinstance(exp, (int, float)) and exp < 0:
+                vars_with_neg_exp.add(var)
+            elif isinstance(exp, sp.Expr) and exp.is_number and float(exp) < 0:
+                vars_with_neg_exp.add(var)
+        # Check decay exponents
+        for var, exp in eq.decay[1].items():
+            if isinstance(exp, (int, float)) and exp < 0:
+                vars_with_neg_exp.add(var)
+            elif isinstance(exp, sp.Expr) and exp.is_number and float(exp) < 0:
+                vars_with_neg_exp.add(var)
+    
+    # 6) Adjust zero initial conditions: use EPS_INIT only for vars with negative exponents
+    for var in new_variables:
+        if var in new_initials and abs(new_initials[var]) < 1e-14:
+            # This variable has zero IC
+            if var in vars_with_neg_exp:
+                # Has negative exponents - use EPS_INIT to prevent division by zero
+                new_initials[var] = EPS_INIT
+            else:
+                # No negative exponents - keep exact zero
+                new_initials[var] = 0.0
+    
+    # 7) build result and canonicalize names to Z_1, Z_2, ...
     res = RecastResult(
         status=RecastStatus.CANONICAL_SSYSTEM,
         equations=new_equations,
@@ -1354,7 +1678,7 @@ def _pool_ssystem_recast(sym: 'SymSystem', mode: str = "simplified") -> 'RecastR
         factor_map=factor_map,
         params=sym.params,
     )
-    return canonicalize_aux_names(res, prefix="X")
+    return canonicalize_aux_names(res, prefix="Z")
 
 def product_to_antimony(coeff, exps: Dict[sp.Symbol, float]) -> str:
     """
@@ -1364,13 +1688,23 @@ def product_to_antimony(coeff, exps: Dict[sp.Symbol, float]) -> str:
     """
     parts: List[str] = []
     
+    # Check if we have dummy_const with exponent 0 (special case for constants)
+    has_dummy_const_zero = any(
+        s.name == "dummy_const" and (
+            (isinstance(e, sp.Expr) and sp.simplify(e) == 0) or
+            (not isinstance(e, sp.Expr) and abs(e) < 1e-14)
+        )
+        for s, e in exps.items()
+    )
+    
     # Handle coefficient (numeric or symbolic)
     if isinstance(coeff, sp.Expr):
         # Symbolic coefficient - format it cleanly
         coeff_simplified = sp.simplify(coeff)
         if coeff_simplified == 0:
             return "0"
-        elif coeff_simplified != 1:
+        elif coeff_simplified != 1 or has_dummy_const_zero:
+            # Always show coefficient if we have dummy_const^0 (even if coeff=1)
             # Check if coefficient is a sum (needs parentheses)
             if coeff_simplified.is_Add:
                 # Format as a single parenthesized expression
@@ -1384,15 +1718,20 @@ def product_to_antimony(coeff, exps: Dict[sp.Symbol, float]) -> str:
         # Numeric coefficient
         if coeff == 0.0:
             return "0"
-        elif coeff != 1.0:
+        elif coeff != 1.0 or has_dummy_const_zero:
+            # Always show coefficient if we have dummy_const^0 (even if coeff=1)
             parts.append(f"{coeff:g}")
     
     # Add power-law terms
     for s, e in sorted(exps.items(), key=lambda kv: str(kv[0])):
+        # Special case: dummy_const with exponent 0 should always be shown
+        # This represents constant terms as C * dummy_const^0
+        is_dummy_const = (s.name == "dummy_const")
+        
         # Handle both numeric and symbolic exponents
         if isinstance(e, sp.Expr):
             e_simplified = sp.simplify(e)
-            if e_simplified == 0:
+            if e_simplified == 0 and not is_dummy_const:
                 continue
             # Check if it's effectively 1.0 (including sympy Float)
             elif e_simplified == 1 or (e_simplified.is_Number and abs(float(e_simplified) - 1.0) < 1e-10):
@@ -1413,7 +1752,8 @@ def product_to_antimony(coeff, exps: Dict[sp.Symbol, float]) -> str:
                         parts.append(f"{s.name}^{e_simplified}")
         else:
             # Numeric exponent
-            if abs(e) < 1e-14:
+            # Always show dummy_const even with exponent 0
+            if abs(e) < 1e-14 and not is_dummy_const:
                 continue
             s_name = s.name if hasattr(s, 'name') else str(s)
             if abs(e - 1.0) < 1e-14:
@@ -1504,8 +1844,28 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
     lines.append(f"model {model_name}()")
     lines.append("// GMA (Generalized Mass Action) format")
     lines.append("// Multiple flux channels with different kinetic orders preserved exactly")
-    lines.append("// Cannot be reduced to canonical S-system form without loss of information")
+    
+    # Add refusal reason if canonical S-system was not attempted
+    if result.canonical_refusal_reason:
+        lines.append("//")
+        lines.append("// NOTE: Canonical S-system recast was not attempted because:")
+        lines.append(f"//   {result.canonical_refusal_reason}")
+        lines.append("//")
+        lines.append("// Using GMA format preserves exact dynamics with better numerical properties.")
+    else:
+        lines.append("// Cannot be reduced to canonical S-system form without loss of information")
+    
     lines.append("")
+    
+    # --- auxiliary variable definitions ---
+    if result.auxiliary_defs:
+        lines.append("// ========================================================================")
+        lines.append("// AUXILIARY DEFINITIONS (for lifted variables)")
+        lines.append("// ========================================================================")
+        for aux, defn in sorted(result.auxiliary_defs.items(), key=lambda kv: str(kv[0])):
+            lines.append(f"// {aux} := {defn}")
+        lines.append("// ========================================================================")
+        lines.append("")
     
     # Initial assignments
     for s, v in sorted(result.initials.items(), key=lambda kv: kv[0].name):
@@ -1550,6 +1910,10 @@ def ssystem_to_antimony(result, model_name: str = "recast", mode: str = "simplif
             - 'simplified': Basic format with comments
             - 'canonical': Enhanced format with species declarations, observables, and detailed comments
     """
+    # Check if recasting failed
+    if result.status == RecastStatus.FAILED:
+        return _failed_to_antimony(result, model_name)
+    
     # Check if this is GMA format
     if result.status == RecastStatus.GMA:
         return gma_to_antimony(result, model_name)
@@ -1561,31 +1925,213 @@ def ssystem_to_antimony(result, model_name: str = "recast", mode: str = "simplif
         return _ssystem_to_antimony_simplified(result, model_name)
 
 
-def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
-    """Format S-system in simplified mode (original format)."""
+def _failed_to_antimony(result: RecastResult, model_name: str) -> str:
+    """Format a failed recast result with error message."""
     lines: List[str] = []
     lines.append(f"model {model_name}()")
+    lines.append("")
+    lines.append("// ========================================================================")
+    lines.append("// RECAST FAILED")
+    lines.append("// ========================================================================")
+    lines.append("//")
+    
+    if result.error_message:
+        # Format error message as comments
+        for line in result.error_message.split('\n'):
+            lines.append(f"// {line}")
+    else:
+        lines.append("// Recasting failed for unknown reason.")
+    
+    lines.append("//")
+    lines.append("// ========================================================================")
+    lines.append("")
+    
+    # Include original initial conditions if available
+    if result.initials:
+        lines.append("// Original initial conditions:")
+        for s, v in sorted(result.initials.items(), key=lambda kv: kv[0].name):
+            lines.append(f"// {s.name} = {float(v):g}")
+        lines.append("")
+    
+    lines.append("// No recast equations generated.")
+    lines.append("")
+    lines.append("end")
+    return "\n".join(lines)
+
+
+def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
+    """Format S-system in simplified mode with enhanced documentation and assignment rules."""
+    lines: List[str] = []
+    lines.append(f"model {model_name}()")
+    lines.append("")
+    
+    # --- Species declarations ---
+    # All variables with ODEs must be declared as species
+    all_state_vars = sorted(result.variables, key=lambda s: s.name)
+    if all_state_vars:
+        species_names = ", ".join([v.name for v in all_state_vars])
+        lines.append(f"species {species_names};")
+        lines.append("")
+    
+    # --- Enhanced metadata header ---
+    lines.append("// ========================================================================")
+    lines.append("// RECAST METADATA")
+    lines.append("// ========================================================================")
+    lines.append(f"// Recast variables: {len(result.variables)}")
+    lines.append(f"// Original variables: {len(result.factor_map)}")
+    lines.append(f"// Parameters: {len(result.params)}")
+    if result.auxiliary_defs:
+        lines.append(f"// Auxiliary definitions: {len(result.auxiliary_defs)}")
+    lines.append("// ========================================================================")
+    lines.append("")
 
     # --- mapping: original → product of auxiliaries ---
     if result.factor_map:
-        lines.append("// Mapping from original variables to canonical auxiliaries (product form)")
+        lines.append("// ========================================================================")
+        lines.append("// VARIABLE MAPPING")
+        lines.append("// ========================================================================")
         for orig in sorted(result.factor_map.keys(), key=lambda s: s.name):
             aux = result.factor_map[orig]
             rhs = "*".join(a.name for a in aux) if aux else "1"
             lines.append(f"// {orig.name} = {rhs}")
-        lines.append("// --- end mapping ---")
+        lines.append("// ========================================================================")
+        lines.append("")
+    
+    # --- auxiliary variable definitions ---
+    if result.auxiliary_defs:
+        lines.append("// ========================================================================")
+        lines.append("// AUXILIARY DEFINITIONS (for lifted variables)")
+        lines.append("// ========================================================================")
+        for aux, defn in sorted(result.auxiliary_defs.items(), key=lambda kv: str(kv[0])):
+            lines.append(f"// {aux} := {defn}")
+        lines.append("// ========================================================================")
+        lines.append("")
+    
+    # --- Parameters ---
+    if result.params:
+        lines.append("// ========================================================================")
+        lines.append("// PARAMETERS (copied from original)")
+        lines.append("// ========================================================================")
+        for param_name in sorted(result.params.keys()):
+            param_val = result.params[param_name]
+            lines.append(f"{param_name} = {param_val:g};")
+        lines.append("")
 
-    # initial assignments
+    # --- Initial conditions for auxiliary variables ONLY ---
+    # Note: We only output ICs for variables that are in result.variables (the recast auxiliaries).
+    # Original variables are reconstructed via assignment rules and should NOT have ICs here.
+    lines.append("// ========================================================================")
+    lines.append("// INITIAL CONDITIONS (auxiliary variables)")
+    lines.append("// ========================================================================")
+    # Check if any IC uses EPS_INIT (indicating zero approximation)
+    uses_eps_init = any(abs(v - EPS_INIT) < 1e-12 for s, v in result.initials.items() if s in result.variables)
+    if uses_eps_init:
+        lines.append(f"// NOTE: Initial conditions near {EPS_INIT} are used to approximate zero")
+        lines.append("//       This prevents numerical instability from negative exponents")
+        lines.append("//       while maintaining dynamics qualitatively equivalent to zero ICs")
+    
+    auxiliary_vars = set(result.variables)  # These are the Z_1, Z_2, ... variables
     for s, v in sorted(result.initials.items(), key=lambda kv: kv[0].name):
-        lines.append(f"{s.name} = {float(v):g}")
+        # Only output ICs for auxiliary variables, NOT original variables or parameters
+        if s in auxiliary_vars and s.name not in result.params:
+            lines.append(f"{s.name} = {float(v):g};")
+    lines.append("")
+    
+    # --- Assignment rules to reconstruct original variables ---
+    # Only output assignment rules for non-identity mappings
+    non_identity_mappings = []
+    if result.factor_map:
+        for orig in sorted(result.factor_map.keys(), key=lambda s: s.name):
+            aux = result.factor_map[orig]
+            # Skip identity mappings (where variable maps to itself)
+            if len(aux) == 1 and aux[0] == orig:
+                continue
+            non_identity_mappings.append((orig, aux))
+    
+    if non_identity_mappings:
+        lines.append("// ========================================================================")
+        lines.append("// OBSERVABLE VARIABLES (reconstructed from auxiliaries)")
+        lines.append("// ========================================================================")
+        for orig, aux in non_identity_mappings:
+            if len(aux) > 1:
+                # Multiple auxiliaries - product form
+                rhs = " * ".join(a.name for a in aux)
+                lines.append(f"{orig.name} := {rhs};")
+            else:
+                # Single auxiliary (but not identity)
+                lines.append(f"{orig.name} := {aux[0].name};")
+        lines.append("")
 
-    # canonical S-system ODEs
+    # --- S-system dynamics ---
+    lines.append("// ========================================================================")
+    lines.append("// S-SYSTEM DYNAMICS")
+    lines.append("// ========================================================================")
     for eq in result.equations:
         g_exps = _expand_exps_through_factors(eq.growth[1], result.factor_map)
         h_exps = _expand_exps_through_factors(eq.decay[1], result.factor_map)
-        g = product_to_antimony(eq.growth[0], g_exps)
-        h = product_to_antimony(eq.decay[0], h_exps)
-        lines.append(f"{eq.var.name}' = {g} - {h}")
+        
+        # Check for pure constant terms (empty exponent dict)
+        g_is_const = len(g_exps) == 0
+        h_is_const = len(h_exps) == 0
+        
+        # For simplified mode, output constant terms directly
+        if g_is_const and not h_is_const:
+            # Pure constant production: X' = C - h(vars)
+            g_coeff = eq.growth[0]
+            # Format constant coefficient (numeric or symbolic)
+            if isinstance(g_coeff, sp.Expr):
+                g_coeff_simplified = sp.simplify(g_coeff)
+                if g_coeff_simplified.is_Number:
+                    g_str = f"{float(g_coeff_simplified):g}"
+                else:
+                    # Symbolic constant (contains parameters)
+                    g_str = str(g_coeff_simplified)
+            else:
+                g_str = f"{float(g_coeff):g}"
+            h = product_to_antimony(eq.decay[0], h_exps)
+            lines.append(f"{eq.var.name}' = {g_str} - {h};")
+        elif h_is_const and not g_is_const:
+            # Pure constant decay: X' = g(vars) - C
+            h_coeff = eq.decay[0]
+            # Format constant coefficient (numeric or symbolic)
+            if isinstance(h_coeff, sp.Expr):
+                h_coeff_simplified = sp.simplify(h_coeff)
+                if h_coeff_simplified.is_Number:
+                    h_str = f"{float(h_coeff_simplified):g}"
+                else:
+                    # Symbolic constant (contains parameters)
+                    h_str = str(h_coeff_simplified)
+            else:
+                h_str = f"{float(h_coeff):g}"
+            g = product_to_antimony(eq.growth[0], g_exps)
+            lines.append(f"{eq.var.name}' = {g} - {h_str};")
+        elif g_is_const and h_is_const:
+            # Both constants: X' = C1 - C2
+            g_coeff = eq.growth[0]
+            h_coeff = eq.decay[0]
+            # Format both coefficients (numeric or symbolic)
+            if isinstance(g_coeff, sp.Expr):
+                g_coeff_simplified = sp.simplify(g_coeff)
+                if g_coeff_simplified.is_Number:
+                    g_str = f"{float(g_coeff_simplified):g}"
+                else:
+                    g_str = str(g_coeff_simplified)
+            else:
+                g_str = f"{float(g_coeff):g}"
+            if isinstance(h_coeff, sp.Expr):
+                h_coeff_simplified = sp.simplify(h_coeff)
+                if h_coeff_simplified.is_Number:
+                    h_str = f"{float(h_coeff_simplified):g}"
+                else:
+                    h_str = str(h_coeff_simplified)
+            else:
+                h_str = f"{float(h_coeff):g}"
+            lines.append(f"{eq.var.name}' = {g_str} - {h_str};")
+        else:
+            # Normal monomial form
+            g = product_to_antimony(eq.growth[0], g_exps)
+            h = product_to_antimony(eq.decay[0], h_exps)
+            lines.append(f"{eq.var.name}' = {g} - {h};")
 
     lines.append("end")
     return "\n".join(lines)
@@ -1602,16 +2148,26 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
     - Clean equation formatting
     """
     lines: List[str] = []
-    
+
     # Model declaration with _SSystem suffix
     if not model_name.endswith("_SSystem") and not model_name.endswith("_SSystem_exact"):
         model_name = f"{model_name}_SSystem_exact"
     lines.append(f"model {model_name}()")
     lines.append("")
-    
+
     # Identify auxiliary and original variables
     aux_vars = [v for v in result.variables]
     orig_vars = sorted(result.factor_map.keys(), key=lambda s: s.name)
+    
+    # --- mapping: original → product of auxiliaries ---
+    if result.factor_map:
+        lines.append("  // Mapping from original variables to canonical auxiliaries (product form)")
+        for orig in orig_vars:
+            aux = result.factor_map[orig]
+            rhs = "*".join(a.name for a in aux) if aux else "1"
+            lines.append(f"  // {orig.name} = {rhs}")
+        lines.append("  // --- end mapping ---")
+        lines.append("")
     
     # Species declarations for auxiliary variables
     if aux_vars:
