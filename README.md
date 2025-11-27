@@ -69,6 +69,34 @@ python -m ssys.cli --manifest tests/tests.manifest \
   - Generates JSON validation reports
   - Displays validation results in notebook
 
+### Validation Logic & Interpreting Results
+
+The validator uses two independent tests to verify mathematical correctness:
+
+1. **Symbolic Test**: Proves exact equivalence using the Jacobian chain rule. Tests whether `J_Φ(Z) · f_recast(Z) = f_orig(Φ(Z))` simplifies to zero symbolically.
+
+2. **Numerical Test**: Validates equivalence at 1000 random sample points with ε = 10⁻⁵ threshold.
+
+**Overall verdict uses OR logic**: A recast is considered **valid if EITHER test passes**. This is because:
+
+- **Symbolic test is the gold standard** but may fail due to SymPy's simplification limitations. Complex expressions that are mathematically zero may not fully simplify (e.g., `exp(X*k) - exp(X*k)` might remain unsimplified due to symbol identity issues).
+
+- **Numerical test provides empirical validation** but may fail for lifted systems if auxiliary variables are sampled off their constraint manifold (e.g., for `Z := exp(X*k)`, sampling Z independently instead of computing it from X).
+
+**When to be concerned**:
+- ✓ **Symbolic PASS, Numerical FAIL**: Excellent! Symbolic proof guarantees correctness.
+- ✓ **Symbolic FAIL, Numerical PASS**: Good! Empirical validation with 1000 samples confirms correctness despite simplification challenges.
+- ✗ **Both FAIL**: This indicates a potential issue. Review the model and validation details.
+
+**Example output**:
+```
+Test       Result   Max Error
+symbolic   ✓ pass   N/A
+numerical  ✗ fail   8.94e+00
+Overall: ✓ PASS
+```
+This is valid! The symbolic test proved exact equivalence, which is sufficient.
+
 ### Manifest Format
 
 Plain text file with one Antimony file path per line:
