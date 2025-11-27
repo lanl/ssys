@@ -63,6 +63,11 @@ python -m ssys.cli --manifest tests/tests.manifest \
 - `--mode`: Output mode (default: `simplified`)
   - `simplified`: Flexible S-system form, preserves zeros
   - `canonical`: Strict 2-term form with epsilon slack variables
+- `--validate`: Run mathematical correctness validation on each recast
+  - Performs symbolic equivalence test (Jacobian chain rule)
+  - Performs numerical pointwise test (1000 random samples)
+  - Generates JSON validation reports
+  - Displays validation results in notebook
 
 ### Manifest Format
 

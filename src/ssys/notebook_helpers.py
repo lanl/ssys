@@ -382,7 +382,7 @@ def latex_factor_map(rec):
 
 
 def load_and_report(ant_path, recast_path, T=20.0, steps=400,
-                     mode="simplified"):
+                     mode="simplified", validation_json=None):
     """Load and report on a single recast model.
     
     Args:
@@ -391,6 +391,7 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400,
         T: Simulation time
         steps: Number of simulation steps
         mode: Output mode ('simplified' or 'canonical')
+        validation_json: Optional path to validation JSON file
     """
     ant_text = open(ant_path).read()
     rec_text = open(recast_path).read()
@@ -415,6 +416,50 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400,
     
     # Display classification: Input → Output
     display(Markdown(f"**Classification:** {input_class.value} → {output_class.value}"))
+    
+    # Display validation results if available
+    if validation_json and os.path.exists(validation_json):
+        import json
+        with open(validation_json, 'r') as f:
+            validation_data = json.load(f)
+        
+        # Extract key info
+        overall_pass = validation_data.get('overall_pass', False)
+        summary = validation_data.get('summary', '')
+        tests = validation_data.get('tests', {})
+        
+        # Display overall status with color
+        status_emoji = "✓" if overall_pass else "✗"
+        status_color = "green" if overall_pass else "red"
+        display(Markdown(f"### <span style='color:{status_color}'>{status_emoji} Validation: {summary}</span>"))
+        
+        # Display test results table
+        table_rows = []
+        table_rows.append("| Test | Result | Max Error | Mean Error |")
+        table_rows.append("|------|--------|-----------|------------|")
+        
+        for test_name, test_data in tests.items():
+            if test_data and test_name != 'auxiliaries':
+                result = test_data.get('result', 'N/A')
+                max_err = test_data.get('max_error')
+                mean_err = test_data.get('mean_error')
+                
+                result_emoji = {"pass": "✓", "fail": "✗", 
+                               "timeout": "⏱", "not_attempted": "⊘"}.get(result, "?")
+                
+                max_str = f"{max_err:.2e}" if max_err is not None else "N/A"
+                mean_str = f"{mean_err:.2e}" if mean_err is not None else "N/A"
+                
+                table_rows.append(f"| {test_name} | {result_emoji} {result} | {max_str} | {mean_str} |")
+        
+        display(Markdown("\n".join(table_rows)))
+        
+        # Show details for failed tests
+        for test_name, test_data in tests.items():
+            if test_data and test_data.get('result') == 'fail' and test_name != 'auxiliaries':
+                details = test_data.get('details', '')
+                if details:
+                    display(Markdown(f"**{test_name} details:** {details}"))
 
     display(Markdown("**Mapping (original -> product of auxiliaries)**"))
     display(Markdown("$$\n" + latex_factor_map(rec) + "\n$$"))
