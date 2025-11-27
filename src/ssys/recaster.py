@@ -130,6 +130,22 @@ def parse_antimony(text: str) -> ModelIR:
                     left = left[1:].strip()
                     ir.boundary.add(left)
                 ir.param_exprs[left] = right  # Store expression for all assignments
+                
+                # Check if this is a non-trivial expression (not just a number)
+                # Store as initial_expr if it contains functions, operators, or variables
+                is_simple_number = False
+                try:
+                    # Try direct float conversion
+                    float(right)
+                    is_simple_number = True
+                except:
+                    # Not a simple number - it's an expression
+                    pass
+                
+                if not is_simple_number:
+                    # Store the expression string for symbolic preservation
+                    ir.initial_exprs[left] = right
+                
                 # Try to evaluate immediately (will work for simple numeric constants)
                 try:
                     val = float(sp.sympify(right))
@@ -212,6 +228,7 @@ class SymSystem:
     params: Dict[str, float]
     odes: Dict[sp.Symbol, sp.Expr]
     initials: Dict[sp.Symbol, float]
+    initial_exprs: Dict[sp.Symbol, str] = field(default_factory=dict)  # Symbolic IC expressions
 
 def build_sym_system(ir: ModelIR) -> SymSystem:
     var_syms: Dict[str, sp.Symbol] = {nm: sp.symbols(nm, positive=True) for nm in sorted(ir.species)}
@@ -255,7 +272,23 @@ def build_sym_system(ir: ModelIR) -> SymSystem:
         initials[sym] = float(ir.initial.get(nm, 0.0))
     for nm, sym in param_syms.items():
         initials[sym] = float(ir.initial.get(nm, ir.params.get(nm, 0.0)))
-    return SymSystem(vars=list(odes.keys()), params={k: float(v) for k, v in ir.params.items()}, odes=odes, initials=initials)
+    
+    # Propagate symbolic initial condition expressions
+    initial_exprs: Dict[sp.Symbol, str] = {}
+    for name, expr_str in ir.initial_exprs.items():
+        # Check if this is a species or parameter
+        if name in var_syms:
+            initial_exprs[var_syms[name]] = expr_str
+        elif name in param_syms:
+            initial_exprs[param_syms[name]] = expr_str
+    
+    return SymSystem(
+        vars=list(odes.keys()), 
+        params={k: float(v) for k, v in ir.params.items()}, 
+        odes=odes, 
+        initials=initials,
+        initial_exprs=initial_exprs
+    )
 
 from dataclasses import dataclass
 
@@ -308,6 +341,7 @@ class RecastResult:
     blockers: Dict[str, List[str]] = field(default_factory=dict)
     auxiliary_defs: Dict[sp.Symbol, sp.Expr] = field(default_factory=dict)  # Y_1 -> K_2 + X_1
     canonical_refusal_reason: Optional[str] = None  # Why canonical S-system was refused
+    initial_exprs: Dict[sp.Symbol, str] = field(default_factory=dict)  # Symbolic IC expressions
 
 def classify_system(sym: SymSystem) -> SystemClass:
     """
@@ -942,7 +976,8 @@ def lift_rational_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol, 
             vars=new_vars,
             params=sym.params,
             odes=combined_odes,
-            initials=new_initials
+            initials=new_initials,
+            initial_exprs=sym.initial_exprs  # Propagate symbolic IC expressions
         )
     
     # Return final system and ALL accumulated auxiliary definitions
@@ -1135,7 +1170,8 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
             vars=new_vars,
             params=sym.params,
             odes=combined_odes,
-            initials=new_initials
+            initials=new_initials,
+            initial_exprs=sym.initial_exprs  # Propagate symbolic IC expressions
         ),
         aux_to_func  # Dictionary mapping Z_i -> f(X)
     )
@@ -1390,7 +1426,8 @@ def _gma_recast(sym: SymSystem, original_vars: Set[sp.Symbol]) -> RecastResult:
         variables=new_variables,
         factor_map=factor_map,
         gma_equations=gma_equations,
-        params=sym.params
+        params=sym.params,
+        initial_exprs=sym.initial_exprs  # Propagate symbolic IC expressions
     )
 
 
@@ -1496,7 +1533,8 @@ def _direct_ssystem_recast(sym: 'SymSystem', original_vars: Set[sp.Symbol], mode
         initials=new_initials,
         variables=new_variables,
         factor_map=factor_map,
-        params=sym.params
+        params=sym.params,
+        initial_exprs=sym.initial_exprs  # Propagate symbolic IC expressions
     )
 
 
@@ -2034,7 +2072,13 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
     for s, v in sorted(result.initials.items(), key=lambda kv: kv[0].name):
         # Only output ICs for auxiliary variables, NOT original variables or parameters
         if s in auxiliary_vars and s.name not in result.params:
-            lines.append(f"{s.name} = {float(v):g};")
+            # Check if we have a symbolic expression for this IC
+            if s in result.initial_exprs:
+                # Use symbolic expression
+                lines.append(f"{s.name} = {result.initial_exprs[s]};")
+            else:
+                # Use numeric value
+                lines.append(f"{s.name} = {float(v):g};")
     lines.append("")
     
     # --- Assignment rules to reconstruct original variables ---
@@ -2257,8 +2301,14 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
     lines.append("  // Initial conditions")
     for v in aux_vars:
         if v in result.initials:
-            val = result.initials[v]
-            lines.append(f"  {v.name} = {float(val):g};")
+            # Check if we have a symbolic expression for this IC
+            if v in result.initial_exprs:
+                # Use symbolic expression
+                lines.append(f"  {v.name} = {result.initial_exprs[v]};")
+            else:
+                # Use numeric value
+                val = result.initials[v]
+                lines.append(f"  {v.name} = {float(val):g};")
     
     lines.append("end")
     return "\n".join(lines)

@@ -277,6 +277,10 @@ class RecastValidator:
                 seen_first_separator = False
                 continue
             
+            # End of auxiliary definitions section (old format)
+            if in_aux_section and '--- end auxiliary definitions ---' in line:
+                break
+            
             # Handle separators
             if in_aux_section and '========' in line:
                 if not seen_first_separator:
@@ -287,29 +291,43 @@ class RecastValidator:
                     # Closing separator, end section
                     break
             
-            # End of auxiliary definitions section (old format)
-            if in_aux_section and '--- end auxiliary definitions ---' in line:
-                break
-            
-            # Parse auxiliary definition line: // Z_1 := exp(X*k)
-            if in_aux_section and line.startswith('//'):
+            # Parse auxiliary definition line (after we've seen the opening separator)
+            if in_aux_section and seen_first_separator and line.startswith('//'):
                 content = line[2:].strip()
+                
                 # Skip separator lines
                 if content.startswith('='):
                     continue
+                    
+                # Check if it's a definition line (has :=)
                 if ':=' in content:
                     parts = content.split(':=', 1)
                     if len(parts) == 2:
                         aux_var = parts[0].strip()
                         expr_str = parts[1].strip()
                         
-                        # Convert to sympy
+                        # Convert to sympy - handle underscores by pre-creating symbols
                         try:
+                            import re
                             aux_sym = sp.Symbol(aux_var)
-                            expr = sp.sympify(expr_str)
+                            
+                            # Extract all identifiers from expression (including those with underscores)
+                            identifiers = re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', expr_str)
+                            
+                            # Create symbols only for identifiers that aren't functions
+                            # Common sympy functions to exclude
+                            sympy_functions = {'exp', 'log', 'sin', 'cos', 'tan', 'sqrt', 
+                                             'sinh', 'cosh', 'tanh', 'asin', 'acos', 'atan'}
+                            local_dict = {name: sp.Symbol(name) 
+                                        for name in identifiers 
+                                        if name not in sympy_functions}
+                            
+                            # Parse expression with pre-created symbols
+                            expr = sp.sympify(expr_str, locals=local_dict)
                             aux_defs[aux_sym] = expr
-                        except:
-                            pass  # Skip if parsing fails
+                        except Exception as e:
+                            # If parsing fails, skip this definition
+                            pass
         
         return aux_defs
     
@@ -472,14 +490,17 @@ class RecastValidator:
     
     def check_symbolic_equivalence(self, timeout: float = 30.0) -> EquivalenceTest:
         """
-        Check symbolic equivalence using Jacobian chain rule.
+        Check symbolic equivalence using Jacobian chain rule with constraint substitution.
         
-        Tests if: J_Φ(Z) · f_recast(Z) = f_orig(Φ(Z))
+        For lifted systems with auxiliary variables (e.g., Y_1 := K_S + S + S²/K_I),
+        substitutes auxiliary definitions into recast ODEs before comparison.
+        
+        Tests if: J_Φ(Z) · f_recast(Z)|_constraints = f_orig(Φ(Z))
         
         Where:
         - Φ(Z) maps recast states to original states
         - J_Φ is the Jacobian matrix ∂Φ/∂Z
-        - f_recast is the recast ODE RHS
+        - f_recast is the recast ODE RHS with auxiliaries substituted
         - f_orig is the original ODE RHS
         
         Args:
@@ -499,7 +520,7 @@ class RecastValidator:
             # Compute Jacobian J_Φ = ∂Φ/∂Z
             J_Phi = Phi_vector.jacobian(Z_vector)
             
-            # Build f_recast as vector
+            # Build f_recast as vector (no substitution yet)
             f_recast = Matrix([self.recast_odes[v] for v in self.recast_state_vars])
             
             # Compute J_Φ · f_recast
@@ -514,27 +535,58 @@ class RecastValidator:
             # Compute difference Δ = J_Φ · f_recast - f_orig(Φ(Z))
             Delta = lhs - f_orig_at_Phi
             
+            # Build substitution dict for auxiliary variables BEFORE simplification
+            # Match symbols by name to handle different symbol objects
+            orig_var_names = {str(v) for v in orig_vars_ordered}
+            recast_vars_by_name = {str(v): v for v in self.recast_state_vars}
+            
+            # Extract actual parameter symbols from recast ODEs
+            param_symbols_by_name = {}
+            for ode in self.recast_odes.values():
+                for sym in ode.free_symbols:
+                    sym_name = str(sym)
+                    if sym_name in self.recast_ir.params:
+                        param_symbols_by_name[sym_name] = sym
+            
+            aux_subs = {}
+            for aux_sym, aux_def in self.auxiliary_defs.items():
+                aux_name = str(aux_sym)
+                # Only substitute if this is truly an auxiliary (not an original variable)
+                if aux_name not in orig_var_names and aux_name in recast_vars_by_name:
+                    actual_aux_sym = recast_vars_by_name[aux_name]
+                    
+                    # Substitute symbols in definition to match recast ODE symbols
+                    # This includes both state variables AND parameters
+                    substituted_def = aux_def
+                    
+                    # Build a substitution dict for all symbols in the auxiliary definition
+                    symbol_subs = {}
+                    for def_sym in aux_def.free_symbols:
+                        def_sym_name = str(def_sym)
+                        
+                        # Check if it's a state variable
+                        if def_sym_name in recast_vars_by_name:
+                            symbol_subs[def_sym] = recast_vars_by_name[def_sym_name]
+                        # Check if it's a parameter - use actual symbol from ODEs
+                        elif def_sym_name in param_symbols_by_name:
+                            symbol_subs[def_sym] = param_symbols_by_name[def_sym_name]
+                    
+                    # Apply all substitutions at once
+                    if symbol_subs:
+                        substituted_def = substituted_def.subs(symbol_subs)
+                    
+                    aux_subs[actual_aux_sym] = substituted_def
+            
+            # Apply auxiliary substitutions to Delta
+            if aux_subs:
+                Delta = Delta.subs(aux_subs)
+            
             # Try to simplify each component
             simplified_components = []
             for i, component in enumerate(Delta):
                 try:
-                    # First, explicitly substitute auxiliary definitions
-                    # This helps SymPy recognize Y_1 = K_2 + X_1 type relationships
-                    # Match symbols by name, not object identity
+                    # Normalize floating-point exponents to rational form
                     substituted = component
-                    factor_map_by_name = {str(k): v for k, v in self.factor_map.items()}
-                    orig_var_names = {str(v) for v in orig_vars_ordered}
-                    
-                    # Build substitution dict matching symbols by name
-                    subs_dict = {}
-                    for sym in component.free_symbols:
-                        sym_name = str(sym)
-                        if sym_name in factor_map_by_name and sym_name not in orig_var_names:
-                            # This is an auxiliary - substitute its definition
-                            subs_dict[sym] = factor_map_by_name[sym_name]
-                    
-                    if subs_dict:
-                        substituted = substituted.subs(subs_dict)
                     
                     # Normalize floating-point exponents to rational form
                     # This converts 0.666666... back to 2/3, etc.
@@ -562,6 +614,17 @@ class RecastValidator:
                     if simp != 0:
                         # Strategy 4: Expand and collect like terms
                         simp = sp.simplify(sp.expand(simp))
+                    
+                    if simp != 0:
+                        # Strategy 5: Try simplifying numerator separately for rational expressions
+                        numer, denom = simp.as_numer_denom()
+                        if numer != 1:  # If there's actually a numerator
+                            # Expand and collect terms in numerator
+                            numer_expanded = sp.expand(numer)
+                            # Try to simplify the expanded numerator
+                            numer_simp = sp.simplify(numer_expanded)
+                            if numer_simp == 0:
+                                simp = 0
                     
                     simplified_components.append(simp)
                 except Exception as e:
