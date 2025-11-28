@@ -1232,15 +1232,19 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
                 # Use the NEW (lifted) ODE for var
                 func_prime += partial * new_odes[var]
         
-        # Substitute any composite functions with their auxiliaries
+        # CRITICAL: Substitute ALL composite functions (including func itself) with auxiliaries
+        # This ensures expressions like k*exp(X*k)*Z_1 become k*Z_1^2
         Z_ode = func_prime
+        
+        # First pass: replace all composite functions with their auxiliaries
         for other_func, other_Z in func_to_aux.items():
-            if other_func in Z_ode.atoms():
-                offset = func_to_offset[other_func]
-                if offset > 0:
-                    Z_ode = Z_ode.replace(other_func, other_Z - offset)
-                else:
-                    Z_ode = Z_ode.replace(other_func, other_Z)
+            offset = func_to_offset[other_func]
+            if offset > 0:
+                # Replace with (Z - offset) for sin/cos
+                Z_ode = Z_ode.replace(other_func, other_Z - offset)
+            else:
+                # Direct replacement for exp/log/etc
+                Z_ode = Z_ode.replace(other_func, other_Z)
         
         new_aux_odes[Z] = sp.simplify(Z_ode)
     
