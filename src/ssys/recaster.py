@@ -1147,12 +1147,18 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
         
         aux_counter += 1
     
-    # Substitute auxiliaries in original ODEs
+    # Substitute auxiliaries in original ODEs with offsets
     new_odes: Dict[sp.Symbol, sp.Expr] = {}
     for var, ode in sym.odes.items():
         new_ode = ode
         for func, Z in func_to_aux.items():
-            new_ode = new_ode.replace(func, Z)
+            offset = func_to_offset[func]
+            if offset > 0:
+                # Replace f(X) with (Z - offset)
+                new_ode = new_ode.replace(func, Z - offset)
+            else:
+                # No offset - direct substitution
+                new_ode = new_ode.replace(func, Z)
         new_odes[var] = sp.simplify(new_ode)
     
     # Compute Z' using chain rule with the LIFTED ODEs
@@ -1177,7 +1183,7 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
     # Combine original and auxiliary ODEs
     combined_odes = {**new_odes, **new_aux_odes}
     
-    # Compute initial conditions for auxiliaries
+    # Compute initial conditions for auxiliaries with offsets
     new_initials = dict(sym.initials)
     for func, Z in func_to_aux.items():
         # Evaluate function at t=0
@@ -1185,18 +1191,27 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
         for var in sym.vars:
             if var in func.free_symbols:
                 func_at_0 = func_at_0.subs(var, sym.initials.get(var, 1.0))
-        # Z(0) = f(X(0))
+        # Z(0) = f(X(0)) + offset
+        offset = func_to_offset[func]
         try:
-            Z_init = float(func_at_0)
+            Z_init = float(func_at_0) + offset
         except:
-            Z_init = 1.0  # Fallback if evaluation fails
+            Z_init = 1.0 + offset  # Fallback if evaluation fails
         new_initials[Z] = Z_init
     
     # Create new variable list: keep original vars, add Z auxiliaries
     new_vars = list(sym.vars) + list(func_to_aux.values())
     
-    # Invert dictionary to map auxiliary -> function definition
-    aux_to_func = {aux: func for func, aux in func_to_aux.items()}
+    # Create auxiliary definitions with offsets: Z -> f(X) + offset
+    aux_to_func_with_offset = {}
+    for func, Z in func_to_aux.items():
+        offset = func_to_offset[func]
+        if offset > 0:
+            # Z = f(X) + offset
+            aux_to_func_with_offset[Z] = func + offset
+        else:
+            # Z = f(X) (no offset)
+            aux_to_func_with_offset[Z] = func
     
     # Return augmented system and auxiliary definitions
     return (
@@ -1207,7 +1222,7 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
             initials=new_initials,
             initial_exprs=sym.initial_exprs  # Propagate symbolic IC expressions
         ),
-        aux_to_func  # Dictionary mapping Z_i -> f(X)
+        aux_to_func_with_offset  # Dictionary mapping Z_i -> f(X) + offset
     )
 
 
