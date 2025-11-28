@@ -1465,22 +1465,8 @@ def _direct_ssystem_recast(sym: 'SymSystem', original_vars: Set[sp.Symbol], mode
         # Expand to terms
         terms = expand_to_terms(rhs)
         
-        # Separate positive and negative terms for growth/decay
-        growth_terms = []
-        decay_terms = []
-        for t in terms:
-            if t == 0:
-                continue
-            try:
-                coeff, exps = term_to_coeff_exps(t, state_vars)
-                # Check sign of coefficient (works for both symbolic and numeric)
-                if sp.sign(coeff) >= 0:
-                    growth_terms.append((coeff, exps))
-                else:
-                    decay_terms.append((sp.Abs(coeff), exps))
-            except ValueError:
-                # If we can't convert to monomial form, skip this term
-                continue
+        # Use robust sign analysis that handles symbolic coefficients
+        growth_terms, decay_terms = _analyze_ode_terms(terms, state_vars)
         
         # Check if growth terms have different exponent patterns
         if len(growth_terms) > 1:
