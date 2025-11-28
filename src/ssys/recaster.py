@@ -1078,21 +1078,40 @@ def add_dummy_for_constants(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol, 
     )
 
 
+def _requires_positivity_transform(func: sp.Expr) -> Tuple[bool, float]:
+    """
+    Check if function requires positivity transformation (X = Z + c).
+    
+    Sign-changing functions like sin and cos need offset to ensure positivity
+    for power-law representation.
+    
+    Returns: (needs_transform, offset_amount)
+    """
+    if isinstance(func.func, type(sp.sin(sp.Symbol('x')).func)):
+        # sin(x) ∈ [-1, 1] → add 2 → [1, 3]
+        return True, 2.0
+    if isinstance(func.func, type(sp.cos(sp.Symbol('x')).func)):
+        # cos(x) ∈ [-1, 1] → add 2 → [1, 3]
+        return True, 2.0
+    # Other functions (exp, log) are positive for positive args - no offset needed
+    return False, 0.0
+
+
 def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol, sp.Expr]]:
     """
     Augment system with auxiliary variables for all composite functions.
     
     For each unique composite function f(X) (exp, sin, log, etc.):
-    1. Create auxiliary Z = f(X)
-    2. Add ODE: Z' = df/dX * X' (chain rule)
-    3. Replace f(X) with Z in all ODEs
-    4. Set Z(0) = f(X(0))
+    1. Check if f requires positivity transformation (sin/cos need offset)
+    2. Create auxiliary Z = f(X) + offset
+    3. Add ODE: Z' = df/dX * X' (chain rule)
+    4. Replace f(X) with (Z - offset) in all ODEs
+    5. Set Z(0) = f(X(0)) + offset
     
-    This is a general implementation that works for any differentiable function
-    that sympy knows how to differentiate.
+    This implements the Savageau 1987 transformation for sign-changing functions.
     
     Returns:
-        Tuple of (augmented SymSystem, auxiliary_defs dict mapping Z -> f(X))
+        Tuple of (augmented SymSystem, auxiliary_defs dict mapping Z -> f(X)+offset)
     """
     # Find all unique composite functions across all ODEs
     all_functions = set()
@@ -1104,13 +1123,28 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
         # No composite functions to lift
         return sym, {}
     
-    # Create auxiliary symbols for each function
+    # Group functions by argument for coupled handling (sin/cos pairs)
+    func_by_arg: Dict[sp.Expr, List[sp.Expr]] = {}
+    for func in all_functions:
+        arg = func.args[0] if func.args else None
+        if arg is not None:
+            if arg not in func_by_arg:
+                func_by_arg[arg] = []
+            func_by_arg[arg].append(func)
+    
+    # Create auxiliary symbols for each function with offsets
     func_to_aux: Dict[sp.Expr, sp.Symbol] = {}
+    func_to_offset: Dict[sp.Expr, float] = {}
     aux_counter = 1
     
     for func in sorted(all_functions, key=str):
         Z = sp.symbols(f"Z_{aux_counter}", positive=True)
         func_to_aux[func] = Z
+        
+        # Check if this function needs positivity transform
+        needs_transform, offset = _requires_positivity_transform(func)
+        func_to_offset[func] = offset
+        
         aux_counter += 1
     
     # Substitute auxiliaries in original ODEs
