@@ -960,11 +960,69 @@ class RecastValidator:
             log_min = np.log(domain_min)
             log_max = np.log(domain_max)
             
+            # Identify which recast variables are auxiliaries vs. original/independent
+            orig_var_names = {str(v) for v in orig_vars_ordered}
+            independent_vars = []
+            auxiliary_vars = []
+            auxiliary_var_indices = []
+            
+            for i, var in enumerate(recast_vars_ordered):
+                var_name = str(var)
+                if var_name in orig_var_names:
+                    # This is an original variable - sample independently
+                    independent_vars.append((i, var))
+                elif var_name in {str(k) for k in self.auxiliary_defs.keys()}:
+                    # This is a lifted auxiliary - compute from definition
+                    auxiliary_vars.append((i, var))
+                    auxiliary_var_indices.append(i)
+                else:
+                    # Pool auxiliary from factorization - sample independently
+                    independent_vars.append((i, var))
+            
             for _ in range(n_samples):
-                # Sample ALL recast state variables in log-uniform
-                # This handles both factorized (canonical) and lifted (simplified) forms
-                Z_sample = np.exp(np.random.uniform(log_min, log_max, 
-                                                    len(recast_vars_ordered)))
+                # Initialize array for all recast variables
+                Z_sample = np.zeros(len(recast_vars_ordered))
+                
+                # Sample independent variables (originals + pool auxiliaries)
+                for idx, var in independent_vars:
+                    Z_sample[idx] = np.exp(np.random.uniform(log_min, log_max))
+                
+                # Compute auxiliary variables from their definitions
+                for idx, var in auxiliary_vars:
+                    var_name = str(var)
+                    aux_def = self.auxiliary_defs[sp.Symbol(var_name)]
+                    
+                    # Evaluate auxiliary definition
+                    # Need to substitute current values of independent variables
+                    # Match symbols by name to handle symbol object mismatches
+                    subs_dict = {}
+                    
+                    # Substitute independent variable values
+                    for indep_idx, indep_var in independent_vars:
+                        indep_var_name = str(indep_var)
+                        # Find matching symbol in aux_def by name
+                        for sym in aux_def.free_symbols:
+                            if str(sym) == indep_var_name:
+                                subs_dict[sym] = Z_sample[indep_idx]
+                                break
+                    
+                    # Substitute parameter values
+                    for param_name, param_val in param_values.items():
+                        # Find matching symbol in aux_def by name
+                        for sym in aux_def.free_symbols:
+                            if str(sym) == param_name:
+                                subs_dict[sym] = param_val
+                                break
+                    
+                    # Evaluate - use evalf() then convert to float
+                    try:
+                        aux_val = float(aux_def.subs(subs_dict).evalf())
+                    except:
+                        # Fallback: if still symbolic, use lambdify
+                        aux_func = lambdify(list(aux_def.free_symbols), aux_def, modules='numpy')
+                        aux_val = float(aux_func(*[subs_dict.get(s, 1.0) for s in aux_def.free_symbols]))
+                    
+                    Z_sample[idx] = aux_val
                 
                 # Combine state variables and parameters for evaluation
                 all_vals = tuple(Z_sample) + tuple(param_vals_ordered)
