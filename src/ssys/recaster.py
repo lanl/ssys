@@ -1104,9 +1104,10 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
     For each unique composite function f(X) (exp, sin, log, etc.):
     1. Check if f requires positivity transformation (sin/cos need offset)
     2. Create auxiliary Z = f(X) + offset
-    3. Add ODE: Z' = df/dX * X' (chain rule)
-    4. Replace f(X) with (Z - offset) in all ODEs
-    5. Set Z(0) = f(X(0)) + offset
+    3. For sin/cos: create BOTH auxiliaries as a coupled pair
+    4. Add ODEs with proper coupling for sin/cos derivatives
+    5. Replace f(X) with (Z - offset) in all ODEs
+    6. Set Z(0) = f(X(0)) + offset
     
     This implements the Savageau 1987 transformation for sign-changing functions.
     
@@ -1123,28 +1124,58 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
         # No composite functions to lift
         return sym, {}
     
-    # Group functions by argument for coupled handling (sin/cos pairs)
-    func_by_arg: Dict[sp.Expr, List[sp.Expr]] = {}
+    # Group functions by type and argument for coupled handling (sin/cos pairs)
+    sin_cos_pairs: Dict[sp.Expr, Dict[str, sp.Expr]] = {}  # arg -> {"sin": sin(arg), "cos": cos(arg)}
+    other_functions = set()
+    
     for func in all_functions:
         arg = func.args[0] if func.args else None
-        if arg is not None:
-            if arg not in func_by_arg:
-                func_by_arg[arg] = []
-            func_by_arg[arg].append(func)
+        if arg is None:
+            other_functions.add(func)
+            continue
+            
+        # Check if this is sin or cos - use direct class comparison
+        if func.func == sp.sin:
+            # This is sin(arg)
+            if arg not in sin_cos_pairs:
+                sin_cos_pairs[arg] = {}
+            sin_cos_pairs[arg]["sin"] = func
+        elif func.func == sp.cos:
+            # This is cos(arg)
+            if arg not in sin_cos_pairs:
+                sin_cos_pairs[arg] = {}
+            sin_cos_pairs[arg]["cos"] = func
+        else:
+            # Other function (exp, log, etc.)
+            other_functions.add(func)
     
     # Create auxiliary symbols for each function with offsets
     func_to_aux: Dict[sp.Expr, sp.Symbol] = {}
     func_to_offset: Dict[sp.Expr, float] = {}
     aux_counter = 1
     
-    for func in sorted(all_functions, key=str):
+    # Handle sin/cos pairs - create BOTH auxiliaries even if only one appears
+    for arg, funcs in sin_cos_pairs.items():
+        sin_func = funcs.get("sin", sp.sin(arg))
+        cos_func = funcs.get("cos", sp.cos(arg))
+        
+        # Create auxiliary for sin
+        Z_sin = sp.symbols(f"Z_{aux_counter}", positive=True)
+        func_to_aux[sin_func] = Z_sin
+        func_to_offset[sin_func] = 2.0  # sin ∈ [-1,1] → [1,3]
+        aux_counter += 1
+        
+        # Create auxiliary for cos
+        Z_cos = sp.symbols(f"Z_{aux_counter}", positive=True)
+        func_to_aux[cos_func] = Z_cos
+        func_to_offset[cos_func] = 2.0  # cos ∈ [-1,1] → [1,3]
+        aux_counter += 1
+    
+    # Handle other functions (exp, log, etc.) - no offset needed
+    for func in sorted(other_functions, key=str):
         Z = sp.symbols(f"Z_{aux_counter}", positive=True)
         func_to_aux[func] = Z
-        
-        # Check if this function needs positivity transform
-        needs_transform, offset = _requires_positivity_transform(func)
-        func_to_offset[func] = offset
-        
+        func_to_offset[func] = 0.0  # No offset for exp, log, etc.
         aux_counter += 1
     
     # Substitute auxiliaries in original ODEs with offsets
@@ -1161,9 +1192,38 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
                 new_ode = new_ode.replace(func, Z)
         new_odes[var] = sp.simplify(new_ode)
     
-    # Compute Z' using chain rule with the LIFTED ODEs
+    # Compute Z' using coupled derivatives for sin/cos
     new_aux_odes: Dict[sp.Symbol, sp.Expr] = {}
-    for func, Z in func_to_aux.items():
+    
+    # Handle sin/cos pairs with coupled derivatives
+    for arg, funcs in sin_cos_pairs.items():
+        sin_func = funcs.get("sin", sp.sin(arg))
+        cos_func = funcs.get("cos", sp.cos(arg))
+        Z_sin = func_to_aux[sin_func]
+        Z_cos = func_to_aux[cos_func]
+        
+        # d/dt[sin(arg) + 2] = cos(arg) * d(arg)/dt = (Z_cos - 2) * d(arg)/dt
+        # d/dt[cos(arg) + 2] = -sin(arg) * d(arg)/dt = -(Z_sin - 2) * d(arg)/dt = (2 - Z_sin) * d(arg)/dt
+        
+        # Compute d(arg)/dt using chain rule
+        arg_prime = sp.Integer(0)
+        for var in sym.vars:
+            if var in arg.free_symbols:
+                partial = sp.diff(arg, var)
+                arg_prime += partial * new_odes[var]
+        
+        # Z_sin' = (Z_cos - 2) * arg'
+        Z_sin_ode = (Z_cos - 2) * arg_prime
+        new_aux_odes[Z_sin] = sp.simplify(Z_sin_ode)
+        
+        # Z_cos' = (2 - Z_sin) * arg'
+        Z_cos_ode = (2 - Z_sin) * arg_prime
+        new_aux_odes[Z_cos] = sp.simplify(Z_cos_ode)
+    
+    # Handle other functions with standard chain rule
+    for func in other_functions:
+        Z = func_to_aux[func]
+        
         # Compute df/dt using chain rule: df/dt = sum_i (∂f/∂X_i) * dX_i/dt
         func_prime = sp.Integer(0)
         for var in sym.vars:
@@ -1172,13 +1232,17 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
                 # Use the NEW (lifted) ODE for var
                 func_prime += partial * new_odes[var]
         
-        # Now substitute all composite functions with their auxiliaries in Z'
+        # Substitute any composite functions with their auxiliaries
         Z_ode = func_prime
         for other_func, other_Z in func_to_aux.items():
-            Z_ode = Z_ode.replace(other_func, other_Z)
+            if other_func in Z_ode.atoms():
+                offset = func_to_offset[other_func]
+                if offset > 0:
+                    Z_ode = Z_ode.replace(other_func, other_Z - offset)
+                else:
+                    Z_ode = Z_ode.replace(other_func, other_Z)
         
-        Z_ode = sp.simplify(Z_ode)
-        new_aux_odes[Z] = Z_ode
+        new_aux_odes[Z] = sp.simplify(Z_ode)
     
     # Combine original and auxiliary ODEs
     combined_odes = {**new_odes, **new_aux_odes}

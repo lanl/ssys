@@ -1,0 +1,39 @@
+model 27_spiral_truth()
+
+  // Ground-truth recast of the spiral model:
+  //
+  // Original system:
+  //   dZ/dt = (Z - t)/(Z + t),   Z(0) = 4
+  //
+  // Transformation:
+  //   X_1 = Z + p
+  //   X_2 = t + p
+  //   X_3 = X_1 + X_2 - 2*p
+  //   p   = 5
+  //
+  // Initial conditions:
+  //   X_1(0) = 9
+  //   X_2(0) = 1
+  //   X_3(0) = 4
+  //
+  // Recast dynamics:
+  //   dX_1/dt = X_1 / X_3 - X_2 / X_3
+  //   dX_2/dt = 1
+  //   dX_3/dt = 2 * X_1 / X_3 - 2 * p / X_3
+
+  species X_1, X_2, X_3;
+
+  // Parameter
+  p = 5;
+
+  // Initial conditions
+  X_1 = 9;
+  X_2 = 1;
+  X_3 = 4;
+
+  // Dynamics
+  X_1' = X_1/X_3 - X_2/X_3;
+  X_2' = 1;
+  X_3' = 2*X_1/X_3 - 2*p/X_3;
+
+end

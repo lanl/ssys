@@ -1,0 +1,27 @@
+model 28_torus()
+
+  // Torus-like trajectory system
+  //
+  // Original system:
+  //   dZ_1/dt = -Z_2 - Z_1 Z_3 (Z_1^2 + Z_2^2)^(-1/2)
+  //   dZ_2/dt =  Z_1 - Z_2 Z_3 (Z_1^2 + Z_2^2)^(-1/2)
+  //   dZ_3/dt =  Z_1 (Z_1^2 + Z_2^2)^(-1/2)
+  //
+  // Initial conditions:
+  //   Z_1(0) = 3
+  //   Z_2(0) = 0
+  //   Z_3(0) = 0
+
+  species Z_1, Z_2, Z_3;
+
+  // Initial conditions
+  Z_1 = 3;
+  Z_2 = 0;
+  Z_3 = 0;
+
+  // Dynamics
+  Z_1' = -Z_2 - Z_1*Z_3*(Z_1^2 + Z_2^2)^(-0.5);
+  Z_2' =  Z_1 - Z_2*Z_3*(Z_1^2 + Z_2^2)^(-0.5);
+  Z_3' =  Z_1*(Z_1^2 + Z_2^2)^(-0.5);
+
+end

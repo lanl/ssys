@@ -1,0 +1,35 @@
+////////////////////////////////////////////////////////////////////////////////
+// 25_CSTR.ant
+//
+// Savageau & Voit 1987, Section 5, Eq. (28)
+// Continuous stirred tank reactor (CSTR) example (2D general-form ODE):
+//
+//   Z1' = -Z1 + A (1 - Z1) exp( c Z2 / (c + Z2) )
+//   Z2' = -Z2 + B (1 - Z2) exp( c Z1 / (c + Z1) ) - b (Z2 - a)
+//
+// Z1(0) = Z10,  Z2(0) = Z20.
+// The paper leaves parameters symbolic; we assign concrete defaults here
+////////////////////////////////////////////////////////////////////////////////
+
+model 25_CSTR()
+
+  // Parameters (example numeric values; adjust as needed)
+  A   = 1;      // "A" in the paper
+  B   = 1;      // "B" in the paper
+  a   = 0.5;    // equilibrium offset
+  b   = 1;      // linear sink strength
+  c   = 1;      // dimensionless constant in exponential term
+  Z10 = 0.2;    // initial value for Z1
+  Z20 = 0.2;    // initial value for Z2
+
+  species Z1, Z2;
+
+  // Original general-form ODEs (Savageau & Voit 1987, Eq. (28))
+  Z1' = -Z1 + A*(1 - Z1)*exp(c*Z2/(c + Z2));
+  Z2' = -Z2 + B*(1 - Z2)*exp(c*Z1/(c + Z1)) - b*(Z2 - a);
+
+  // Initial conditions
+  Z1 = Z10;
+  Z2 = Z20;
+
+end

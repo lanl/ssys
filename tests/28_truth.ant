@@ -1,0 +1,43 @@
+model 28_truth()
+
+  // ========================================================================
+  // Ground-truth GMA recast of the torus model
+  // ========================================================================
+  // Original system (in variables Z_1, Z_2, Z_3):
+  //   dZ_1/dt = -Z_2 - Z_1*Z_3 / sqrt(Z_1^2 + Z_2^2)
+  //   dZ_2/dt =  Z_1 - Z_2*Z_3 / sqrt(Z_1^2 + Z_2^2)
+  //   dZ_3/dt =  Z_1 / sqrt(Z_1^2 + Z_2^2)
+  //
+  // Lifted variables:
+  //   X_1 = Z_1
+  //   X_2 = Z_2
+  //   X_3 = Z_3
+  //   X_4 = sqrt(Z_1^2 + Z_2^2)
+  //
+  // Note: sqrt(Z_1^2 + Z_2^2) = X_4 ⇒ (Z_1^2 + Z_2^2) = X_4^2
+  // Using the identity:
+  //   X_4' = (X_1*X_1' + X_2*X_2') / X_4
+  // one obtains exactly:
+  //   X_4' = -X_3
+  //
+  // This 4D system is an exact GMA (power-law) representation of the
+  // original torus dynamics, suitable as ground-truth for recasting.
+  // ========================================================================
+
+  species X_1, X_2, X_3, X_4;
+
+  // Initial conditions corresponding to:
+  //   Z_1(0) = 3, Z_2(0) = 0, Z_3(0) = 0
+  //   X_4(0) = sqrt(Z_1(0)^2 + Z_2(0)^2) = 3
+  X_1 = 3;
+  X_2 = 0;
+  X_3 = 0;
+  X_4 = 3;
+
+  // GMA ODEs (exactly equivalent to original torus system)
+  X_1' = -X_2 - X_1*X_3/X_4;
+  X_2' =  X_1 - X_2*X_3/X_4;
+  X_3' =  X_1/X_4;
+  X_4' = -X_3;
+
+end

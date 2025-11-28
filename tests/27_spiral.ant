@@ -1,0 +1,19 @@
+model 27_spiral()
+
+  // Scalar ODE:
+  //   dZ/dt = (Z - t)/(Z + t)
+  //   Z(0) = 4
+  //
+  // Implemented by treating t as an explicit time state with t' = 1.
+
+  species t, Z;
+
+  // Initial conditions
+  t = 0;
+  Z = 4;
+
+  // Dynamics
+  t' = 1;
+  Z' = (Z - t)/(Z + t);
+
+end
