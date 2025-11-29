@@ -70,9 +70,11 @@ class ModelIR:
     raw_lines: List[str] = field(default_factory=list)
     param_exprs: Dict[str, str] = field(default_factory=dict)  # Store parameter expressions before evaluation
     initial_exprs: Dict[str, str] = field(default_factory=dict)  # Store initial condition expressions
+    antimony_text: str = ""  # Cache original Antimony text for RoadRunner
 
 def parse_antimony(text: str) -> ModelIR:
     ir = ModelIR()
+    ir.antimony_text = text  # Cache original text for RoadRunner
     ir.raw_lines = [ln.rstrip() for ln in text.splitlines()]
 
     for raw in ir.raw_lines:
