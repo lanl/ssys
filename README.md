@@ -51,9 +51,9 @@ export PYTHONPATH=/path/to/ssys/src:$PYTHONPATH
 The CLI tool batch-recasts models and generates verification notebooks:
 
 ```bash
-python -m ssys.cli --manifest tests/tests.manifest \
-                   --outdir out_simplified \
-                   --mode simplified
+ssys-recast --manifest tests/tests.manifest \
+            --outdir out_simplified \
+            --mode simplified
 ```
 
 ### Arguments
