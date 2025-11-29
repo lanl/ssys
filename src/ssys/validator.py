@@ -167,6 +167,10 @@ class RecastValidator:
         
         # Extract refusal reason if present (for GMA outputs)
         self.canonical_refusal_reason = self._extract_refusal_reason(recast_text)
+        
+        # Canonicalize all symbols to fix symbol identity bug (K_S_orig vs K_S_recast)
+        # This ensures that K_S - K_S simplifies to 0 in symbolic validation
+        self._canonicalize_symbols()
     
     def _extract_mapping_from_comments(self, recast_text: str) -> Dict:
         """
@@ -487,6 +491,54 @@ class RecastValidator:
         
         # Build list of all recast state variables
         self.recast_state_vars = list(self.recast_odes.keys())
+    
+    def _canonicalize_symbols(self):
+        """
+        Unify all symbols across original and recast models by name.
+        
+        This fixes the symbol identity bug where K_S from original and K_S from recast
+        are different Symbol objects, preventing simplification of (K_S - K_S) to 0.
+        
+        After canonicalization, both models share the same Symbol objects for parameters
+        and variables, enabling proper symbolic simplification.
+        """
+        # Build canonical symbol table from all parameters and species
+        all_params = set(self.orig_ir.params.keys()) | set(self.recast_ir.params.keys())
+        all_species = {str(v) for v in self.orig_odes.keys()} | {str(v) for v in self.recast_odes.keys()}
+        
+        canon = {}
+        for name in all_params | all_species:
+            canon[name] = sp.Symbol(name, positive=True)
+        
+        # Helper to rename all symbols in an expression
+        def rename_expr(expr):
+            subs = {s: canon[s.name] for s in expr.free_symbols if s.name in canon}
+            return expr.subs(subs) if subs else expr
+        
+        # Canonicalize original ODEs
+        self.orig_odes = {canon.get(str(v), v): rename_expr(expr)
+                          for v, expr in self.orig_odes.items()}
+        
+        # Canonicalize recast ODEs
+        self.recast_odes = {canon.get(str(v), v): rename_expr(expr)
+                            for v, expr in self.recast_odes.items()}
+        
+        # Canonicalize mapping Φ
+        self.mapping = {canon.get(str(k), k): rename_expr(expr)
+                        for k, expr in self.mapping.items()}
+        
+        # Canonicalize auxiliary definitions
+        self.auxiliary_defs = {canon.get(str(k), k): rename_expr(expr)
+                               for k, expr in self.auxiliary_defs.items()}
+        
+        # Update recast_state_vars list with canonical symbols
+        self.recast_state_vars = [canon.get(str(v), v) for v in self.recast_state_vars]
+        
+        # Update initials dict with canonical symbols
+        self.orig_system.initials = {canon.get(str(k), k): v 
+                                      for k, v in self.orig_system.initials.items()}
+        self.recast_system.initials = {canon.get(str(k), k): v
+                                        for k, v in self.recast_system.initials.items()}
     
     def check_symbolic_equivalence(self, timeout: float = 30.0) -> EquivalenceTest:
         """
