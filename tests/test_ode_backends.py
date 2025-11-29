@@ -22,18 +22,21 @@ def test_simulate_ode_interface():
     
     model_ir = parse_antimony(antimony_text)
     
-    # Test with RK4 backend (should return not-implemented)
+    # Test with RK4 backend (should now work!)
     result = simulate_ode(
         model_ir,
         t0=0.0,
         t_end=10.0,
         n_points=11,
-        backend="rk4",
-        options={"fallback_to_rk4": False}
+        backend="rk4"
     )
     
-    assert result["success"] is False
-    assert "not yet implemented" in result["message"].lower()
+    assert result["success"] is True
+    assert len(result["t"]) == 11
+    assert result["y"].shape == (11, 1)  # 1 species
+    assert len(result["state_names"]) == 1
+    # Check decay: S(t=10) < S(t=0)
+    assert result["y"][-1, 0] < result["y"][0, 0]
 
 
 def test_roadrunner_backend_not_installed():
