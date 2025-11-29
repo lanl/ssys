@@ -157,6 +157,52 @@ The notebook shows for each model:
 
 ---
 
+## ODE Solver Selection
+
+### Overview
+
+Verification notebooks support two ODE solvers for trajectory simulation:
+- **libRoadRunner** (recommended): Production-quality CVODE integrator with adaptive stepping
+- **RK4** (fallback): Simple fixed-step 4th-order Runge-Kutta
+
+### Installation
+
+Install libRoadRunner in your conda environment:
+```bash
+conda activate ssys_env
+conda install -c conda-forge libroadrunner
+```
+
+Or via pip:
+```bash
+pip install libroadrunner
+```
+
+### Usage in Notebooks
+
+Generated verification notebooks automatically use libRoadRunner. To change solver:
+
+```python
+# Use libRoadRunner (default in generated notebooks)
+load_and_report('model.ant', 'model_recast.ant', solver='roadrunner')
+
+# Use RK4
+load_and_report('model.ant', 'model_recast.ant', solver='rk4')
+```
+
+### Why libRoadRunner?
+
+- **Adaptive stepping**: Automatically adjusts step size for accuracy and stability
+- **Robust for stiff systems**: CVODE handles challenging dynamics
+- **Widely used**: Standard tool in systems biology
+- **Direct Antimony support**: No SBML conversion needed
+
+### Fallback Behavior
+
+If a solver fails, the notebook automatically falls back to the basic RK4 method with a warning message.
+
+---
+
 ## Library Usage (Programmatic)
 
 ### Basic Example
