@@ -105,7 +105,13 @@ def simulate_with_roadrunner(
         # Column 0 is time, rest are species
         t = result[:, 0]
         y = result[:, 1:]
-        state_names = r.getFloatingSpeciesIds()
+        
+        # Get species names - combine independent and dependent species
+        # (RoadRunner 2.8.0 doesn't have getFloatingSpeciesIds())
+        state_names = (
+            list(r.getIndependentFloatingSpeciesIds()) +
+            list(r.getDependentFloatingSpeciesIds())
+        )
         
         # Get integrator statistics
         stats = {}
