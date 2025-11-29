@@ -203,28 +203,7 @@ def _get_antimony_text(model_ir: ModelIR) -> str:
                 i += 1
         text = '\n'.join(fixed_lines)
         
-        # Fix 3: Implicit multiplication - add explicit * operators
-        # SymPy string conversion can produce: 2X, (...)X, X^2Y
-        # Antimony requires: 2*X, (...)*X, X^2*Y
-        
-        # Pattern 1: Number followed by letter (e.g., "2X" → "2*X")
-        text = re.sub(r'(\d)([A-Za-z_])', r'\1*\2', text)
-        
-        # Pattern 2: ) followed by letter/number: "(...)X" → "(...)*X"
-        text = re.sub(r'\)([A-Za-z_0-9])', r')*\1', text)
-        
-        # Pattern 3: Letter/number followed by (: "X(" → "X*("
-        # But NOT function calls like "exp(", "log(", etc.
-        func_names = ['exp', 'log', 'sin', 'cos', 'tan', 'sqrt',
-                      'abs', 'gamma']
-        text = re.sub(
-            r'([A-Za-z_0-9])(\()',
-            lambda m: (m.group(0) if m.group(1) in func_names
-                       else f'{m.group(1)}*{m.group(2)}'),
-            text
-        )
-        
-        # Fix 4: gamma() function - compute values and replace
+        # Fix 3: gamma() function - compute values and replace
         # Antimony's gamma() is incomplete gamma (needs 2+ args)
         # We need complete gamma Γ(x)
         def replace_gamma(match):
