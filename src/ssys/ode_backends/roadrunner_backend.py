@@ -42,6 +42,14 @@ def simulate_with_roadrunner(
             "Install with: pip install libroadrunner"
         )
     
+    try:
+        import antimony
+    except ImportError:
+        raise ImportError(
+            "Antimony not installed. "
+            "Install with: pip install antimony (or pip install tellurium)"
+        )
+    
     if options is None:
         options = {}
     
@@ -49,12 +57,27 @@ def simulate_with_roadrunner(
         # Get or reconstruct Antimony text
         antimony_text = _get_antimony_text(model_ir)
         
-        # Build RoadRunner model from Antimony text
-        # CRITICAL: Use loadAntimonyModel() for Antimony text, not load()
-        # load() expects a file path, loadAntimonyModel() expects
-        # Antimony source code
-        r = rr.RoadRunner()
-        r.loadAntimonyModel(antimony_text)
+        # Convert Antimony → SBML using antimony library
+        # RoadRunner only understands SBML, not Antimony directly
+        antimony.clearPreviousLoads()
+        rc = antimony.loadAntimonyString(antimony_text)
+        if rc < 0:
+            raise RuntimeError(
+                f"Antimony parse error: {antimony.getLastError()}"
+            )
+        
+        model_name = antimony.getMainModuleName()
+        if not model_name:
+            raise RuntimeError("Could not get Antimony module name")
+        
+        sbml_str = antimony.getSBMLString(model_name)
+        if not sbml_str:
+            raise RuntimeError(
+                f"Antimony→SBML conversion failed: {antimony.getLastError()}"
+            )
+        
+        # Build RoadRunner model from SBML
+        r = rr.RoadRunner(sbml_str)
         
         # Configure integrator
         integrator_name = options.get("integrator", "cvode")
