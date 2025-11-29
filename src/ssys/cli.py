@@ -108,7 +108,8 @@ from ssys.notebook_helpers import load_and_report
         
         call = (f"load_and_report({repr(ant_path)}, "
                 f"{repr(recast_basename)}, mode={repr(mode)}, "
-                f"validation_json={repr(validation_basename)})")
+                f"validation_json={repr(validation_basename)}, "
+                f"solver='roadrunner')")
         nb.cells.append(new_code_cell(call))
 
     out_nb = os.path.join(out_dir, "recast_report.ipynb")

@@ -382,7 +382,8 @@ def latex_factor_map(rec):
 
 
 def load_and_report(ant_path, recast_path, T=20.0, steps=400,
-                     mode="simplified", validation_json=None):
+                     mode="simplified", validation_json=None,
+                     solver="rk4"):
     """Load and report on a single recast model.
     
     Args:
@@ -392,6 +393,7 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400,
         steps: Number of simulation steps
         mode: Output mode ('simplified' or 'canonical')
         validation_json: Optional path to validation JSON file
+        solver: ODE solver to use - "rk4" (default) or "roadrunner"
     """
     ant_text = open(ant_path).read()
     rec_text = open(recast_path).read()
@@ -469,36 +471,63 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400,
     display(Markdown("**Recast ODEs (LaTeX)**"))
     display(Markdown("$$\n" + latex_ssys_from_antimony(rec_text) + "\n$$"))
 
-    var_syms = sorted(sym.odes.keys(), key=lambda s: s.name)
-    rhs_exprs = [sp.simplify(sym.odes[s]) for s in var_syms]
-    y0 = [float(sym.initials[s]) for s in var_syms]
-    f_orig = build_rhs_from_sympy(var_syms, rhs_exprs, params)
-    t_orig, y_orig = rk4(f_orig, (0.0, T), y0, steps)
-
-    aux_syms = list(sorted(rec.variables, key=lambda s: s.name))
-    
-    if rec.status == RecastStatus.GMA:
-        rec_rhs = []
-        for eq in rec.gma_equations:
-            prod = sp.Integer(0)
-            for c, e in eq.production:
-                prod += product_expr(c, e)
-            deg = sp.Integer(0)
-            for c, e in eq.degradation:
-                deg += product_expr(c, e)
-            rec_rhs.append(sp.simplify(prod - deg))
+    # Choose simulation method based on solver parameter
+    if solver in ("roadrunner", "rk4"):
+        # Use ODE backend abstraction
+        from ssys.ode_backends import simulate_ode
+        
+        # Simulate original model
+        result_orig = simulate_ode(ir, 0.0, T, steps+1, backend=solver)
+        if not result_orig["success"]:
+            display(Markdown(f"**Warning:** Original simulation failed with {solver}: {result_orig['message']}"))
+            display(Markdown("Falling back to RK4..."))
+            # Fallback to old RK4 method
+            var_syms = sorted(sym.odes.keys(), key=lambda s: s.name)
+            rhs_exprs = [sp.simplify(sym.odes[s]) for s in var_syms]
+            y0 = [float(sym.initials[s]) for s in var_syms]
+            f_orig = build_rhs_from_sympy(var_syms, rhs_exprs, params)
+            t_orig, y_orig = rk4(f_orig, (0.0, T), y0, steps)
+        else:
+            t_orig = result_orig["t"]
+            y_orig = result_orig["y"]
+        
+        # Build recast IR for simulation
+        recast_ir = ssys.parse_antimony(rec_text)
+        result_rec = simulate_ode(recast_ir, 0.0, T, steps+1, backend=solver)
+        if not result_rec["success"]:
+            display(Markdown(f"**Warning:** Recast simulation failed with {solver}: {result_rec['message']}"))
+            display(Markdown("Falling back to RK4..."))
+            # Fallback to old RK4 method
+            aux_syms = list(sorted(rec.variables, key=lambda s: s.name))
+            if rec.status == RecastStatus.GMA:
+                rec_rhs = []
+                for eq in rec.gma_equations:
+                    prod = sp.Integer(0)
+                    for c, e in eq.production:
+                        prod += product_expr(c, e)
+                    deg = sp.Integer(0)
+                    for c, e in eq.degradation:
+                        deg += product_expr(c, e)
+                    rec_rhs.append(sp.simplify(prod - deg))
+            else:
+                rec_rhs = [
+                    sp.simplify(
+                        product_expr(eq.growth[0], _expand_exps_through_factors(eq.growth[1], rec.factor_map)) -
+                        product_expr(eq.decay[0], _expand_exps_through_factors(eq.decay[1], rec.factor_map))
+                    )
+                    for eq in rec.equations
+                ]
+            aux_y0 = [float(rec.initials[s]) for s in aux_syms]
+            f_rec = build_rhs_from_sympy(aux_syms, rec_rhs, params)
+            t_rec, y_rec = rk4(f_rec, (0.0, T), aux_y0, steps)
+        else:
+            t_rec = result_rec["t"]
+            y_rec = result_rec["y"]
+            aux_syms = [sp.Symbol(name) for name in result_rec["state_names"]]
     else:
-        rec_rhs = [
-            sp.simplify(
-                product_expr(eq.growth[0], _expand_exps_through_factors(eq.growth[1], rec.factor_map)) -
-                product_expr(eq.decay[0], _expand_exps_through_factors(eq.decay[1], rec.factor_map))
-            )
-            for eq in rec.equations
-        ]
+        raise ValueError(f"Unknown solver: {solver}. Choose 'rk4' or 'roadrunner'.")
     
-    aux_y0 = [float(rec.initials[s]) for s in aux_syms]
-    f_rec = build_rhs_from_sympy(aux_syms, rec_rhs, params)
-    t_rec, y_rec = rk4(f_rec, (0.0, T), aux_y0, steps)
+    var_syms = sorted(sym.odes.keys(), key=lambda s: s.name)
 
     fig, axes = plt.subplots(1, 2, figsize=(9, 3), dpi=120, sharey=True)
 
