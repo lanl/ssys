@@ -523,7 +523,9 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400,
         else:
             t_rec = result_rec["t"]
             y_rec = result_rec["y"]
-            aux_syms = [sp.Symbol(name) for name in result_rec["state_names"]]
+            # CRITICAL FIX: Use actual symbols from rec.variables instead of recreating from strings
+            # This ensures symbol identity matches for plotting factor_map
+            aux_syms = list(sorted(rec.variables, key=lambda s: s.name))
     else:
         raise ValueError(f"Unknown solver: {solver}. Choose 'rk4' or 'roadrunner'.")
     
