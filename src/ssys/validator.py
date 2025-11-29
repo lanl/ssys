@@ -626,6 +626,44 @@ class RecastValidator:
                             if numer_simp == 0:
                                 simp = 0
                     
+                    if simp != 0:
+                        # Strategy 6: Detect pattern (a - a) or (-a + a) in numerator
+                        # This catches cases like (K_S - K_S) that sympy misses
+                        numer, denom = simp.as_numer_denom()
+                        if numer.is_Add:
+                            # Expand numerator and group by structure
+                            numer_expanded = sp.expand(numer)
+                            # Check if all terms cancel
+                            if numer_expanded == 0:
+                                simp = 0
+                            else:
+                                # Try collecting terms - sometimes helps detect cancellation
+                                collected = sp.collect(numer_expanded, numer_expanded.free_symbols)
+                                if collected == 0:
+                                    simp = 0
+                    
+                    if simp != 0:
+                        # Strategy 7: Check if numerator has a zero factor
+                        # Pattern: a*b*0*c = 0, even if buried in products
+                        numer, denom = simp.as_numer_denom()
+                        if numer.is_Mul:
+                            # Check each factor - if any is zero, the whole thing is zero
+                            for factor in numer.args:
+                                if factor == 0:
+                                    simp = 0
+                                    break
+                                # Check if factor is an Add that simplifies to zero
+                                if factor.is_Add:
+                                    factor_simp = sp.simplify(factor)
+                                    if factor_simp == 0:
+                                        simp = 0
+                                        break
+                                    # Also try expanding it
+                                    factor_expanded = sp.expand(factor)
+                                    if factor_expanded == 0:
+                                        simp = 0
+                                        break
+                    
                     simplified_components.append(simp)
                 except Exception as e:
                     return EquivalenceTest(
