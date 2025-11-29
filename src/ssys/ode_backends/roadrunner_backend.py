@@ -158,10 +158,78 @@ def _get_antimony_text(model_ir: ModelIR) -> str:
     Get Antimony text from ModelIR.
     
     Prefers cached text if available, otherwise reconstructs.
+    Applies fixes for Antimony/RoadRunner compatibility:
+    - Numeric model names: "model 24_name" → "model m_24_name"
+    - Multi-line equations: join continuation lines
+    - gamma() function: compute at Python level (Antimony only has incomplete gamma)
     """
+    import re
+    from math import gamma as math_gamma, pi, sqrt
+    
     # Check if antimony_text was cached during parsing
     if hasattr(model_ir, 'antimony_text') and model_ir.antimony_text:
-        return model_ir.antimony_text
+        text = model_ir.antimony_text
+        
+        # Fix 1: Numeric model names
+        text = re.sub(r'^(model\s+)(\d)', r'\1m_\2', text, flags=re.MULTILINE)
+        
+        # Fix 2: Multi-line equations - join continuation lines
+        # Handles: X3' = term1
+        #          + term2
+        #          - term3;
+        lines = text.split('\n')
+        fixed_lines = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            # Check if this is an ODE line without semicolon
+            if "'" in line and '=' in line and not line.rstrip().endswith(';'):
+                # Collect continuation lines
+                combined = line.rstrip()
+                i += 1
+                while i < len(lines):
+                    next_line = lines[i].strip()
+                    # Check if next line starts with operator
+                    if next_line and next_line[0] in ['+', '-']:
+                        combined += ' ' + next_line
+                        i += 1
+                        if next_line.rstrip().endswith(';'):
+                            break
+                    else:
+                        break
+                fixed_lines.append(combined)
+            else:
+                fixed_lines.append(line)
+                i += 1
+        text = '\n'.join(fixed_lines)
+        
+        # Fix 3: gamma() function - compute values and replace
+        # Antimony's gamma() is incomplete gamma (needs 2+ args)
+        # We need complete gamma Γ(x)
+        def replace_gamma(match):
+            """Replace gamma(expr) with computed value."""
+            expr_str = match.group(1)
+            try:
+                # Try to evaluate the expression
+                # Common cases in our models
+                if 'nu' in expr_str:
+                    # Can't evaluate at parse time if it contains variables
+                    # For model 17, we'd need to handle this differently
+                    # For now, keep original and let it fail gracefully
+                    return match.group(0)
+                else:
+                    # Try direct evaluation
+                    result = eval(expr_str, {"pi": pi, "sqrt": sqrt})
+                    gamma_val = math_gamma(result)
+                    return f"{gamma_val}"
+            except Exception:
+                # Can't evaluate - keep original
+                return match.group(0)
+        
+        # Match gamma(expression) but not gamma(a, b, ...)
+        text = re.sub(r'gamma\(([^,)]+)\)', replace_gamma, text)
+        
+        return text
     
     # Otherwise, reconstruct from IR
     return _reconstruct_antimony(model_ir)

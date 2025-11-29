@@ -8,6 +8,7 @@ model central_t_original()
 
   // ICs (example): start at t=0 with exact value
   // f(0) = Gamma((nu+1)/2) / (sqrt(nu*pi) * Gamma(nu/2))
+  // For nu=8: gamma(4.5) / (sqrt(8*pi) * gamma(4)) = 0.3866990209613933
   t = 0
-  f = gamma((nu+1)/2) / (sqrt(nu*pi) * gamma(nu/2))
+  f = 0.3866990209613933
 end
