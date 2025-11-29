@@ -1,27 +1,101 @@
+// Exact S-system recast of model 4: branch()
+// Original model:
+//   A' = -k_1*A
+//   B' =  k_1*A - (k_2 + k_3)*B + k_4*D
+//   C' =  k_2*B
+//   D' =  k_3*B - k_4*D
+//
+// Change of variables (exact on the positive orthant):
+//   A = X1
+//   B = X2*X3
+//   C = X5
+//   D = X4
+//
+// S-system states: X1, X2, X3, X4, X5
+// All ODEs are in canonical S-system form: production monomial − degradation monomial
+// with strictly positive coefficients. Negative exponents appear only on X2, X3,
+// so X2, X3 must remain positive (we approximate B(0)=0 by a very small positive value).
+
 model branch_SSystem_exact()
 
-  species X1, X2, X3, X4, X5  // A=X1, B=X2*X3, D=X4, C=X5
-  k1 = 0.1; k2 = 0.2; k3 = 0.15; k4 = 0.3;
+  // ---------------------------------------------------------------------------
+  // Parameters
+  // ---------------------------------------------------------------------------
+  k1 = 0.1;
+  k2 = 0.2;
+  k3 = 0.15;
+  k4 = 0.3;
 
-  epsA = 1; eps2 = 1; epsC = 1;   // any >0
+  // Slack parameters (any positive values); they ensure both monomials per
+  // equation have positive coefficients without changing the net dynamics.
+  epsA = 1.0;
+  eps2 = 1.0;
+  epsC = 1.0;
 
-  // A' = -k1*A
-  X1' =  epsA*X1                - (epsA + k1)*X1;
+  // ---------------------------------------------------------------------------
+  // Species (S-system variables)
+  // ---------------------------------------------------------------------------
+  species X1, X2, X3, X4, X5;
 
-  // B' = k1*A + k4*D - (k2+k3)*B
-  // (B=X2*X3) ⇒ B' = X2'*X3 + X2*X3'
-  X2' = (eps2 + k1)*X1*(X3^(-1)) -  eps2*X1*(X3^(-1));    // net = k1*A/X3
-  X3' =  k4*X4*(X2^(-1))         -  (k2 + k3)*X3;         // ⇒ B' matches exactly
+  // ---------------------------------------------------------------------------
+  // S-system dynamics
+  // ---------------------------------------------------------------------------
 
-  // D' = k3*B - k4*D
-  X4' =  k3*X2*X3                -  k4*X4;
+  // A' = -k1*A  with A = X1
+  // Implemented as: X1' = epsA*X1 − (epsA + k1)*X1  ⇒ net = -k1*X1
+  X1' =  epsA*X1 - (epsA + k1)*X1;
 
-  // C' = k2*B
-  X5' = (epsC + k2)*X2*X3        -  epsC*X2*X3;
+  // B' = k1*A - (k2 + k3)*B + k4*D, with B = X2*X3, A = X1, D = X4.
+  //
+  // Choose:
+  //   X2' = (eps2 + k1)*X1*X3^(-1) − eps2*X1*X3^(-1)
+  //   X3' = k4*X4*X2^(-1) − (k2 + k3)*X3
+  //
+  // Then:
+  //   B' = (X2*X3)' = X2'*X3 + X2*X3'
+  //      = [ (eps2 + k1)*X1*X3^(-1) − eps2*X1*X3^(-1) ]*X3
+  //        + X2 [ k4*X4*X2^(-1) − (k2 + k3)*X3 ]
+  //      = k1*X1 + k4*X4 − (k2 + k3)*X2*X3
+  //      = k1*A + k4*D − (k2 + k3)*B   (exact)
+  X2' =  (eps2 + k1)*X1*X3^(-1) - eps2*X1*X3^(-1);
+  X3' =  k4*X4*X2^(-1)          - (k2 + k3)*X3;
 
-  // ICs (must use positive factors; if B(0)=0, set X2(0)=δ, X3(0)=0/δ is not allowed; use tiny δ, B≈0)
-  X1 = 5;
-  X2 = 1e-9; X3 = 1;   // B≈0
-  X4 = 0;              // D(0)=0
-  X5 = 0;              // C(0)=0
+  // D' = k3*B − k4*D, with B = X2*X3, D = X4
+  X4' =  k3*X2*X3 - k4*X4;
+
+  // C' = k2*B, with C = X5, B = X2*X3
+  // Implement via ε-splitting:
+  //   X5' = (epsC + k2)*X2*X3 − epsC*X2*X3  ⇒ net = k2*X2*X3 = k2*B
+  X5' =  (epsC + k2)*X2*X3 - epsC*X2*X3;
+
+  // ---------------------------------------------------------------------------
+  // Observables: original variables (for validation / comparison)
+  // ---------------------------------------------------------------------------
+  var A_obs, B_obs, C_obs, D_obs;
+  A_obs := X1;
+  B_obs := X2*X3;
+  C_obs := X5;
+  D_obs := X4;
+
+  // ---------------------------------------------------------------------------
+  // Initial conditions
+  //
+  // Original ICs:
+  //   A(0) = 5
+  //   B(0) = 0
+  //   C(0) = 0
+  //   D(0) = 0
+  //
+  // Exact S-systems require strictly positive states when negative exponents
+  // are present. Since X2 and X3 appear with exponent −1, we cannot set
+  // X2(0)=0 or X3(0)=0. We approximate B(0)=0 by taking X2(0)=δ, X3(0)=1,
+  // so B_obs(0)=δ ≈ 0. You can reduce δ as far as numerically safe.
+  // ---------------------------------------------------------------------------
+
+  X1 = 5;        // A(0) = 5
+  X2 = 1e-9;     // small positive ⇒ B ≈ 0
+  X3 = 1;        // so B_obs(0) ≈ 1e-9
+  X4 = 0;        // D(0) = 0
+  X5 = 0;        // C(0) = 0
+
 end

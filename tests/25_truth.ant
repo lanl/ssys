@@ -1,82 +1,64 @@
-////////////////////////////////////////////////////////////////////////////////
-// 25_CSTR_truth.ant
-//
-// Savageau & Voit 1987, Section 5, Eq. (36)
-// Exact S-system recast of the CSTR example.
-//
-// Variable definitions used in the paper (Eq. (32)):
-//   X1 = Z1
-//   X2 = Z2
-//   X3 = 1 - Z1
-//   X4 = 1 - Z2
-//   X5 = c + Z2
-//   X6 = c + Z1
-//   X7 = exp( c Z2 / (c + Z2) )
-//   X8 = exp( c Z1 / (c + Z1) )
-//
-// In addition they introduce a parameter C (from constant terms due to b,a):
-//   C = a*b   (this is consistent with Z2' term decomposition).
-//
-// The S-system in Eq. (36) is:
-//
-//   X1' = 2 A X5^-1 X7 X8 - A X1 X3 X5
-//   X2' = C X4^-1 - (1 + b) X2
-//   X3' = 2 B X5^-1 X6 X8 - B X1 X3^2 X5^-1 X6 X8
-//   X4' = C X1 X3^2 X5^2 X8^2 - (1 + b) X1 X2 X3^2 X5^2 X8^2
-//   X5' = 2 B X1 X2 X3^2 X5^2 X8^-2 - B X1 X2 X3 X6^2 X7 X8^-2
-//   X6' = 2 B X2 X3 X5 X8^-1    - B X1 X2 X3 X4 X6 X8^-1
-//   X7' = (C/c) X1^-1           - ((1 + b)/c) X1 X2 X3 X4^-1
-//   X8' = (2 B/c) X1 X2 X4^-1   - (B/c) X1 X2 X3 X4 X6 X8^-1
-//
-// Below is that system encoded in Antimony, with ICs consistent
-// with Eq. (32) for given Z10,Z20,a,b,c.
-////////////////////////////////////////////////////////////////////////////////
+model 25_CSTR_SSystem_exact()
 
-model 25_CSTR_truth()
-
-  // Parameters (must match the general model)
+  // Parameters (same symbols as original)
   A   = 1;
   B   = 1;
   a   = 0.5;
   b   = 1;
   c   = 1;
-
-  // Derived constant used in the S-system (from constant term ab)
-  C   = a*b;
-
-  // Initial Z1,Z2 parameters to define the mapping
   Z10 = 0.2;
   Z20 = 0.2;
 
-  // S-system state variables
+  // Derived constant needed for exact matching:
+  // C = a*b + 2*(1 + b)
+  C := a*b + 2*(1 + b);
+
+  // States
   species X1, X2, X3, X4, X5, X6, X7, X8;
 
-  // S-system dynamics (Savageau & Voit 1987, Eq. (36))
-  X1' = 2*A*X5^-1*X7*X8 - A*X1*X3*X5;
-  X2' = C*X4^-1        - (1 + b)*X2;
-  X3' = 2*B*X5^-1*X6*X8 - B*X1*X3^2*X5^-1*X6*X8;
-  X4' = C*X1*X3^2*X5^2*X8^2 - (1 + b)*X1*X2*X3^2*X5^2*X8^2;
-  X5' = 2*B*X1*X2*X3^2*X5^2*X8^-2 - B*X1*X2*X3*X6^2*X7*X8^-2;
-  X6' = 2*B*X2*X3*X5*X8^-1        - B*X1*X2*X3*X4*X6*X8^-1;
-  X7' = (C/c)*X1^-1               - ((1 + b)/c)*X1*X2*X3*X4^-1;
-  X8' = (2*B/c)*X1*X2*X4^-1       - (B/c)*X1*X2*X3*X4*X6*X8^-1;
+  // S-system ODEs (each RHS is a difference of power-law monomials)
 
-  // Initial conditions derived from mapping (Eq. (32)):
-  //   X1(0) = Z10
-  //   X2(0) = Z20
-  //   X3(0) = 1 - Z10
-  //   X4(0) = 1 - Z20
-  //   X5(0) = c + Z20
-  //   X6(0) = c + Z10
-  //   X7(0) = exp(c Z20/(c + Z20))
-  //   X8(0) = exp(c Z10/(c + Z10))
-  X1 = Z10;
-  X2 = Z20;
-  X3 = 1 - Z10;
-  X4 = 1 - Z20;
-  X5 = c + Z20;
-  X6 = c + Z10;
-  X7 = exp(c*Z20/(c + Z20));
-  X8 = exp(c*Z10/(c + Z10));
+  // dX1/dt = 1/X2 - X1
+  X1' = X2^(-1) - X1;
+
+  // dX2/dt = 2 A X5 X6 / X1 - A X2 X5 X6
+  X2' = 2*A*X5*X6*X1^(-1) - A*X2*X5*X6;
+
+  // dX3/dt = C/X4 - (1 + b) X3
+  X3' = C*X4^(-1) - (1 + b)*X3;
+
+  // dX4/dt = 2 B X5 X6 / X3 - B X1 X2 X5 X6 / X3
+  X4' = 2*B*X5*X6*X3^(-1) - B*X1*X2*X5*X6*X3^(-1);
+
+  // dX5/dt = C X5 / (X7^2 X8^2) - (1 + b) X3 X4 X5 /(X7^2 X8^2)
+  X5' = C*X5*X7^(-2)*X8^(-2)
+      - (1 + b)*X3*X4*X5*X7^(-2)*X8^(-2);
+
+  // dX6/dt = 2 B X5 X6^2 / (X7^2 X8^2) - B X1 X2 X5 X6^2 / (X7^2 X8^2)
+  X6' = 2*B*X5*X6^2*X7^(-2)*X8^(-2)
+      - B*X1*X2*X5*X6^2*X7^(-2)*X8^(-2);
+
+  // dX7/dt = (C / c)/X8 - [(1 + b) / c] X3 X4 / X8
+  X7' = (C/c)*X8^(-1)
+      - ((1 + b)/c)*X3*X4*X8^(-1);
+
+  // dX8/dt = (2 B / c) X5 X6 / X7 - (B / c) X1 X2 X5 X6 / X7
+  X8' = (2*B/c)*X5*X6*X7^(-1)
+      - (B/c)*X1*X2*X5*X6*X7^(-1);
+
+  // Initial conditions (as given)
+  X1 = 1;
+  X2 = Z10 + 1;
+  X3 = 1;
+  X4 = Z20 + 2;
+  X5 = 1;
+  X6 = exp(c*Z20/(c + Z20));
+  X7 = 1;
+  X8 = (c + Z20)/c;
+
+  // Observables: original variables
+  var Z1_obs, Z2_obs;
+  Z1_obs := X1*X2 - 1;
+  Z2_obs := X3*X4 - 2;
 
 end

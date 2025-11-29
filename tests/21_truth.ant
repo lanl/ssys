@@ -1,38 +1,65 @@
 model Haldane_chemostat_GMA_exact()
 
-  // ===== States =====
-  species X, S, Y    // Y := KS + S + S^2/KI
-
-  // ===== Parameters (positive) =====
-  mu_max = 1.0; KS = 0.5; KI = 2.0;
-  Yxs = 0.5;
-  D = 0.1;  Sin = 5.0;
-
-  // ===== Exact GMA dynamics (no condensation) =====
-  // Original:
-  //   mu = mu_max * S / (KS + S + S^2/KI) = mu_max * S / Y
-  //   X' = (mu - D) X
-  //   S' = D(Sin - S) - (1/Yxs) mu X
+  // Exact GMA recast of:
+  //   mu := mu_max * S / (K_S + S + S^2 / K_I)
+  //   X' = (mu - D) * X
+  //   S' = D*(S_in - S) - (1/Y_xs)*mu*X
   //
-  // Rewritten as sums of power-law monomials:
-  X' =  mu_max * X * S * (Y^(-1))  -  D * X;
+  // Auxiliary variable:
+  //   Y = K_S + S + S^2 / K_I
+  // so that
+  //   mu = mu_max * S * Y^(-1)
+  //
+  // Then:
+  //   X' = mu_max * X * S * Y^(-1) - D * X
+  //   S' = D*S_in - D*S - (mu_max/Y_xs) * X * S * Y^(-1)
+  //
+  // and using Y = K_S + S + S^2/K_I ⇒ Y' = (1 + 2S/K_I) * S'
+  // gives, after expansion:
+  //
+  //   Y' =  D*S_in
+  //       + (2*D*S_in/K_I) * S
+  //       - D*S
+  //       - (2*D/K_I) * S^2
+  //       - (mu_max/Y_xs)        * X * S      * Y^(-1)
+  //       - (2*mu_max/(K_I*Y_xs))* X * S^2    * Y^(-1)
+  //
+  // Every term is a power-law monomial (constant coefficient × X^a S^b Y^c),
+  // so this is an exact GMA representation of the original system.
 
-  S' =  D * Sin
-      - D * S
-      - (mu_max / Yxs) * X * S * (Y^(-1));
+  // ===== States =====
+  species X, S, Y   // Y := K_S + S + S^2 / K_I
 
-  // Y = KS + S + S^2/KI  ⇒  Y' = (1 + 2S/KI) * S'
-  // Expand explicitly to keep GMA form (sum of monomials):
-  Y' =  D * Sin
-      + (2*D/KI) * S
+  // ===== Parameters (same as original) =====
+  mu_max = 1.0
+  K_S    = 0.5
+  K_I    = 2.0
+  Y_xs   = 0.5
+  D      = 0.1
+  S_in   = 5.0
+
+  // ===== GMA ODEs =====
+
+  // X' = mu_max * X * S * Y^(-1) - D * X
+  X' = mu_max * X * S * Y^(-1)
+     - D * X
+
+  // S' = D*S_in - D*S - (mu_max/Y_xs) * X * S * Y^(-1)
+  S' = D * S_in
+     - D * S
+     - (mu_max / Y_xs) * X * S * Y^(-1)
+
+  // Y' = (1 + 2S/K_I) * S'  (expanded into pure monomials)
+  Y' =  D * S_in
+      + (2*D*S_in / K_I) * S
       - D * S
-      - (2*D/KI) * (S^2)
-      - (mu_max / Yxs) * X * S * (Y^(-1))
-      - (2*mu_max / (KI*Yxs)) * X * (S^2) * (Y^(-1));
+      - (2*D / K_I) * S^2
+      - (mu_max / Y_xs) * X * S * Y^(-1)
+      - (2*mu_max / (K_I * Y_xs)) * X * S^2 * Y^(-1)
 
   // ===== Initial conditions (consistent with Y definition) =====
-  X = 0.1;
-  S = 4.0;
-  Y = KS + S + (S^2)/KI;   // = 0.5 + 4 + 16/2 = 12.5
+  X = 0.1
+  S = 4.0
+  Y = K_S + S + S^2 / K_I   // = 0.5 + 4 + 16/2 = 12.5
 
 end

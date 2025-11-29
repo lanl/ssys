@@ -1,27 +1,29 @@
 ////////////////////////////////////////////////////////////////////////////////
-// 24_scalarExpLog_truth.ant
+// 24_scalarExpLog_scaled_truth.ant
 //
-// Savageau & Voit 1987, Eqs. (16)–(17)
-// Exact S-system recast of dZ/dt = exp[(ln Z)^2] via two lifting steps.
+// Exact S-system recast of dZ/dt = k * exp[(ln Z)^2] via two lifting steps.
 // Variables:
 //   X1 = Z
 //   X2 = exp[(ln Z)^2]
 //   X3 = ln Z
 //
-// Final S-system (Eq. (17)):
-//   X1' = X2
-//   X2' = 2 X1^-1 X2^2 X3
-//   X3' = X1^-1 X2
+// Scaled S-system:
+//   X1' = k * X2
+//   X2' = 2*k * X1^-1 * X2^2 * X3
+//   X3' = k * X1^-1 * X2
 ////////////////////////////////////////////////////////////////////////////////
 
-model 24_scalarExpLog_truth()
+model 24_scalarExpLog_scaled_truth()
 
   species X1, X2, X3;
 
-  // S-system dynamics
-  X1' = X2;
-  X2' = 2*X1^-1*X2^2*X3;
-  X3' = X1^-1*X2;
+  // Time-scale parameter, consistent with original model
+  k = 0.04;
+
+  // S-system dynamics for the scaled model
+  X1' = k*X2;
+  X2' = 2*k*X1^-1*X2^2*X3;
+  X3' = k*X1^-1*X2;
 
   // Initial conditions corresponding to Z(0) = 2
   // X1(0) = Z(0)

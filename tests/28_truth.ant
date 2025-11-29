@@ -1,43 +1,39 @@
-model 28_truth()
+model 28_torus_SSystem_exact()
 
-  // ========================================================================
-  // Ground-truth GMA recast of the torus model
-  // ========================================================================
-  // Original system (in variables Z_1, Z_2, Z_3):
-  //   dZ_1/dt = -Z_2 - Z_1*Z_3 / sqrt(Z_1^2 + Z_2^2)
-  //   dZ_2/dt =  Z_1 - Z_2*Z_3 / sqrt(Z_1^2 + Z_2^2)
-  //   dZ_3/dt =  Z_1 / sqrt(Z_1^2 + Z_2^2)
-  //
-  // Lifted variables:
-  //   X_1 = Z_1
-  //   X_2 = Z_2
-  //   X_3 = Z_3
-  //   X_4 = sqrt(Z_1^2 + Z_2^2)
-  //
-  // Note: sqrt(Z_1^2 + Z_2^2) = X_4 ⇒ (Z_1^2 + Z_2^2) = X_4^2
-  // Using the identity:
-  //   X_4' = (X_1*X_1' + X_2*X_2') / X_4
-  // one obtains exactly:
-  //   X_4' = -X_3
-  //
-  // This 4D system is an exact GMA (power-law) representation of the
-  // original torus dynamics, suitable as ground-truth for recasting.
-  // ========================================================================
+  // Mapping:
+  //   X1 = Z_1
+  //   X2 = Z_2
+  //   X3 = Z_3
+  //   X4 = sqrt(Z_1^2 + Z_2^2)
 
-  species X_1, X_2, X_3, X_4;
+  species X1, X2, X3, X4;
+
+  // Dynamics (all RHSs are sums of power-law monomials):
+  // X1' = -X2 - X1*X3/X4
+  X1' = - X2 - X1*X3*X4^(-1);
+
+  // X2' =  X1 - X2*X3/X4
+  X2' =   X1 - X2*X3*X4^(-1);
+
+  // X3' =  X1/X4
+  X3' =   X1*X4^(-1);
+
+  // X4' = -X3
+  X4' = - X3;
 
   // Initial conditions corresponding to:
-  //   Z_1(0) = 3, Z_2(0) = 0, Z_3(0) = 0
-  //   X_4(0) = sqrt(Z_1(0)^2 + Z_2(0)^2) = 3
-  X_1 = 3;
-  X_2 = 0;
-  X_3 = 0;
-  X_4 = 3;
+  //   Z_1(0)=3, Z_2(0)=0, Z_3(0)=0
+  //   X4(0) = sqrt(3^2+0^2) = 3
+  X1 = 3;
+  X2 = 0;
+  X3 = 0;
+  X4 = 3;
 
-  // GMA ODEs (exactly equivalent to original torus system)
-  X_1' = -X_2 - X_1*X_3/X_4;
-  X_2' =  X_1 - X_2*X_3/X_4;
-  X_3' =  X_1/X_4;
-  X_4' = -X_3;
+  // Optional observables for the original variables
+  var Z_1_obs, Z_2_obs, Z_3_obs, r_obs;
+  Z_1_obs := X1;
+  Z_2_obs := X2;
+  Z_3_obs := X3;
+  r_obs   := X4;
 
 end

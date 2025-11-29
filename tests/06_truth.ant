@@ -1,19 +1,57 @@
+// Exact S-system recast of model `feedback`
+//
+// Original ODEs:
+//   dX1/dt = a - c*X2 - b*X1
+//   dX2/dt = b*X1 - b*X2
+//
+// Change of variables (on the same state space):
+//   X  := X1 + X2
+//   Y  := X2
+//
+// Then:
+//   X1 = X - Y
+//   X2 = Y
+//
+// In terms of (X, Y), the dynamics become:
+//
+//   X' = X1' + X2'
+//      = (a - c*X2 - b*X1) + (b*X1 - b*X2)
+//      = a - (b + c)*X2
+//      = a - (b + c)*Y
+//
+//   Y' = X2' = b*X1 - b*X2
+//      = b*(X - Y) - b*Y
+//      = b*X - 2*b*Y
+//
+// Both right-hand sides are now in canonical S-system form:
+//   X' = a * X^0*Y^0 - (b + c)*X^0*Y^1
+//   Y' = b * X^1*Y^0 - (2*b)*X^0*Y^1
+//
+// Mapping back via observables reproduces the original system exactly.
+
 model feedback_SSystem_exact()
 
-  species X1_, X2_, X3_, X4_, X5_   // X1 = X1_*X2_*X3_,  X2 = X4_*X5_
-  a = 5; b = 1; c = 4;
-  eps1 = 1; eps2 = 1; eps3 = 1; eps4 = 1; eps5 = 1;
+  // S-system state variables
+  species X, Y;
 
-  // X1' = a - b*X1 - c*X2  (enforced via product rule)
-  X1_' = (eps1 + a)* (X2_^(-1))*(X3_^(-1))  -  eps1*(X2_^(-1))*(X3_^(-1));
-  X2_' =  eps2*X2_                           -  (eps2 + b)*X2_;
-  X3_' =  eps3*(X1_^(-1))*(X2_^(-1))*X4_*X5_*c  -  (eps3 + c)*(X1_^(-1))*(X2_^(-1))*X4_*X5_;
+  // Parameters (same as original)
+  a = 5;
+  b = 1;
+  c = 4;
 
-  // X2' = b*X1 - b*X2
-  X4_' = (eps4 + b)*X1_*X2_*X3_* (X5_^(-1))  -  eps4*X1_*X2_*X3_* (X5_^(-1));
-  X5_' =  eps5*X5_                           -  (eps5 + b)*X5_;
+  // Canonical S-system dynamics
+  X' = a - (b + c)*Y;
+  Y' = b*X - 2*b*Y;
 
-  // ICs: choose all factors >0 (you used ~1e-9 for zeros; that’s fine)
-  X1_ = 1e-9; X2_ = 1; X3_ = 1;
-  X4_ = 1e-9; X5_ = 1;
+  // Observables: original variables reconstructed from S-system variables
+  var X1_obs, X2_obs;
+  X1_obs := X - Y;   // corresponds to original X_1
+  X2_obs := Y;       // corresponds to original X_2
+
+  // Initial conditions
+  // Original had X_1(0) = 0, X_2(0) = 0
+  // ⇒ X(0) = X_1(0) + X_2(0) = 0,  Y(0) = X_2(0) = 0
+  X = 0;
+  Y = 0;
+
 end

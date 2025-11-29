@@ -1,20 +1,15 @@
-////////////////////////////////////////////////////////////////////////////////
-// 24_scalarExpLog.ant
-//
-// Savageau & Voit 1987, Eq. (15)
-//   dZ/dt = exp[(ln Z)^2],  Z(0) = 2
-// Here we write it with natural log as log(Z) for SymPy compatibility.
-////////////////////////////////////////////////////////////////////////////////
+model 24_scalarExpLog_scaled()
 
-model 24_scalarExpLog()
-
-  // One-dimensional ODE with composite non–power-law RHS
+  // One-dimensional ODE with slowed dynamics
   species Z;
 
-  // Dynamics: Z' = exp[(log Z)^2]
-  Z' = exp((log(Z))^2);
+  // Time-scale parameter (dimension 1/time)
+  k = 0.04   // pick ~0.04–0.05; this moves blow-up from ~0.9 out to ~20
 
-  // Initial condition from the paper
+  // Dynamics: Z' = k * exp[(log Z)^2]
+  Z' = k * exp((log(Z))^2);
+
+  // Initial condition
   Z = 2;
 
 end

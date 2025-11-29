@@ -823,7 +823,27 @@ def create_auxiliary_for_denominator(
     return W, W_ode
 
 
-def lift_rational_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol, sp.Expr]]:
+def _is_composite_function_expr(expr: sp.Expr) -> bool:
+    """
+    Check if expression is a composite function (exp, log, sin, etc.) or contains one.
+    Returns True if expr is or contains a function application.
+    """
+    if isinstance(expr, sp.Function):
+        # Direct function application like exp(X), log(Y), sin(Z)
+        return True
+    if isinstance(expr, (sp.Add, sp.Mul)):
+        # Check if any subexpression is a function
+        for arg in expr.args:
+            if _is_composite_function_expr(arg):
+                return True
+    if isinstance(expr, sp.Pow):
+        # Check base (exponent can be numeric or symbolic parameter)
+        if _is_composite_function_expr(expr.args[0]):
+            return True
+    return False
+
+
+def lift_rational_functions(sym: SymSystem, composite_aux_defs: Optional[Dict[sp.Symbol, sp.Expr]] = None) -> Tuple[SymSystem, Dict[sp.Symbol, sp.Expr]]:
     """
     Augment system with auxiliary variables for all rational terms.
     
@@ -834,10 +854,14 @@ def lift_rational_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol, 
     1. First substitute all constant denominators with their numeric values
     2. Then lift dynamic denominators that depend on state variables
     3. Recursively repeat until no more rational functions remain
+    4. CRITICAL: Skip denominators that are:
+       a. Simple symbols (Z, Z_1, etc.) - use negative exponents directly
+       b. Composite functions (log(Z_1), exp(Z), etc.) - already power-law compatible
     
     For each unique non-trivial denominator D(X):
     - If D depends only on constants: substitute its numeric value directly
-    - If D depends on state variables:
+    - If D is a simple symbol or composite function: SKIP - use negative exponent directly
+    - If D is a complex algebraic expression:
        a. Create auxiliary Y = D (denominator itself)
        b. Add ODE: Y' = dD/dt
        c. Replace D with Y in all ODEs, use Y^(-1) for 1/D
@@ -846,6 +870,10 @@ def lift_rational_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol, 
     This produces exact S-system form with negative exponents.
     
     Returns augmented SymSystem with rational terms eliminated.
+    
+    Args:
+        sym: System to lift
+        composite_aux_defs: Definitions of composite function auxiliaries (to avoid re-lifting)
     """
     max_iterations = 10  # Prevent infinite loops
     iteration = 0
@@ -853,6 +881,14 @@ def lift_rational_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol, 
     
     # Accumulate ALL auxiliary definitions across iterations
     all_aux_defs: Dict[sp.Symbol, sp.Expr] = {}
+    
+    # Track which expressions are already lifted composite auxiliaries
+    # Build a set of lifted auxiliary expressions for fast checking
+    lifted_aux_exprs = set()
+    if composite_aux_defs:
+        for aux, defn in composite_aux_defs.items():
+            # Normalize the definition for comparison
+            lifted_aux_exprs.add(sp.simplify(defn))
     
     while iteration < max_iterations:
         iteration += 1
@@ -867,18 +903,29 @@ def lift_rational_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol, 
             # No more rational functions to lift
             break
         
-        # Separate denominators into constant vs. dynamic
+        # Separate denominators into constant vs. dynamic vs. simple state variables
         state_vars = set(sym.vars)
         const_denoms = set()  # denominators that depend only on constants
-        dynamic_denoms = set()  # denominators that depend on state variables
+        dynamic_denoms = set()  # denominators that depend on state variables AND need lifting
         
         for denom in all_denoms:
             denom_vars = denom.free_symbols & state_vars
             if not denom_vars:
                 # Denominator has no state variables - it's constant
                 const_denoms.add(denom)
+            elif isinstance(denom, sp.Symbol):
+                # Denominator is a simple symbol (state variable or parameter)
+                # S-systems naturally support negative exponents like Z^(-1) or Z_1^(-1)
+                # Skip this denominator - it will remain as a negative exponent
+                # This applies to both original variables AND lifted auxiliaries
+                continue
+            elif _is_composite_function_expr(denom):
+                # Denominator is or contains a composite function (log(Z), exp(X), etc.)
+                # These are power-law compatible through negative exponents
+                # Skip - use negative exponent directly (e.g., log(Z_1)^-1)
+                continue
             else:
-                # Denominator involves state variables - needs lifting
+                # Denominator is a complex algebraic expression - needs lifting
                 dynamic_denoms.add(denom)
         
         # First, substitute constant denominators with their numeric values
@@ -907,9 +954,20 @@ def lift_rational_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol, 
         
         # Now create auxiliary symbols only for dynamic denominators
         # Y = D (denominator itself, not reciprocal)
+        # CRITICAL: Skip denominators that are already lifted composite auxiliaries
         denom_to_aux: Dict[sp.Expr, sp.Symbol] = {}
         
         for denom in sorted(dynamic_denoms, key=str):
+            # Check if this denominator is already a lifted composite auxiliary
+            # Normalize for comparison
+            denom_normalized = sp.simplify(denom)
+            
+            if denom_normalized in lifted_aux_exprs:
+                # This denominator is already a lifted auxiliary - SKIP
+                # Use negative exponent directly (e.g., log(Z_1)^-1)
+                continue
+            
+            # Not a lifted auxiliary - create new Y auxiliary
             Y = sp.symbols(f"Y_{aux_counter}", positive=True)
             denom_to_aux[denom] = Y
             all_aux_defs[Y] = denom  # Accumulate definitions
@@ -1078,6 +1136,83 @@ def add_dummy_for_constants(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol, 
     )
 
 
+def _build_composite_inverse_mappings(
+    func_to_aux: Dict[sp.Expr, sp.Symbol],
+    func_to_offset: Dict[sp.Expr, float],
+    original_vars: List[sp.Symbol]
+) -> Dict[sp.Expr, sp.Expr]:
+    """
+    Build comprehensive inverse mappings for nested composite functions.
+    
+    This handles cases like:
+    - If Z_1 = exp(Z_2^2) and Z_2 = log(Z), then log(Z_1) = Z_2^2
+    - If Z_2 = log(Z), then Z = exp(Z_2), 1/Z = exp(-Z_2), Z^(-n) = exp(-n*Z_2)
+    
+    Args:
+        func_to_aux: Mapping from composite functions to their auxiliary symbols
+        func_to_offset: Mapping from functions to their offsets (for sin/cos)
+        original_vars: List of original variable symbols
+    
+    Returns:
+        Dictionary mapping composite expressions to their simplified forms
+    """
+    inverse_map: Dict[sp.Expr, sp.Expr] = {}
+    
+    # Build mappings for each auxiliary variable
+    for func, aux_sym in func_to_aux.items():
+        offset = func_to_offset.get(func, 0.0)
+        
+        # Handle exp functions: if aux = exp(arg), then log(aux) = arg AND exp(arg) = aux
+        if func.func == sp.exp and offset == 0:
+            arg = func.args[0]
+            # CRITICAL: Add forward mapping: exp(arg) -> aux
+            # This allows us to recognize exp(Z_2^2) as Z_1 directly
+            inverse_map[func] = aux_sym
+            
+            # log(aux) = arg
+            inverse_map[sp.log(aux_sym)] = arg
+            
+            # If arg is another auxiliary or expression, try to expand further
+            # For example: if Z_1 = exp(Z_2^2), then log(Z_1) = Z_2^2
+            # This happens automatically since arg = Z_2^2
+            
+        # Handle log functions: if aux = log(var), then exp(aux) = var and 1/var = exp(-aux)
+        elif func.func == sp.log and offset == 0:
+            arg = func.args[0]
+            
+            # Check if arg is an original variable (single symbol)
+            if isinstance(arg, sp.Symbol) and arg in original_vars:
+                # aux = log(var) => var = exp(aux)
+                inverse_map[arg] = sp.exp(aux_sym)
+                
+                # CRITICAL: Add all power forms of the original variable
+                # var^(-1) = exp(-aux)
+                inverse_map[arg**(-1)] = sp.exp(-aux_sym)
+                # Also handle 1/var explicitly (sympy might not always convert to Pow)
+                inverse_map[1/arg] = sp.exp(-aux_sym)
+                
+                # Add common negative powers: var^(-2), var^(-3), etc.
+                for n in range(2, 6):
+                    inverse_map[arg**(-n)] = sp.exp(-n*aux_sym)
+    
+    # Handle nested cases: if we have both Z_1 = exp(f(Z_2)) and Z_2 = log(Z)
+    # Then we need to recognize that log(Z_1) should be expressed in terms of Z_2
+    for func1, aux1 in func_to_aux.items():
+        if func1.func == sp.exp and func_to_offset.get(func1, 0.0) == 0:
+            arg1 = func1.args[0]
+            # Check if arg1 contains other auxiliaries
+            for func2, aux2 in func_to_aux.items():
+                if aux2 in arg1.free_symbols:
+                    # arg1 contains aux2
+                    # So aux1 = exp(expr(aux2))
+                    # Therefore log(aux1) = expr(aux2)
+                    # We already have inverse_map[log(aux1)] = arg1
+                    # which is correct since arg1 = expr(aux2)
+                    pass
+    
+    return inverse_map
+
+
 def _requires_positivity_transform(func: sp.Expr) -> Tuple[bool, float]:
     """
     Check if function requires positivity transformation (X = Z + c).
@@ -1178,19 +1313,10 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
         func_to_offset[func] = 0.0  # No offset for exp, log, etc.
         aux_counter += 1
     
-    # Substitute auxiliaries in original ODEs with offsets
-    new_odes: Dict[sp.Symbol, sp.Expr] = {}
-    for var, ode in sym.odes.items():
-        new_ode = ode
-        for func, Z in func_to_aux.items():
-            offset = func_to_offset[func]
-            if offset > 0:
-                # Replace f(X) with (Z - offset)
-                new_ode = new_ode.replace(func, Z - offset)
-            else:
-                # No offset - direct substitution
-                new_ode = new_ode.replace(func, Z)
-        new_odes[var] = sp.simplify(new_ode)
+    # CRITICAL: DO NOT substitute auxiliaries in original ODEs yet
+    # We need the original functions present for the chain rule to work correctly
+    # Keep original ODEs unchanged for now
+    new_odes: Dict[sp.Symbol, sp.Expr] = dict(sym.odes)
     
     # Compute Z' using coupled derivatives for sin/cos
     new_aux_odes: Dict[sp.Symbol, sp.Expr] = {}
@@ -1220,45 +1346,125 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
         Z_cos_ode = (2 - Z_sin) * arg_prime
         new_aux_odes[Z_cos] = sp.simplify(Z_cos_ode)
     
+    # Collect all variables that have ODEs at this point:
+    # - Original variables (from sym.vars)
+    # - Newly created sin/cos auxiliaries (keys in new_aux_odes)
+    all_vars_with_odes = list(sym.vars) + list(new_aux_odes.keys())
+    
     # Handle other functions with standard chain rule
     for func in other_functions:
         Z = func_to_aux[func]
         
         # Compute df/dt using chain rule: df/dt = sum_i (∂f/∂X_i) * dX_i/dt
         func_prime = sp.Integer(0)
-        for var in sym.vars:
+        # CRITICAL FIX: Use all_vars_with_odes which includes ALL variables with ODEs
+        # (original variables + sin/cos auxiliaries created earlier)
+        for var in all_vars_with_odes:
             if var in func.free_symbols:
                 partial = sp.diff(func, var)
-                # Use the NEW (lifted) ODE for var
-                func_prime += partial * new_odes[var]
+                
+                # Use the ODE for var (either from new_odes or new_aux_odes)
+                var_ode = new_odes.get(var) or new_aux_odes.get(var)
+                if var_ode is not None:
+                    # Compute the chain rule term
+                    term = partial * var_ode
+                    
+                    # Replace composite functions with auxiliaries AFTER multiplication
+                    # Use .subs() instead of .replace() to handle algebraic simplifications
+                    # (e.g., exp(2*x) = exp(x)^2)
+                    subs_map = {}
+                    for other_func, other_Z in func_to_aux.items():
+                        offset = func_to_offset[other_func]
+                        if offset > 0:
+                            subs_map[other_func] = other_Z - offset
+                        else:
+                            subs_map[other_func] = other_Z
+                    term = term.subs(subs_map)
+                    
+                    func_prime += term
         
-        # CRITICAL: Substitute ALL composite functions (including func itself) with auxiliaries
-        # This ensures expressions like k*exp(X*k)*Z_1 become k*Z_1^2
+        # Store the computed ODE
         Z_ode = func_prime
         
-        # First pass: replace all composite functions with their auxiliaries
+        # CRITICAL: Final expansion and simplification pass
+        # Expand products and collect like terms
+        Z_ode = sp.expand(Z_ode)
+        
+        # Replace any remaining instances of composite functions with auxiliaries
+        # Use .subs() instead of .replace() to handle algebraic simplifications
+        subs_map = {}
         for other_func, other_Z in func_to_aux.items():
             offset = func_to_offset[other_func]
             if offset > 0:
-                # Replace with (Z - offset) for sin/cos
-                Z_ode = Z_ode.replace(other_func, other_Z - offset)
+                subs_map[other_func] = other_Z - offset
             else:
-                # Direct replacement for exp/log/etc
-                Z_ode = Z_ode.replace(other_func, other_Z)
+                subs_map[other_func] = other_Z
+        Z_ode = Z_ode.subs(subs_map)
+        
+        Z_ode = sp.simplify(Z_ode)
+        
+        # CRITICAL: DO NOT apply inverse mappings to eliminate original variables
+        # This violates the chain rule and creates incorrect dynamics.
+        # The chain rule derivation MUST keep original variables in the auxiliary ODEs.
+        # 
+        # Example: For Z' = k*exp((log(Z))^2) with auxiliaries:
+        #   Z_1 = exp((log(Z))^2)
+        #   Z_2 = log(Z)
+        # The correct ODEs are:
+        #   Z_1' = Z_1 * 2*Z_2 * Z_2'  (chain rule with Z, not with exp(Z_2))
+        #        = Z_1 * 2*Z_2 * (1/Z * Z')
+        #        = Z_1 * 2*Z_2 * (1/Z * k*Z_1)
+        #        = 2*k * Z^(-1) * Z_1^2 * Z_2  ✓ Correct
+        #
+        # If we substitute Z → exp(Z_2), we get:
+        #   Z_1' = Z_1 * 2*Z_2 * (1/exp(Z_2) * k*Z_1)
+        #        = 2*k * exp(-Z_2) * Z_1^2 * Z_2
+        #        = ... (becomes -k*Z_1^3 after simplification) ✗ Wrong!
+        #
+        # The inverse mappings break the chain rule relationships.
         
         new_aux_odes[Z] = sp.simplify(Z_ode)
+    
+    # NOW substitute composite functions with auxiliaries ONLY in original ODEs
+    # This must happen AFTER computing all auxiliary ODEs via chain rule
+    # CRITICAL: Do NOT modify auxiliary ODEs - they are already correct from chain rule
+    for var in new_odes.keys():
+        new_ode = new_odes[var]
+        
+        # Use .subs() instead of .replace() to handle algebraic simplifications
+        subs_map = {}
+        for func, Z in func_to_aux.items():
+            offset = func_to_offset[func]
+            if offset > 0:
+                subs_map[func] = Z - offset
+            else:
+                subs_map[func] = Z
+        new_ode = new_ode.subs(subs_map)
+        
+        new_odes[var] = sp.simplify(new_ode)
     
     # Combine original and auxiliary ODEs
     combined_odes = {**new_odes, **new_aux_odes}
     
     # Compute initial conditions for auxiliaries with offsets
     new_initials = dict(sym.initials)
+    # Combine original and auxiliary ODEs
+    combined_odes = {**new_odes, **new_aux_odes}
+    
+    # Compute initial conditions for auxiliaries with offsets (before recursive lifting)
+    new_initials = dict(sym.initials)
     for func, Z in func_to_aux.items():
         # Evaluate function at t=0
         func_at_0 = func
+        # First substitute state variables
         for var in sym.vars:
             if var in func.free_symbols:
                 func_at_0 = func_at_0.subs(var, sym.initials.get(var, 1.0))
+        # Then substitute parameters - use actual symbols from expression
+        for param_sym in func_at_0.free_symbols:
+            param_name = param_sym.name
+            if param_name in sym.params:
+                func_at_0 = func_at_0.subs(param_sym, sym.params[param_name])
         # Z(0) = f(X(0)) + offset
         offset = func_to_offset[func]
         try:
@@ -1280,6 +1486,118 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
         else:
             # Z = f(X) (no offset)
             aux_to_func_with_offset[Z] = func
+    
+    # FOURTH PASS: Recursively lift any NEW composite functions introduced by inverse mappings
+    # This handles cases where inverse mappings create expressions like exp(-Z_2)
+    # which are mathematically correct but still contain composite functions
+    max_recursive_lifts = 3  # Prevent infinite loops
+    for recursive_iteration in range(max_recursive_lifts):
+        # Scan all ODEs for remaining composite functions
+        has_composite = False
+        all_new_functions = set()
+        for var, ode in combined_odes.items():
+            funcs = find_composite_functions(ode)
+            if funcs:
+                has_composite = True
+                all_new_functions.update(funcs)
+        
+        if not has_composite:
+            break  # All ODEs are now in power-law form
+        
+        # Found composite functions - recursively lift them
+        # CRITICAL: Find max Z_n index to avoid duplicate names in recursive call
+        max_z_index = 0
+        for var in combined_odes.keys():
+            var_name = var.name if hasattr(var, 'name') else str(var)
+            # Check for Z_n pattern
+            if var_name.startswith('Z_'):
+                try:
+                    index = int(var_name.split('_')[1])
+                    max_z_index = max(max_z_index, index)
+                except (ValueError, IndexError):
+                    pass
+        
+        # Create temporary system and manually rename composite functions to avoid conflicts
+        current_vars = list(combined_odes.keys())
+        temp_sym = SymSystem(
+            vars=current_vars,
+            params=sym.params,
+            odes=combined_odes,
+            initials=new_initials,
+            initial_exprs=sym.initial_exprs
+        )
+        
+        # Recursively lift and manually adjust auxiliary names to continue from max_z_index
+        temp_sym, new_comp_aux_defs = lift_composite_functions(temp_sym)
+        
+        # Rename recursively created auxiliaries to avoid conflicts
+        # Map Z_1, Z_2, ... from recursive call to Z_{max+1}, Z_{max+2}, ...
+        rename_map: Dict[sp.Symbol, sp.Symbol] = {}
+        counter = 1
+        for var in temp_sym.vars:
+            if var not in current_vars:  # This is a newly created auxiliary
+                var_name = var.name if hasattr(var, 'name') else str(var)
+                if var_name.startswith('Z_'):
+                    try:
+                        old_index = int(var_name.split('_')[1])
+                        new_index = max_z_index + counter
+                        new_var = sp.Symbol(f"Z_{new_index}", positive=True)
+                        rename_map[var] = new_var
+                        counter += 1
+                    except (ValueError, IndexError):
+                        pass
+        
+        # Apply renaming to ODEs, initials, and auxiliary definitions
+        if rename_map:
+            # Rename in ODEs
+            renamed_odes = {}
+            for var, ode in temp_sym.odes.items():
+                new_var = rename_map.get(var, var)
+                new_ode = ode
+                for old, new in rename_map.items():
+                    new_ode = new_ode.subs(old, new)
+                renamed_odes[new_var] = new_ode
+            
+            # Rename in initials
+            renamed_initials = {}
+            for var, val in temp_sym.initials.items():
+                new_var = rename_map.get(var, var)
+                renamed_initials[new_var] = val
+            
+            # Rename in auxiliary definitions
+            renamed_aux_defs = {}
+            for aux, defn in new_comp_aux_defs.items():
+                new_aux = rename_map.get(aux, aux)
+                new_defn = defn
+                for old, new in rename_map.items():
+                    new_defn = new_defn.subs(old, new)
+                renamed_aux_defs[new_aux] = new_defn
+            
+            # Update results - CRITICAL: deduplicate variables to avoid duplicate entries
+            # Use a dict to preserve order while removing duplicates
+            seen_vars = {}
+            for var in renamed_odes.keys():
+                if var not in seen_vars:
+                    seen_vars[var] = True
+            new_vars = list(seen_vars.keys())
+            
+            combined_odes = renamed_odes
+            new_initials = renamed_initials
+            # CRITICAL FIX: Only add auxiliary definitions for NEW auxiliaries
+            # Don't overwrite existing definitions with recursive call results
+            for aux, defn in renamed_aux_defs.items():
+                if aux not in aux_to_func_with_offset:
+                    aux_to_func_with_offset[aux] = defn
+        else:
+            # No renaming needed
+            new_vars = temp_sym.vars
+            combined_odes = temp_sym.odes
+            new_initials = temp_sym.initials
+            # CRITICAL FIX: Only add auxiliary definitions for NEW auxiliaries
+            # Don't overwrite existing definitions with recursive call results  
+            for aux, defn in new_comp_aux_defs.items():
+                if aux not in aux_to_func_with_offset:
+                    aux_to_func_with_offset[aux] = defn
     
     # Return augmented system and auxiliary definitions
     return (
@@ -1458,7 +1776,8 @@ def recast_to_ssystem(sym: 'SymSystem', mode: str = "simplified") -> 'RecastResu
     all_auxiliary_defs.update(composite_aux_defs)
     
     # Then lift rational functions (1/(X+1), etc.)
-    sym, rational_aux_defs = lift_rational_functions(sym)
+    # Pass composite_aux_defs to prevent re-lifting composite functions
+    sym, rational_aux_defs = lift_rational_functions(sym, composite_aux_defs)
     all_auxiliary_defs.update(rational_aux_defs)
     
     # Handle constant terms: skip dummy variable in simplified mode for cleaner output
@@ -1472,6 +1791,51 @@ def recast_to_ssystem(sym: 'SymSystem', mode: str = "simplified") -> 'RecastResu
     
     # Identify lifted auxiliaries (those added during lifting)
     lifted_vars = set(sym.vars) - original_vars
+    
+    # CRITICAL: For composite function systems, DO NOT apply inverse mappings
+    # Inverse mappings violate the chain rule by rewriting original variables in terms
+    # of auxiliaries (e.g., Z → exp(Z_2)), which changes the functional relationships
+    # and breaks mathematical equivalence.
+    #
+    # For composite systems, auxiliary ODEs are computed via chain rule during lifting,
+    # and they MUST remain in terms of original variables to preserve the dynamics.
+    #
+    # Only apply inverse mappings for rational/algebraic auxiliaries (Y = f(X) identity)
+    has_composite_aux = any(
+        isinstance(defn, (sp.log, sp.exp, sp.sin, sp.cos)) or 
+        (defn.is_Add and any(isinstance(arg, (sp.log, sp.exp, sp.sin, sp.cos)) for arg in defn.args))
+        for defn in all_auxiliary_defs.values()
+    )
+    
+    if lifted_vars and all_auxiliary_defs and not has_composite_aux:
+        # Only apply inverse mappings for non-composite systems (rational/identity mappings)
+        # Build inverse map: original_var -> expression in terms of auxiliaries
+        orig_to_aux_expr = {}
+        
+        # For identity mappings: if Y_1 = Z (simple symbol equality)
+        for aux, defn in all_auxiliary_defs.items():
+            if aux in lifted_vars and isinstance(defn, sp.Symbol) and defn in original_vars:
+                # Y_1 = Z => can substitute Y_1 for Z in other ODEs
+                # But this is an identity, so no substitution needed
+                pass
+        
+        # Apply inverse mappings (currently empty for composite systems)
+        if orig_to_aux_expr:
+            new_odes = {}
+            for var, ode in sym.odes.items():
+                new_ode = ode.subs(orig_to_aux_expr)
+                new_odes[var] = sp.simplify(new_ode)
+            
+            new_vars = list(sym.vars)
+            new_initials = dict(sym.initials)
+            
+            sym = SymSystem(
+                vars=new_vars,
+                params=sym.params,
+                odes=new_odes,
+                initials=new_initials,
+                initial_exprs=sym.initial_exprs
+            )
     
     # Always attempt canonical S-system recast
     if lifted_vars:
@@ -1569,11 +1933,19 @@ def _direct_ssystem_recast(sym: 'SymSystem', original_vars: Set[sp.Symbol], mode
     factor_map: Dict[sp.Symbol, List[sp.Symbol]] = {}
     state_vars = set(sym.vars)
     
+    # CRITICAL: Deduplicate variables to avoid duplicate entries in output
+    # Use dict to preserve order while removing duplicates
+    seen_vars = {}
+    for var in sym.vars:
+        if var not in seen_vars:
+            seen_vars[var] = True
+    deduplicated_vars = list(seen_vars.keys())
+    
     # Check if any ODE has multiple terms with different exponent patterns
     # If so, we need GMA format, not canonical S-system
     needs_gma = False
     
-    for var in sorted(sym.vars, key=lambda s: s.name):
+    for var in sorted(deduplicated_vars, key=lambda s: s.name):
         new_variables.append(var)
         
         # Get ODE - keep parameters symbolic
@@ -1902,8 +2274,22 @@ def product_to_antimony(coeff, exps: Dict[sp.Symbol, float]) -> str:
             else:
                 parts.append(f"{s_name}^{e:g}")
     
+    # Special case: if parts is empty, return the coefficient string
+    # This handles pure constants like "1" (coeff=1, exps={})
     if not parts:
-        return "0"
+        # If we have a non-zero coefficient but no variables, return coefficient as string
+        if isinstance(coeff, sp.Expr):
+            coeff_simplified = sp.simplify(coeff)
+            if coeff_simplified == 0:
+                return "0"
+            else:
+                return str(coeff_simplified)
+        else:
+            # Numeric coefficient
+            if coeff == 0.0:
+                return "0"
+            else:
+                return f"{coeff:g}"
     return "*".join(parts)
 
 

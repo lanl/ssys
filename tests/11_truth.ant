@@ -5,7 +5,7 @@ model Monod_chemostat_GMA_exact()
   // Parameters (carry-over)
   alpha1 = 1.0;   // max specific growth rate
   beta2  = 0.5;   // alpha1 / Y (yield-based), treated independent
-  Xr     = 2.0;   // reservoir substrate (normalized)
+  X_r     = 2.0;   // reservoir substrate (normalized)
 
   // States
   species X1, X2, Y;   // Y := 1 + X2
@@ -15,13 +15,13 @@ model Monod_chemostat_GMA_exact()
   X1' =  alpha1 * X1 * X2 * (Y^(-1))
        - 1 * X1;
 
-  // X2' = Xr - X2 - beta2 * X1 * X2 / (1 + X2)
-  X2' =  Xr
+  // X2' = X_r - X2 - beta2 * X1 * X2 / (1 + X2)
+  X2' =  X_r
        - 1 * X2
        - beta2 * X1 * X2 * (Y^(-1));
 
   // Ancillary identity (exact): Y = 1 + X2  ⇒  Y' = X2'
-  Y'  =  Xr
+  Y'  =  X_r
        - 1 * X2
        - beta2 * X1 * X2 * (Y^(-1));
 
