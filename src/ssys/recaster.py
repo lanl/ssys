@@ -2439,6 +2439,11 @@ def ssystem_to_antimony(result, model_name: str = "recast", mode: str = "simplif
             - 'simplified': Basic format with comments
             - 'canonical': Enhanced format with species declarations, observables, and detailed comments
     """
+    # CRITICAL: Antimony identifiers cannot start with numbers
+    # Prefix with 'm_' if name starts with digit
+    if model_name and model_name[0].isdigit():
+        model_name = f"m_{model_name}"
+    
     # Check if recasting failed
     if result.status == RecastStatus.FAILED:
         return _failed_to_antimony(result, model_name)
