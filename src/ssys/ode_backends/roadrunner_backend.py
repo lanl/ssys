@@ -204,6 +204,13 @@ def _reconstruct_antimony(model_ir: ModelIR) -> str:
             )
         lines.append("")
     
+    # Explicit rate rules (ODEs)
+    if model_ir.explicit_rates:
+        lines.append("  // ODEs")
+        for species, rate_expr in model_ir.explicit_rates.items():
+            lines.append(f"  {species}' = {rate_expr};")
+        lines.append("")
+    
     lines.append("end")
     return "\n".join(lines)
 
