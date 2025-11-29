@@ -5,8 +5,8 @@ model SIR_SSystem_exact()
 
   // Parameters (from original)
   S0 = 20000000
-  beta = 5e-8
-  gamma = 1/7
+  beta_rate = 5e-8
+  gamma_rate = 1/7
 
   // Canonical S-system requires two monomials per ODE with positive coefficients.
   // Use arbitrary positive "slack" epsilons; dynamics are unchanged.
@@ -14,9 +14,9 @@ model SIR_SSystem_exact()
   epsR = 1.0   // for R'
 
   // Dynamics (each: production monomial − degradation monomial)
-  S' =  epsS * S * I        -  (epsS + beta) * S * I;   // net = -beta*S*I
-  I' =  beta * S * I        -  gamma * I;               // already two monomials
-  R' =  (gamma + epsR) * I  -  epsR * I;                // net =  gamma*I
+  S' =  epsS * S * I        -  (epsS + beta_rate) * S * I;   // net = -beta_rate*S*I
+  I' =  beta_rate * S * I        -  gamma_rate * I;               // already two monomials
+  R' =  (gamma_rate + epsR) * I  -  epsR * I;                // net =  gamma_rate*I
 
   // Initial conditions (NYC-scale)
   S = 19999999
