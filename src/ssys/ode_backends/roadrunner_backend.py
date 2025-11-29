@@ -49,9 +49,12 @@ def simulate_with_roadrunner(
         # Get or reconstruct Antimony text
         antimony_text = _get_antimony_text(model_ir)
         
-        # Build RoadRunner model
+        # Build RoadRunner model from Antimony text
+        # CRITICAL: Use loadAntimonyModel() for Antimony text, not load()
+        # load() expects a file path, loadAntimonyModel() expects
+        # Antimony source code
         r = rr.RoadRunner()
-        r.load(antimony_text)
+        r.loadAntimonyModel(antimony_text)
         
         # Configure integrator
         integrator_name = options.get("integrator", "cvode")
