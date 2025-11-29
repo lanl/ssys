@@ -510,6 +510,9 @@ class RecastValidator:
         for name in all_params | all_species:
             canon[name] = sp.Symbol(name, positive=True)
         
+        # Store canonical symbols for later use (e.g., in numerical validation)
+        self.canonical_symbols = canon
+        
         # Helper to rename all symbols in an expression
         def rename_expr(expr):
             subs = {s: canon[s.name] for s in expr.free_symbols if s.name in canon}
@@ -881,7 +884,8 @@ class RecastValidator:
                 # Compute auxiliary variables from their definitions
                 for idx, var in auxiliary_vars:
                     var_name = str(var)
-                    aux_def = self.auxiliary_defs[sp.Symbol(var_name)]
+                    # Use the canonical symbol (var) directly as the key
+                    aux_def = self.auxiliary_defs[var]
                     
                     # Evaluate auxiliary definition
                     # Need to substitute current values of independent variables
@@ -1004,7 +1008,8 @@ class RecastValidator:
             
             # Extract parameter values from recast IR
             param_values = self.recast_ir.params
-            param_symbols = [sp.Symbol(name) for name in sorted(param_values.keys())]
+            # Use canonical symbols instead of creating new ones
+            param_symbols = [self.canonical_symbols[name] for name in sorted(param_values.keys())]
             param_vals_ordered = [param_values[str(sym)] for sym in param_symbols]
             
             # Build Φ as a vector
@@ -1080,7 +1085,8 @@ class RecastValidator:
                 # Compute auxiliary variables from their definitions
                 for idx, var in auxiliary_vars:
                     var_name = str(var)
-                    aux_def = self.auxiliary_defs[sp.Symbol(var_name)]
+                    # Use the canonical symbol (var) directly as the key
+                    aux_def = self.auxiliary_defs[var]
                     
                     # Evaluate auxiliary definition
                     # Need to substitute current values of independent variables
