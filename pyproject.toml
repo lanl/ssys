@@ -51,6 +51,13 @@ notebook = [
     "jupyter>=1.0",
     "ipython>=8.12",
 ]
+sbml = [
+    "python-libsbml>=5.20",
+]
+simulation = [
+    "libroadrunner>=2.5",
+    "python-libsbml>=5.20",
+]
 
 [project.urls]
 Homepage = "https://lisdi-git.lanl.gov/hlavacek/ssys"
