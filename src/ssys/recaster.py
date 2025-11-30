@@ -190,6 +190,235 @@ def parse_antimony(text: str) -> ModelIR:
     return ir
 
 
+def parse_sbml(sbml_path: str) -> 'SymSystem':
+    """
+    Parse an SBML file and return a SymSystem for recasting.
+    
+    Uses libSBML to extract:
+    - Species (state variables) and boundary species (constants)
+    - Parameters with values
+    - Reactions with stoichiometry and kinetic laws
+    - Computes ODEs as dX/dt = sum(stoich * rate) for each species
+    
+    This bypasses the Antimony parser and works with complex SBML models
+    that may have features incompatible with our simple Antimony parser.
+    
+    Args:
+        sbml_path: Path to SBML file (.xml)
+    
+    Returns:
+        SymSystem ready for recasting
+    
+    Raises:
+        ImportError: If python-libsbml is not installed
+        ValueError: If SBML file cannot be parsed or has no model
+    """
+    try:
+        import libsbml
+    except ImportError:
+        raise ImportError(
+            "python-libsbml is required for SBML parsing. "
+            "Install with: pip install python-libsbml"
+        )
+    
+    # Read SBML file
+    doc = libsbml.readSBML(sbml_path)
+    
+    # Check for errors
+    if doc.getNumErrors() > 0:
+        errors = []
+        for i in range(doc.getNumErrors()):
+            err = doc.getError(i)
+            if err.getSeverity() >= libsbml.LIBSBML_SEV_ERROR:
+                errors.append(err.getMessage())
+        if errors:
+            raise ValueError(f"SBML parsing errors: {'; '.join(errors)}")
+    
+    model = doc.getModel()
+    if model is None:
+        raise ValueError(f"No model found in SBML file: {sbml_path}")
+    
+    # ========================================================================
+    # STEP 1: Extract species information
+    # ========================================================================
+    species_info: Dict[str, Dict] = {}
+    boundary_species: Set[str] = set()
+    
+    for i in range(model.getNumSpecies()):
+        sp_obj = model.getSpecies(i)
+        sid = sp_obj.getId()
+        bc = sp_obj.getBoundaryCondition()
+        
+        # Get initial value (prefer amount over concentration)
+        if sp_obj.isSetInitialAmount():
+            init = sp_obj.getInitialAmount()
+        elif sp_obj.isSetInitialConcentration():
+            init = sp_obj.getInitialConcentration()
+        else:
+            init = 0.0
+        
+        species_info[sid] = {'bc': bc, 'init': init}
+        if bc:
+            boundary_species.add(sid)
+    
+    # ========================================================================
+    # STEP 2: Extract parameters (global and local)
+    # ========================================================================
+    params: Dict[str, float] = {}
+    
+    # Global parameters
+    for i in range(model.getNumParameters()):
+        p = model.getParameter(i)
+        pid = p.getId()
+        if p.isSetValue():
+            params[pid] = p.getValue()
+        else:
+            params[pid] = 0.0
+    
+    # Local parameters (from kinetic laws)
+    for i in range(model.getNumReactions()):
+        rxn = model.getReaction(i)
+        kl = rxn.getKineticLaw()
+        if kl:
+            for j in range(kl.getNumParameters()):
+                lp = kl.getParameter(j)
+                lpid = lp.getId()
+                if lp.isSetValue():
+                    params[lpid] = lp.getValue()
+                else:
+                    params[lpid] = 0.0
+    
+    # ========================================================================
+    # STEP 3: Extract compartments
+    # ========================================================================
+    compartments: Dict[str, float] = {}
+    for i in range(model.getNumCompartments()):
+        c = model.getCompartment(i)
+        cid = c.getId()
+        if c.isSetSize():
+            compartments[cid] = c.getSize()
+        else:
+            compartments[cid] = 1.0
+    
+    # ========================================================================
+    # STEP 4: Build SymPy symbol dictionary
+    # ========================================================================
+    all_syms: Dict[str, sp.Symbol] = {}
+    
+    # Time symbol
+    all_syms['time'] = sp.Symbol('time', positive=True)
+    all_syms['t'] = sp.Symbol('t', positive=True)  # Alias for time
+    
+    # Species symbols
+    for sid in species_info:
+        all_syms[sid] = sp.Symbol(sid, positive=True)
+    
+    # Parameter symbols
+    for pid in params:
+        all_syms[pid] = sp.Symbol(pid, positive=True)
+    
+    # Compartment symbols
+    for cid in compartments:
+        all_syms[cid] = sp.Symbol(cid, positive=True)
+    
+    # ========================================================================
+    # STEP 5: Compute ODEs from reactions
+    # ========================================================================
+    # Initialize ODEs for floating species only (not boundary)
+    odes: Dict[sp.Symbol, sp.Expr] = {}
+    for sid, info in species_info.items():
+        if not info['bc']:
+            odes[all_syms[sid]] = sp.Integer(0)
+    
+    # Process each reaction
+    for i in range(model.getNumReactions()):
+        rxn = model.getReaction(i)
+        kl = rxn.getKineticLaw()
+        
+        if not kl:
+            continue
+        
+        # Get rate law as infix string
+        math = kl.getMath()
+        if math is None:
+            continue
+        
+        formula_str = libsbml.formulaToString(math)
+        
+        # Parse rate expression
+        try:
+            rate_expr = sp.sympify(formula_str, locals=all_syms)
+        except Exception as e:
+            # Skip reactions with unparseable rate laws
+            continue
+        
+        # Process reactants (subtract from ODE)
+        for j in range(rxn.getNumReactants()):
+            ref = rxn.getReactant(j)
+            sid = ref.getSpecies()
+            stoich = ref.getStoichiometry()
+            
+            if sid in species_info and not species_info[sid]['bc']:
+                var_sym = all_syms[sid]
+                odes[var_sym] -= stoich * rate_expr
+        
+        # Process products (add to ODE)
+        for j in range(rxn.getNumProducts()):
+            ref = rxn.getProduct(j)
+            sid = ref.getSpecies()
+            stoich = ref.getStoichiometry()
+            
+            if sid in species_info and not species_info[sid]['bc']:
+                var_sym = all_syms[sid]
+                odes[var_sym] += stoich * rate_expr
+    
+    # ========================================================================
+    # STEP 6: Handle rate rules (explicit ODEs defined in SBML)
+    # ========================================================================
+    for i in range(model.getNumRules()):
+        rule = model.getRule(i)
+        
+        if rule.getTypeCode() == libsbml.SBML_RATE_RULE:
+            var_id = rule.getVariable()
+            formula_str = libsbml.formulaToString(rule.getMath())
+            
+            if var_id in all_syms:
+                try:
+                    rate_expr = sp.sympify(formula_str, locals=all_syms)
+                    var_sym = all_syms[var_id]
+                    # Rate rules replace the reaction-based ODE
+                    odes[var_sym] = rate_expr
+                except Exception:
+                    pass
+    
+    # ========================================================================
+    # STEP 7: Build SymSystem
+    # ========================================================================
+    # Variables (floating species with ODEs)
+    vars_list = list(odes.keys())
+    
+    # Initial conditions
+    initials: Dict[sp.Symbol, float] = {}
+    for sid, info in species_info.items():
+        if sid in all_syms:
+            initials[all_syms[sid]] = float(info['init'])
+    
+    # Add compartment values to params (they're effectively constants)
+    for cid, cval in compartments.items():
+        if cid not in params:
+            params[cid] = cval
+    
+    # Simplify ODEs
+    simplified_odes = {var: sp.simplify(ode) for var, ode in odes.items()}
+    
+    return SymSystem(
+        vars=vars_list,
+        params=params,
+        odes=simplified_odes,
+        initials=initials
+    )
+
+
 def _resolve_parameter_dependencies(ir: ModelIR) -> None:
     """
     Resolve parameter dependencies by evaluating expressions iteratively.
