@@ -106,12 +106,17 @@ def simulate_with_roadrunner(
         t = result[:, 0]
         y = result[:, 1:]
         
-        # Get species names - combine independent and dependent species
-        # (RoadRunner 2.8.0 doesn't have getFloatingSpeciesIds())
-        state_names = (
-            list(r.getIndependentFloatingSpeciesIds()) +
-            list(r.getDependentFloatingSpeciesIds())
-        )
+        # Get species names from result column headers
+        # CRITICAL: This ensures state_names match the actual column order
+        # in the simulation result (getFloatingSpeciesIds() may not match!)
+        col_names = list(result.colnames)  # e.g., ['time', 'S', 'I', 'R']
+        state_names = col_names[1:]  # Skip 'time' column
+        
+        # Strip brackets if present (RoadRunner sometimes uses [species])
+        state_names = [
+            name.strip('[]') if name.startswith('[') else name 
+            for name in state_names
+        ]
         
         # Get integrator statistics
         stats = {}
@@ -228,6 +233,10 @@ def _get_antimony_text(model_ir: ModelIR) -> str:
         
         # Match gamma(expression) but not gamma(a, b, ...)
         text = re.sub(r'gamma\(([^,)]+)\)', replace_gamma, text)
+        
+        # Fix 4: Exponentiation syntax - convert ** to ^
+        # Python/SymPy uses ** for exponentiation, Antimony uses ^
+        text = text.replace('**', '^')
         
         return text
     

@@ -8,10 +8,11 @@ model tryptophan_operon()
   species X_1, X_2, X_3;
 
   // Independent variables (constants)
-  X_4 = 0.003;     // regulator
-  X_5 = 1.0;       // auxiliary factor
-  X_6 = 2000.0;    // saturation scale
-  X_7 = 1000.0;    // growth/excretion factor
+  X_4 = 0.05;     // regulator
+  X_5 = 0.5;       // auxiliary factor
+  X_6 = 50.0;    // saturation scale
+  X_7 = 150.0;    // growth/excretion factor
+  tau = 0.1;
 
   // Dynamics via original rational-rate definitions (Eq. 42)
   // v1 = (X_3 + 1) / (1 + (1 + X_5) * X_3)
@@ -23,16 +24,12 @@ model tryptophan_operon()
   // v7 = 0.0022 * X_3 * X_5 / (1 + X_3)
   // v8 = (1 - 7.5*X_4) * X_3 * X_7 / (X_3 + 0.005)
 
-  X_1' = (X_3 + 1)/(1 + (1 + X_5)*X_3) - (0.9 + X_4)*X_1;
-  X_2' = (0.9 + X_4)*X_1 - (X_1);
-  X_3' = -(X_1) - (0.02 + X_4)*X_2
-        - ( (X_3**2 * X_6**2) / (X_6**2 + X_3**2) )
-        - (X_3*X_4)
-        + (0.0022 * X_3 * X_5)/(1 + X_3)
-        + ( (1 - 7.5*X_4) * X_3 * X_7 )/(X_3 + 0.005);
+  X_1' = tau*((X_3 + 1)/(1 + (1 + X_5)*X_3) - (0.9 + X_4)*X_1);
+  X_2' = tau*((0.9 + X_4)*X_1 - (X_1));
+  X_3' = tau*(-(X_1) - (0.02 + X_4)*X_2 - ((X_3^2 * X_6^2)/(X_6^2 + X_3^2)) - (X_3*X_4) + (0.0022 * X_3 * X_5)/(1 + X_3) + ((1 - 7.5*X_4) * X_3 * X_7)/(X_3 + 0.005));
 
   // Initial conditions
-  X_1 = 0.185;
-  X_2 = 7.99;
-  X_3 = 100.0;
+  X_1 = 2;
+  X_2 = 12;
+  X_3 = 25.0;
 end

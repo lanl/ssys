@@ -11,9 +11,9 @@ model feedback()
   X_2 = 0
 
   // parameters
-  a = 5
-  b = 1
-  c = 4
+  a = 1
+  b = 0.2
+  c = 0.8
 
   // reactions (mass-action style)
   // 0 -> X_1  with rate a - c*X_2

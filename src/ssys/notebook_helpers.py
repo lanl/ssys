@@ -141,24 +141,23 @@ def parse_antimony_odes(antimony_text):
 
 
 def _beautify_latex(latex_str):
-    """
-    Apply beautification rules to LaTeX string.
+    r"""Apply beautification rules to LaTeX string.
+    
     Single source of truth: the Antimony file.
     Only cosmetic improvements, no restructuring.
     
     Rules applied in order:
-    1. Greek letter conversion (alpha, beta, gamma, mu, etc.)
-    2. epsilon conversion (eps → ε)
-    3. Subscripting (k1 → k_1, but not Greek letters)
-    4. Variable reordering (constants before variables)
+    1. Handle compound names with Greek prefixes (gamma_rate → \gamma_{rate})
+    2. Handle subscripts (Name_suffix → Name_{suffix})
+    3. Convert standalone Greek letters
+    4. Convert decimal exponents to fractions
+    5. Auto-subscript single letter + digits (k1 → k_1)
     """
     import re
     
-    # 1. Convert Greek letter names to LaTeX symbols
-    # Must do this BEFORE subscripting to avoid mangling
     greek_letters = {
         'alpha': r'\alpha', 'beta': r'\beta', 'gamma': r'\gamma',
-        'delta': r'\delta', 'epsilon': r'\varepsilon', 'zeta': r'\zeta',
+        'delta': r'\delta', 'epsilon': r'\epsilon', 'zeta': r'\zeta',
         'eta': r'\eta', 'theta': r'\theta', 'iota': r'\iota',
         'kappa': r'\kappa', 'lambda': r'\lambda', 'mu': r'\mu',
         'nu': r'\nu', 'xi': r'\xi', 'pi': r'\pi',
@@ -167,53 +166,186 @@ def _beautify_latex(latex_str):
         'psi': r'\psi', 'omega': r'\omega'
     }
     
+    # Build pattern for Greek letter names
+    greek_pattern = '|'.join(greek_letters.keys())
+    
+    # Step 1: Handle Greek_suffix patterns (e.g., gamma_rate → \gamma_{rate})
+    # This must be done BEFORE general subscript handling
+    def greek_with_suffix(match):
+        greek_name = match.group(1)
+        suffix = match.group(2)
+        greek_symbol = greek_letters.get(greek_name, greek_name)
+        return greek_symbol + "_{" + suffix + "}"
+    
+    latex_str = re.sub(
+        r'\b(' + greek_pattern + r')_([a-zA-Z_][a-zA-Z0-9_]*)',
+        greek_with_suffix,
+        latex_str
+    )
+    
+    # Also handle Greek + digit (no underscore): alpha1 → \alpha_{1}
+    def greek_with_digit(match):
+        greek_name = match.group(1)
+        digits = match.group(2)
+        greek_symbol = greek_letters.get(greek_name, greek_name)
+        return greek_symbol + "_{" + digits + "}"
+    
+    latex_str = re.sub(
+        r'\b(' + greek_pattern + r')(\d+)\b',
+        greek_with_digit,
+        latex_str
+    )
+    
+    # Step 2: Handle Name_suffix patterns (multi-char subscripts)
+    # Patterns like: S_in, Y_xs, mu_max, k_m_1, E_T
+    # Convert to: S_{in}, Y_{xs}, mu_{max}, k_{m_1}, E_{T}
+    def subscript_compound(match):
+        base = match.group(1)
+        suffix = match.group(2)
+        return f"{base}_{{{suffix}}}"
+    
+    # Match: word_suffix where suffix is alphanumeric (including underscores)
+    # But NOT if base is a single letter followed by digits only (handled later)
+    latex_str = re.sub(
+        r'\b([A-Za-z][A-Za-z0-9]*)_([A-Za-z][A-Za-z0-9_]*)\b',
+        subscript_compound,
+        latex_str
+    )
+    
+    # Also handle single letter with any suffix: S_in, X_r, Z_1, etc.
+    # But NOT inside braces (already processed content)
+    latex_str = re.sub(
+        r'(?<!\{)\b([A-Za-z])_([A-Za-z0-9][A-Za-z0-9_]*)\b',
+        subscript_compound,
+        latex_str
+    )
+    
+    # Handle single letter with single digit subscript: Z_1 → Z_{1}
+    # But NOT if the underscore is already inside braces
+    # Use negative lookbehind for { and positive lookbehind for word boundary
+    def safe_subscript(match):
+        # Check if we're inside braces by looking at context
+        base = match.group(1)
+        suffix = match.group(2)
+        return f"{base}_{{{suffix}}}"
+    
+    # Only match at start of string or after non-brace character
+    latex_str = re.sub(
+        r'(?<![{\w])([A-Za-z])_(\d+)\b',
+        safe_subscript,
+        latex_str
+    )
+    
+    # Step 3: Convert standalone Greek letters (not already escaped)
+    # Only match when NOT followed by underscore (those were handled above)
     for name, symbol in greek_letters.items():
-        # Use word boundaries to avoid partial matches
-        # But SKIP if already escaped (i.e., preceded by backslash)
-        # Negative lookbehind: don't match if preceded by \
-        latex_str = re.sub(rf'(?<!\\)\b{name}\b', lambda m: symbol, latex_str)
+        # Match Greek name at word boundary, not followed by underscore
+        # Use lambda to avoid backslash interpretation issues
+        latex_str = re.sub(
+            r'(?<!\\)\b' + name + r'\b(?!_)',
+            lambda m, s=symbol: s,
+            latex_str
+        )
     
-    # 2. Replace 'eps' with epsilon (if not already escaped)
-    latex_str = latex_str.replace(r'\varepsilon', r'\epsilon')
-    # Replace eps with epsilon only if not already escaped
-    latex_str = re.sub(r'(?<!\\)\beps\b', lambda m: '\\epsilon', latex_str)
+    # Step 4: Replace 'eps' with epsilon (if not already escaped)
+    latex_str = re.sub(r'(?<!\\)\beps\b(?!_)', r'\\epsilon', latex_str)
     
-    # 3. Convert common decimal exponents to fractions
-    # 0.666... → 2/3, 0.333... → 1/3, 0.5 → 1/2, etc.
+    # Step 5: Convert common decimal exponents to fractions
     def decimal_to_frac(match):
         val = float(match.group(1))
-        # Check common fractions
-        fracs = {
-            0.5: '1/2', -0.5: '-1/2',
-            0.333333: '1/3', -0.333333: '-1/3',
-            0.666666: '2/3', -0.666666: '-2/3',
-            0.25: '1/4', -0.25: '-1/4',
-            0.75: '3/4', -0.75: '-3/4',
-            0.2: '1/5', -0.2: '-1/5',
-            0.4: '2/5', -0.4: '-2/5',
-            0.6: '3/5', -0.6: '-3/5',
-            0.8: '4/5', -0.8: '-4/5',
-        }
-        for frac_val, frac_str in fracs.items():
-            if abs(val - frac_val) < 0.0001:
+        fracs = [
+            (1/2, '1/2'), (-1/2, '-1/2'),
+            (1/3, '1/3'), (-1/3, '-1/3'),
+            (2/3, '2/3'), (-2/3, '-2/3'),
+            (1/4, '1/4'), (-1/4, '-1/4'),
+            (3/4, '3/4'), (-3/4, '-3/4'),
+            (1/5, '1/5'), (-1/5, '-1/5'),
+            (2/5, '2/5'), (-2/5, '-2/5'),
+            (3/5, '3/5'), (-3/5, '-3/5'),
+            (4/5, '4/5'), (-4/5, '-4/5'),
+        ]
+        for frac_val, frac_str in fracs:
+            if abs(val - frac_val) < 1e-4:
                 return '^{' + frac_str + '}'
-        # Return as-is if not a common fraction
         return match.group(0)
     
     latex_str = re.sub(r'\^{(-?\d+\.\d+)}', decimal_to_frac, latex_str)
     
-    # 3. Auto-subscript: letter + number (but skip if it's part of Greek)
-    # Only subscript patterns like k1, K2, d1, etc.
-    def subscript_params(match):
-        param = match.group(0)
-        base = param[0]
-        suffix = param[1:]
-        return f"{base}_{{{suffix}}}"
+    # Step 6: Auto-subscript single letter + digit(s) ONLY
+    # Pattern: k1, K2, d1 → k_{1}, K_{2}, d_{1}
+    # But NOT if already has subscript braces
+    def subscript_letter_digit(match):
+        letter = match.group(1)
+        digits = match.group(2)
+        return f"{letter}_{{{digits}}}"
     
-    # Pattern: single letter + digit(s)
-    latex_str = re.sub(r'\b([a-zA-Z])(\d+)\b', subscript_params, latex_str)
+    # Only match if NOT already subscripted (not preceded by _{ )
+    latex_str = re.sub(r'(?<!_)\b([a-zA-Z])(\d+)\b', subscript_letter_digit, latex_str)
     
     return latex_str
+
+
+def _simplify_exponent_content(content):
+    """Simplify content inside an exponent.
+    
+    - Convert X.0 to X (e.g., 1.0 → 1, -2.0 → -2)
+    - Clean up spacing
+    """
+    import re
+    
+    # Convert decimal integers to integers: 1.0 → 1, -2.0 → -2
+    content = re.sub(r'(\d+)\.0\b', r'\1', content)
+    
+    # Clean up spacing around operators
+    content = content.strip()
+    
+    return content
+
+
+def _antimony_to_latex_direct(expr_str):
+    """
+    Convert Antimony expression string directly to LaTeX without sympy evaluation.
+    
+    This preserves the EXACT structure of the expression, including:
+    - Parentheses groupings
+    - Term ordering
+    - Operator placement
+    
+    Only applies cosmetic improvements (Greek letters, subscripts).
+    """
+    import re
+    
+    result = expr_str
+    
+    # Step 0: Pre-process - convert X.0 to X throughout (1.0 → 1, etc.)
+    result = re.sub(r'(\d+)\.0\b', r'\1', result)
+    
+    # Step 1a: Handle symbolic exponents in parentheses: ^(a - 1) → ^{a - 1}
+    # Must be done BEFORE numeric exponent handling
+    def process_paren_exponent(match):
+        content = match.group(1)
+        # Simplify the content
+        content = _simplify_exponent_content(content)
+        return f'^{{{content}}}'
+    
+    result = re.sub(r'\^\(([^)]+)\)', process_paren_exponent, result)
+    
+    # Step 1b: Convert Antimony ^ to LaTeX ^ with grouping for numeric exponents
+    # Handle ALL exponents: integers, negatives, AND decimals
+    # Pattern: ^-1, ^2, ^0.5, ^-0.333333, etc.
+    result = re.sub(r'\^(-?\d+\.?\d*)', lambda m: f'^{{{m.group(1)}}}', result)
+    
+    # Step 1c: Handle symbolic exponents without parentheses: ^n, ^a, ^-n
+    # Pattern: ^symbol or ^-symbol (single word identifier)
+    result = re.sub(r'\^(-?[a-zA-Z_]\w*)', lambda m: f'^{{{m.group(1)}}}', result)
+    
+    # Step 2: Convert * to space (implicit multiplication in LaTeX)
+    result = result.replace('*', ' ')
+    
+    # Step 3: Apply beautification (Greek letters, subscripts, fraction conversion)
+    result = _beautify_latex(result)
+    
+    return result
 
 
 def latex_ssys_from_antimony(antimony_text):
@@ -221,58 +353,24 @@ def latex_ssys_from_antimony(antimony_text):
     Generate LaTeX for S-system equations from Antimony file.
     
     CRITICAL: The Antimony file is the single source of truth.
-    This function only converts it to LaTeX format with minimal
-    cosmetic improvements. NO restructuring or reorganization.
+    This function converts Antimony directly to LaTeX WITHOUT using sympy
+    to parse/evaluate expressions. This preserves the exact structure
+    including term ordering like (epsilon + 1) - epsilon.
     """
     odes = parse_antimony_odes(antimony_text)
     
     if not odes:
         return "\\text{(No ODEs found)}"
     
-    # Extract all variable names and create symbol dictionary
-    # This is critical for sympify to parse the expressions correctly
-    import re
-    all_vars = set()
-    
-    # Get all variable names from LHS
-    for var_name, rhs in odes:
-        all_vars.add(var_name)
-    
-    # Extract potential variable names from RHS expressions
-    # Match patterns like X_1, epsilon, k1, etc.
-    for var_name, rhs in odes:
-        # Find all identifier-like tokens
-        tokens = re.findall(r'\b[A-Za-z_]\w*\b', rhs)
-        all_vars.update(tokens)
-    
-    # Create symbol dictionary for sympify
-    # Include common parameters and epsilon
-    symbol_dict = {name: sp.symbols(name, positive=True) for name in all_vars}
-    
     rows = []
     for var_name, rhs in odes:
-        try:
-            # Direct conversion: Antimony string → sympy → LaTeX
-            # CRITICAL: Pass locals so sympify knows about all variables
-            rhs_expr = sp.sympify(rhs, locals=symbol_dict)
-            rhs_latex = sp.latex(rhs_expr)
-            
-            # Remove line breaks that sympy adds (we want single-line equations)
-            rhs_latex = rhs_latex.replace(' \\\\', '')
-            rhs_latex = rhs_latex.replace('\\\\', '')
-            
-            # Apply cosmetic beautification only
-            rhs_latex = _beautify_latex(rhs_latex)
-            
-            # Variable name to LaTeX
-            var_latex = _beautify_latex(sp.latex(sp.Symbol(var_name)))
-            
-            rows.append(f"\\dot{{{var_latex}}} &= {rhs_latex}")
-        except Exception as e:
-            # Fallback: format as-is without \text (we're already in math mode)
-            # Just escape special characters and use the raw expression
-            rhs_escaped = rhs.replace('_', r'\_')
-            rows.append(rf"\dot{{{var_name}}} &= {rhs_escaped}")
+        # Direct string conversion - no sympy parsing
+        rhs_latex = _antimony_to_latex_direct(rhs)
+        
+        # Variable name to LaTeX (just beautify it)
+        var_latex = _beautify_latex(var_name)
+        
+        rows.append(f"\\dot{{{var_latex}}} &= {rhs_latex}")
     
     # Join with proper LaTeX line break (double backslash + newline)
     return "\\begin{aligned}\n" + " \\\\\n".join(rows) + "\n\\end{aligned}"
@@ -471,6 +569,10 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400,
     display(Markdown("**Recast ODEs (LaTeX)**"))
     display(Markdown("$$\n" + latex_ssys_from_antimony(rec_text) + "\n$$"))
 
+    # Initialize state name lists for column mapping (will be populated by simulation)
+    orig_state_names = []
+    rec_state_names = []
+    
     # Choose simulation method based on solver parameter
     if solver in ("roadrunner", "rk4"):
         # Use ODE backend abstraction
@@ -487,9 +589,13 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400,
             y0 = [float(sym.initials[s]) for s in var_syms]
             f_orig = build_rhs_from_sympy(var_syms, rhs_exprs, params)
             t_orig, y_orig = rk4(f_orig, (0.0, T), y0, steps)
+            # For RK4 fallback, use alphabetical ordering
+            orig_state_names = [str(s) for s in var_syms]
         else:
             t_orig = result_orig["t"]
             y_orig = result_orig["y"]
+            # Get state names from simulation result for correct column mapping
+            orig_state_names = result_orig.get("state_names", [])
         
         # Build recast IR for simulation
         recast_ir = ssys.parse_antimony(rec_text)
@@ -520,9 +626,13 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400,
             aux_y0 = [float(rec.initials[s]) for s in aux_syms]
             f_rec = build_rhs_from_sympy(aux_syms, rec_rhs, params)
             t_rec, y_rec = rk4(f_rec, (0.0, T), aux_y0, steps)
+            # For RK4 fallback, use alphabetical ordering
+            rec_state_names = [str(s) for s in aux_syms]
         else:
             t_rec = result_rec["t"]
             y_rec = result_rec["y"]
+            # Get state names from simulation result for correct column mapping
+            rec_state_names = result_rec.get("state_names", [])
             # CRITICAL FIX: Use actual symbols from rec.variables instead of recreating from strings
             # This ensures symbol identity matches for plotting factor_map
             aux_syms = list(sorted(rec.variables, key=lambda s: s.name))
@@ -530,12 +640,26 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400,
         raise ValueError(f"Unknown solver: {solver}. Choose 'rk4' or 'roadrunner'.")
     
     var_syms = sorted(sym.odes.keys(), key=lambda s: s.name)
+    
+    # Build column index maps from state_names (if available from RoadRunner)
+    # This fixes the ordering mismatch between alphabetical sort and Antimony definition order
+    if orig_state_names:
+        orig_name_to_idx = {name: i for i, name in enumerate(orig_state_names)}
+    else:
+        orig_name_to_idx = {str(s): i for i, s in enumerate(var_syms)}
+    
+    if rec_state_names:
+        rec_name_to_idx = {name: i for i, name in enumerate(rec_state_names)}
+    else:
+        rec_name_to_idx = {str(s): i for i, s in enumerate(aux_syms)}
 
     fig, axes = plt.subplots(1, 2, figsize=(9, 3), dpi=120, sharey=True)
 
     ax = axes[0]
-    for i, s in enumerate(var_syms):
-        ax.plot(t_orig, y_orig[:, i], label=str(s))
+    for s in var_syms:
+        idx = orig_name_to_idx.get(str(s))
+        if idx is not None:
+            ax.plot(t_orig, y_orig[:, idx], label=str(s))
     ax.set_title("Original system", fontsize=10)
     ax.set_xlabel("t", fontsize=9)
     ax.set_ylabel("state", fontsize=9)
@@ -544,15 +668,19 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400,
 
     ax = axes[1]
     if rec.factor_map:
-        aux_idx = {s: i for i, s in enumerate(aux_syms)}
+        # Use rec_name_to_idx for correct column mapping
         for k, factors in sorted(rec.factor_map.items(), key=lambda kv: kv[0].name):
             prod = np.ones(y_rec.shape[0], dtype=float)
             for s in factors:
-                prod *= y_rec[:, aux_idx[s]]
+                idx = rec_name_to_idx.get(str(s))
+                if idx is not None:
+                    prod *= y_rec[:, idx]
             ax.plot(t_rec, prod, label=str(k), linestyle='--')
     else:
-        for i, s in enumerate(aux_syms):
-            ax.plot(t_rec, y_rec[:, i], label=str(s), linestyle='--')
+        for s in aux_syms:
+            idx = rec_name_to_idx.get(str(s))
+            if idx is not None:
+                ax.plot(t_rec, y_rec[:, idx], label=str(s), linestyle='--')
     
     ax.set_title("Reconstructed from recast", fontsize=10)
     ax.set_xlabel("t", fontsize=9)

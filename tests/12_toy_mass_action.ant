@@ -8,17 +8,18 @@ model toy_mass_action()
   // We rename parameters for clarity: a = gamma1 + gamma3, b = gamma2, c = gamma4.
 
   species X1, X2;
-  a = 1.2;   // net coefficient on X1*X2
-  b = 0.3;   // coefficient on X1^2*X2
-  c = 0.1;   // coefficient on X1^2
+  a = 0.15;   // net coefficient on X1*X2
+  b = 0.03;   // coefficient on X1^2*X2
+  c = 0.01;   // coefficient on X1^2
+  k = 0.5;
 
   // Dynamics (original system prior to S-system recast)
   X1' = a*X1*X2 - b*X1^2*X2 - c*X1^2;
-  X2' = X1 - X2;
+  X2' = X1 - k*X2;
 
   // Initial conditions (placeholders)
-  X1 = 0.5;
-  X2 = 0.4;
+  X1 = 1.0;
+  X2 = 3.0;
 
   // Notes:
   // * This is the unreduced, original form implied by the text; Voit then introduces X3, X4 with X1 = X3*X4

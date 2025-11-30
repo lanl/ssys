@@ -72,6 +72,18 @@ class ModelIR:
     initial_exprs: Dict[str, str] = field(default_factory=dict)  # Store initial condition expressions
     antimony_text: str = ""  # Cache original Antimony text for RoadRunner
 
+def _antimony_to_sympy_syntax(expr_str: str) -> str:
+    """Convert Antimony exponentiation syntax (^) to Python/SymPy syntax (**)."""
+    # Simple string replacement is safe because ^ is XOR in Python (not exponentiation)
+    # and Antimony uses ^ for exponentiation, not XOR
+    return expr_str.replace('^', '**')
+
+
+def _sympy_to_antimony_syntax(expr_str: str) -> str:
+    """Convert Python/SymPy exponentiation syntax (**) to Antimony syntax (^)."""
+    return expr_str.replace('**', '^')
+
+
 def parse_antimony(text: str) -> ModelIR:
     ir = ModelIR()
     ir.antimony_text = text  # Cache original text for RoadRunner
@@ -106,6 +118,8 @@ def parse_antimony(text: str) -> ModelIR:
             rhs_list = tokenize_species_side(rhs) if rhs else []
             for _, nm in lhs_list + rhs_list:
                 ir.species.add(nm)
+            # Convert Antimony ^ syntax to SymPy ** syntax for rate expression
+            rate_expr = _antimony_to_sympy_syntax(rate_expr)
             ir.reactions.append(Reaction(rxn_name, lhs_list, rhs_list, rate_expr))
             continue
 
@@ -119,7 +133,8 @@ def parse_antimony(text: str) -> ModelIR:
                 if stmt.strip().startswith("$"):
                     ir.boundary.add(sp_name)
                 ir.species.add(sp_name)
-                ir.explicit_rates[sp_name] = expr
+                # Convert Antimony ^ syntax to SymPy ** syntax for rate expression
+                ir.explicit_rates[sp_name] = _antimony_to_sympy_syntax(expr)
                 continue
 
             # parameter/initial assignment: X = 2.5
@@ -957,7 +972,14 @@ def lift_rational_functions(sym: SymSystem, composite_aux_defs: Optional[Dict[sp
         # Now create auxiliary symbols only for dynamic denominators
         # Y = D (denominator itself, not reciprocal)
         # CRITICAL: Skip denominators that are already lifted composite auxiliaries
+        # ALSO: Skip denominators that already have an auxiliary from previous iterations
         denom_to_aux: Dict[sp.Expr, sp.Symbol] = {}
+        
+        # Build reverse lookup: normalized_denom -> existing auxiliary
+        existing_denom_to_aux: Dict[sp.Expr, sp.Symbol] = {}
+        for aux, defn in all_aux_defs.items():
+            defn_normalized = sp.simplify(defn)
+            existing_denom_to_aux[defn_normalized] = aux
         
         for denom in sorted(dynamic_denoms, key=str):
             # Check if this denominator is already a lifted composite auxiliary
@@ -969,22 +991,32 @@ def lift_rational_functions(sym: SymSystem, composite_aux_defs: Optional[Dict[sp
                 # Use negative exponent directly (e.g., log(Z_1)^-1)
                 continue
             
-            # Not a lifted auxiliary - create new Y auxiliary
+            # Check if we already have an auxiliary for this denominator (from previous iteration)
+            if denom_normalized in existing_denom_to_aux:
+                # Reuse existing auxiliary
+                denom_to_aux[denom] = existing_denom_to_aux[denom_normalized]
+                continue
+            
+            # Not a lifted auxiliary and no existing auxiliary - create new Y
             Y = sp.symbols(f"Y_{aux_counter}", positive=True)
             denom_to_aux[denom] = Y
             all_aux_defs[Y] = denom  # Accumulate definitions
+            existing_denom_to_aux[denom_normalized] = Y  # Track for future denoms in this iteration
             aux_counter += 1
         
         # Substitute dynamic denominators with auxiliaries
         # ONLY replace when appearing as negative powers (denominators)
-        # NOT a general substitution - that would incorrectly transform -X2 into -Y_1+1
+        # CRITICAL FIX: Handle ALL powers of denom (including fractional like -0.5)
         for var in sym.vars:
             new_ode = new_odes[var]
             for denom, Y in denom_to_aux.items():
-                # Replace D^(-n) with Y^(-n) for negative powers
-                # Start with common cases then check atoms
-                for n in [1, 2, 3, 4, 5]:
-                    new_ode = new_ode.replace(denom**(-n), Y**(-n))
+                # Find all Pow atoms and check if their base matches denom
+                for atom in list(new_ode.atoms(sp.Pow)):
+                    base, exp = atom.as_base_exp()
+                    # Check if base matches this denominator (using simplify for robustness)
+                    if sp.simplify(base - denom) == 0:
+                        # Replace denom^exp with Y^exp
+                        new_ode = new_ode.subs(atom, Y**exp)
             new_odes[var] = sp.simplify(new_ode)
         
         # Compute Y' for dynamic auxiliaries using the LIFTED ODEs
@@ -1114,23 +1146,27 @@ def add_dummy_for_constants(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol, 
             # No constant term - keep as is
             new_odes[var] = old_ode
     
-    # Add dummy ODE: dummy' = 0 (stays constant)
-    new_odes[dummy] = sp.Integer(0)
+    # IMPORTANT: Do NOT add dummy' = 0 as an ODE - it causes GMA classification
+    # Instead, treat dummy_const as a PARAMETER (constant value = 1)
+    # This way X' = C * dummy_const^0 simplifies correctly since dummy_const = 1
     
-    # Add dummy initial condition: dummy(0) = 1
+    # Keep original initials (don't add dummy as a state variable)
     new_initials = dict(sym.initials)
-    new_initials[dummy] = 1.0
     
-    # Add dummy to variable list
-    new_vars = list(sym.vars) + [dummy]
+    # Keep original variable list (don't add dummy)
+    new_vars = list(sym.vars)
     
+    # Add dummy_const = 1 as a parameter
+    new_params = dict(sym.params)
+    new_params['dummy_const'] = 1.0
+
     # Auxiliary definition: dummy is constant = 1
     aux_defs = {dummy: sp.Integer(1)}
-    
+
     return (
         SymSystem(
             vars=new_vars,
-            params=sym.params,
+            params=new_params,
             odes=new_odes,
             initials=new_initials
         ),
@@ -2387,11 +2423,14 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
     lines.append("")
     
     # --- auxiliary variable definitions ---
-    if result.auxiliary_defs:
+    # Filter out dummy_const (internal implementation detail, not meaningful for users)
+    filtered_aux_defs = {k: v for k, v in result.auxiliary_defs.items() 
+                         if k.name != "dummy_const"} if result.auxiliary_defs else {}
+    if filtered_aux_defs:
         lines.append("// ========================================================================")
         lines.append("// AUXILIARY DEFINITIONS (for lifted variables)")
         lines.append("// ========================================================================")
-        for aux, defn in sorted(result.auxiliary_defs.items(), key=lambda kv: str(kv[0])):
+        for aux, defn in sorted(filtered_aux_defs.items(), key=lambda kv: str(kv[0])):
             lines.append(f"// {aux} := {defn}")
         lines.append("// ========================================================================")
         lines.append("")
@@ -2410,22 +2449,36 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
             production = " + ".join(prod_strs)
         else:
             production = "0"
-        
+
         # Format degradation terms
         if eq.degradation:
             deg_strs = [product_to_antimony(c, e) for c, e in eq.degradation]
             degradation = " + ".join(deg_strs)
         else:
             degradation = "0"
-        
-        # Write ODE
+
+        # Write ODE - transform pure constant terms to two-term form
+        # For canonical S-system form, t' = 1 should become t' = 2 - 1
         if degradation == "0":
-            lines.append(f"{eq.var.name}' = {production}")
+            # Check if production is a pure constant (no variables)
+            # This happens when all production terms have empty exponent dicts
+            is_pure_constant = eq.production and all(len(e) == 0 for c, e in eq.production)
+            
+            if is_pure_constant:
+                # Transform C to (C+1) - 1 for two-term canonical form
+                # Sum up all constant coefficients
+                total_const = sum(float(c) if not isinstance(c, sp.Expr) else float(sp.simplify(c)) 
+                                  for c, e in eq.production)
+                # Output as (C+1) - 1
+                lines.append(f"{eq.var.name}' = {total_const + 1:g} - 1")
+            else:
+                lines.append(f"{eq.var.name}' = {production}")
         else:
             lines.append(f"{eq.var.name}' = {production} - ({degradation})")
     
     lines.append("end")
-    return "\n".join(lines)
+    # Convert ** to ^ for valid Antimony syntax
+    return _sympy_to_antimony_syntax("\n".join(lines))
 
 
 def ssystem_to_antimony(result, model_name: str = "recast", mode: str = "simplified") -> str:
@@ -2674,7 +2727,8 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
             lines.append(f"{eq.var.name}' = {g} - {h};")
 
     lines.append("end")
-    return "\n".join(lines)
+    # Convert ** to ^ for valid Antimony syntax
+    return _sympy_to_antimony_syntax("\n".join(lines))
 
 
 def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
@@ -2709,6 +2763,16 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
         lines.append("  // --- end mapping ---")
         lines.append("")
     
+    # --- auxiliary variable definitions (for lifted variables) ---
+    if result.auxiliary_defs:
+        lines.append("  // ========================================================================")
+        lines.append("  // AUXILIARY DEFINITIONS (for lifted variables)")
+        lines.append("  // ========================================================================")
+        for aux, defn in sorted(result.auxiliary_defs.items(), key=lambda kv: str(kv[0])):
+            lines.append(f"  // {aux} := {defn}")
+        lines.append("  // ========================================================================")
+        lines.append("")
+    
     # Species declarations for auxiliary variables
     if aux_vars:
         species_names = ", ".join([v.name for v in aux_vars])
@@ -2723,17 +2787,20 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
             lines.append(f"  {param_name} = {param_val:g};")
         lines.append("")
     
-    # Add slack variable if needed (for pure decay terms)
+    # Add slack variable if needed (for pure decay OR pure growth terms)
     needs_slack = False
     for eq in result.equations:
         g_coeff = eq.growth[0]
-        d_coeff = eq.decay[0]
-        # Check if we have a pure decay (growth is 0)
-        if (isinstance(g_coeff, (int, float)) and g_coeff == 0) or \
-           (isinstance(g_coeff, sp.Expr) and g_coeff == sp.Integer(0)):
+        h_coeff = eq.decay[0]
+        # Check if we have a pure decay (growth is 0) or pure growth (decay is 0)
+        g_is_zero = (isinstance(g_coeff, (int, float)) and g_coeff == 0) or \
+                    (isinstance(g_coeff, sp.Expr) and g_coeff == sp.Integer(0))
+        h_is_zero = (isinstance(h_coeff, (int, float)) and h_coeff == 0) or \
+                    (isinstance(h_coeff, sp.Expr) and h_coeff == sp.Integer(0))
+        if g_is_zero or h_is_zero:
             needs_slack = True
             break
-    
+
     if needs_slack:
         lines.append("  // Slack variable (keeps both coefficients >0)")
         lines.append("  epsilon = 1.0;")
@@ -2756,6 +2823,15 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
         if g_is_zero and not h_is_zero:
             # Pure decay: X' = 0 - h  =>  X' = epsilon*monomial - (epsilon + h)*monomial
             # Use the decay exponents for both terms
+            # If h_exps is empty (pure constant decay), output just coefficients
+            if not h_exps:
+                # Pure constant: X' = epsilon - (epsilon + h)
+                if isinstance(h_coeff, sp.Expr):
+                    combined = sp.Symbol('epsilon') + h_coeff
+                else:
+                    combined = sp.Symbol('epsilon') + sp.Float(h_coeff)
+                lines.append(f"  {eq.var.name}' = epsilon - ({combined});")
+                continue
             g_str = product_to_antimony(sp.Symbol('epsilon'), h_exps)
             # Combine epsilon + h_coeff symbolically
             if isinstance(h_coeff, sp.Expr):
@@ -2767,6 +2843,15 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
         elif h_is_zero and not g_is_zero:
             # Pure growth: X' = g - 0  =>  X' = (g + epsilon)*monomial - epsilon*monomial
             # Use the growth exponents for both terms
+            # If g_exps is empty (pure constant growth), output just coefficients
+            if not g_exps:
+                # Pure constant: X' = (g + epsilon) - epsilon
+                if isinstance(g_coeff, sp.Expr):
+                    combined = g_coeff + sp.Symbol('epsilon')
+                else:
+                    combined = sp.Float(g_coeff) + sp.Symbol('epsilon')
+                lines.append(f"  {eq.var.name}' = ({combined}) - epsilon;")
+                continue
             if isinstance(g_coeff, sp.Expr):
                 combined_coeff = g_coeff + sp.Symbol('epsilon')
             else:
@@ -2807,7 +2892,8 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
                 lines.append(f"  {v.name} = {float(val):g};")
     
     lines.append("end")
-    return "\n".join(lines)
+    # Convert ** to ^ for valid Antimony syntax
+    return _sympy_to_antimony_syntax("\n".join(lines))
 
 def latex_odes(sym: 'SymSystem') -> str:
     lines = []
@@ -2891,23 +2977,38 @@ def latex_ssys(result: 'RecastResult') -> str:
         
         if g_is_zero and not h_is_zero:
             # Pure decay: X' = 0 - h  =>  X' = epsilon*monomial - (epsilon + h)*monomial
-            # Use the decay exponents for both terms
-            g_latex = _latex_power_law(sp.Symbol('epsilon'), h_exps)
-            # Combine epsilon + h_coeff symbolically
-            if isinstance(h_coeff, sp.Expr):
-                combined_coeff = sp.Symbol('epsilon') + h_coeff
+            # Special case: pure constant decay (empty exponents)
+            if not h_exps:
+                if isinstance(h_coeff, sp.Expr):
+                    combined = sp.Symbol('epsilon') + h_coeff
+                else:
+                    combined = sp.Symbol('epsilon') + sp.Float(h_coeff)
+                g_latex = r"\epsilon"
+                h_latex = sp.latex(combined)
             else:
-                combined_coeff = sp.Symbol('epsilon') + sp.Float(h_coeff)
-            h_latex = _latex_power_law(combined_coeff, h_exps)
+                g_latex = _latex_power_law(sp.Symbol('epsilon'), h_exps)
+                if isinstance(h_coeff, sp.Expr):
+                    combined_coeff = sp.Symbol('epsilon') + h_coeff
+                else:
+                    combined_coeff = sp.Symbol('epsilon') + sp.Float(h_coeff)
+                h_latex = _latex_power_law(combined_coeff, h_exps)
         elif h_is_zero and not g_is_zero:
             # Pure growth: X' = g - 0  =>  X' = (g + epsilon)*monomial - epsilon*monomial
-            # Use the growth exponents for both terms
-            if isinstance(g_coeff, sp.Expr):
-                combined_coeff = g_coeff + sp.Symbol('epsilon')
+            # Special case: pure constant growth (empty exponents)
+            if not g_exps:
+                if isinstance(g_coeff, sp.Expr):
+                    combined = g_coeff + sp.Symbol('epsilon')
+                else:
+                    combined = sp.Float(g_coeff) + sp.Symbol('epsilon')
+                g_latex = sp.latex(combined)
+                h_latex = r"\epsilon"
             else:
-                combined_coeff = sp.Float(g_coeff) + sp.Symbol('epsilon')
-            g_latex = _latex_power_law(combined_coeff, g_exps)
-            h_latex = _latex_power_law(sp.Symbol('epsilon'), g_exps)
+                if isinstance(g_coeff, sp.Expr):
+                    combined_coeff = g_coeff + sp.Symbol('epsilon')
+                else:
+                    combined_coeff = sp.Float(g_coeff) + sp.Symbol('epsilon')
+                g_latex = _latex_power_law(combined_coeff, g_exps)
+                h_latex = _latex_power_law(sp.Symbol('epsilon'), g_exps)
         else:
             # Both terms present (or both zero) - use as-is
             g_latex = _latex_power_law(g_coeff, g_exps)

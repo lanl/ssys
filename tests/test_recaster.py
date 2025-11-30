@@ -144,7 +144,7 @@ class TestRecasting:
         assert abs(product - 2.5) < 1e-9
 
     def test_canonical_naming(self):
-        """Test that auxiliaries are named canonically (X_1, X_2, ...)."""
+        """Test that auxiliaries are named canonically (Z_1, Z_2, ...)."""
         text = """
         A' = k1*A - k2*A^2
         k1 = 1.0
@@ -155,10 +155,10 @@ class TestRecasting:
         sym = build_sym_system(ir)
         rec = recast_to_ssystem(sym)
 
-        # Check that auxiliary names follow X_1, X_2 pattern
+        # Check that auxiliary names follow Z_1, Z_2 pattern (Z prefix avoids collision)
         var_names = [v.name for v in rec.variables]
-        assert "X_1" in var_names
-        assert "X_2" in var_names
+        assert "Z_1" in var_names
+        assert "Z_2" in var_names
 
 
 class TestAntimonyExport:
@@ -178,8 +178,8 @@ class TestAntimonyExport:
 
         assert "model test_recast" in output
         assert "end" in output
-        # Should contain auxiliary variable definitions
-        assert "X_1" in output
+        # Should contain auxiliary variable definitions (Z_1 prefix to avoid collision)
+        assert "Z_1" in output
 
 
 class TestEdgeCases:

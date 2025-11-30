@@ -11,5 +11,5 @@ model cos_growth()
 
   // Initial conditions
   t = 0
-  X = 1
+  X = 5
 end

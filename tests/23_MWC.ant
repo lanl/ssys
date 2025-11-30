@@ -45,7 +45,7 @@ model MWC()
   k_pL_4 = k_mL_4*L_4;     // /s
 
   P_0 = 1e5;               // total oligomer copies
-  S_0 = 1e6;               // ligand copies
+  S_0 = 1e5;               // ligand copies
 
   // ===== State variables (species) =====
 

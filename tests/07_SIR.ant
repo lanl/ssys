@@ -16,7 +16,7 @@ model SIR()
   // parameters
   S0 = 20000000
   I0 = 1
-  beta_rate = 5e-8
+  beta_rate = 1e-7
   gamma_rate = 1/7
 
   // infection: S -> I at rate beta_rate * S * I

@@ -98,6 +98,16 @@ from ssys.notebook_helpers import load_and_report
 '''
     nb.cells.append(new_code_cell(helpers))
 
+    # Configuration cell - user-adjustable simulation parameters
+    config_cell = '''# ============================================================
+# SIMULATION SETTINGS (edit these values to adjust simulations)
+# ============================================================
+T_END = 20.0      # End time for simulations
+N_STEPS = 400     # Number of time steps
+SOLVER = "roadrunner"  # ODE solver: "roadrunner" or "rk4"
+'''
+    nb.cells.append(new_code_cell(config_cell))
+
     # One code cell per case
     for name, ant_path, recast_path, validation_path in cases:
         nb.cells.append(new_markdown_cell(f"## {name}"))
@@ -107,9 +117,10 @@ from ssys.notebook_helpers import load_and_report
                               if validation_path else None)
         
         call = (f"load_and_report({repr(ant_path)}, "
-                f"{repr(recast_basename)}, mode={repr(mode)}, "
+                f"{repr(recast_basename)}, T=T_END, steps=N_STEPS, "
+                f"mode={repr(mode)}, "
                 f"validation_json={repr(validation_basename)}, "
-                f"solver='roadrunner')")
+                f"solver=SOLVER)")
         nb.cells.append(new_code_cell(call))
 
     out_nb = os.path.join(out_dir, "recast_report.ipynb")
