@@ -1,0 +1,120 @@
+// SIR model with smooth, time–dependent beta(t) in lifted GMA form.
+// All exp() calls have been lifted into auxiliary variables (E0, E1, …);
+// S', I', R', t' contain only power-law monomials in the state variables.
+
+model SIR_smooth_step_recast()
+
+  // -------------------------------------------------------------------
+  // Species (state variables)
+  // -------------------------------------------------------------------
+  species S, I, R, t;
+  species E0, E1;      // exponentials: E0 = exp(2*k*(t - tau0)), E1 = exp(2*k*(t - tau1))
+  species N0, Y0;      // N0 = E0 - 1, Y0 = E0 + 1
+  species N1, Y1;      // N1 = E1 - 1, Y1 = E1 + 1
+
+  // -------------------------------------------------------------------
+  // Parameters
+  // -------------------------------------------------------------------
+  S0      = 1e5;     // initial S
+  I0      = 1.0;     // initial I
+  R0      = 0.0;     // initial R
+
+  beta0   = 3e-6;    // contact rate in [tau0, tau1)
+  beta1   = 15e-6;   // contact rate for t >= tau1
+  gamma   = 0.1;     // recovery rate
+  delta   = 0.05;    // loss of immunity
+
+  k       = 1.0;     // steepness of smooth step
+  tau0    = 5.0;     // first switch time
+  tau1    = 200.0;   // second switch time
+
+  // -------------------------------------------------------------------
+  // AUXILIARY DEFINITIONS (for interpretation only, not used directly)
+  // -------------------------------------------------------------------
+  // E0 := exp(2*k*(t - tau0))
+  // E1 := exp(2*k*(t - tau1))
+  //
+  // N0 := E0 - 1
+  // Y0 := E0 + 1
+  // N1 := E1 - 1
+  // Y1 := E1 + 1
+  //
+  // σ0(t) := (E0 - 1)/(E0 + 1) = N0/Y0
+  // σ1(t) := (E1 - 1)/(E1 + 1) = N1/Y1
+  //
+  // Original exp-based beta_t(t):
+  //   beta_t(t) = beta0*0.5*(σ0(t) - σ1(t))
+  //             + beta1*0.5*(σ1(t) + 1)
+  //
+  // After lifting:
+  //   beta_t(t)*S*I =
+  //       0.5*beta0 * S*I * N0*Y0^-1
+  //     + 0.5*(beta1 - beta0) * S*I * N1*Y1^-1
+  //     + 0.5*beta1 * S*I
+  //
+  // which is a sum of pure power-law monomials in (S, I, N0, Y0, N1, Y1).
+
+  // -------------------------------------------------------------------
+  // DYNAMICS: GMA form
+  // -------------------------------------------------------------------
+
+  // Time variable
+  t' = 1;
+
+  // S dynamics:
+  // dS/dt = -beta_t(t)*S*I + delta*R
+  //       = -(0.5*beta0 * S*I * N0*Y0^-1
+  //           + 0.5*(beta1 - beta0) * S*I * N1*Y1^-1
+  //           + 0.5*beta1 * S*I)
+  //         + delta*R
+  S' =
+    -0.5*beta0        * S*I*N0*Y0^-1
+    -0.5*(beta1-beta0)* S*I*N1*Y1^-1
+    -0.5*beta1        * S*I
+    + delta           * R;
+
+  // I dynamics:
+  // dI/dt =  beta_t(t)*S*I - gamma*I
+  I' =
+     0.5*beta0        * S*I*N0*Y0^-1
+    +0.5*(beta1-beta0)* S*I*N1*Y1^-1
+    +0.5*beta1        * S*I
+    - gamma           * I;
+
+  // R dynamics:
+  // dR/dt = gamma*I - delta*R
+  R' = gamma*I - delta*R;
+
+  // Exponential lifts:
+  // E0(t) = exp(2*k*(t - tau0))  =>  E0' = 2*k*E0 * t' = 2*k*E0
+  // E1(t) = exp(2*k*(t - tau1))  =>  E1' = 2*k*E1
+  E0' = 2*k*E0;
+  E1' = 2*k*E1;
+
+  // Linear combinations N0, Y0, N1, Y1 that track (E0±1), (E1±1):
+  // N0 = E0 - 1, Y0 = E0 + 1  =>  N0' = Y0' = E0' = 2*k*E0
+  // N1 = E1 - 1, Y1 = E1 + 1  =>  N1' = Y1' = E1' = 2*k*E1
+  N0' = 2*k*E0;
+  Y0' = 2*k*E0;
+  N1' = 2*k*E1;
+  Y1' = 2*k*E1;
+
+  // -------------------------------------------------------------------
+  // INITIAL CONDITIONS
+  // -------------------------------------------------------------------
+  S = S0;
+  I = I0;
+  R = R0;
+  t = 0;
+
+  // E0(0) = exp(2*k*(0 - tau0)),  E1(0) = exp(2*k*(0 - tau1))
+  E0 = exp(2*k*(0 - tau0));
+  E1 = exp(2*k*(0 - tau1));
+
+  // N0(0) = E0(0) - 1, Y0(0) = E0(0) + 1, etc.
+  N0 = E0 - 1;
+  Y0 = E0 + 1;
+  N1 = E1 - 1;
+  Y1 = E1 + 1;
+
+end

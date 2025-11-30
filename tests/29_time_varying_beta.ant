@@ -1,0 +1,69 @@
+// SIR model with smooth, time-dependent beta(t) using exp-based step approximation.
+//   dS/dt = -beta_t(t)*S*I + delta*R
+//   dI/dt =  beta_t(t)*S*I - gamma*I
+//   dR/dt =  gamma*I - delta*R
+//   dt/dt =  1
+//
+// Smooth step implemented with an exp-only approximation:
+//
+//   beta_t(t) = beta0*0.5*(σ(t - tau0) - σ(t - tau1))
+//             + beta1*0.5*(σ(t - tau1) + 1)
+//
+//   σ(x) ≈ (exp(2*k*x) - 1) / (exp(2*k*x) + 1)
+//
+// NOTE:
+//   A tanh-based version would be:
+//   beta_t(t) = beta0*0.5*(tanh(k*(t - tau0)) - tanh(k*(t - tau1)))
+//             + beta1*0.5*(tanh(k*(t - tau1)) + 1)
+
+function beta_t(t)
+  beta0*0.5 * (
+      (exp(2*k*(t - tau0)) - 1)/(exp(2*k*(t - tau0)) + 1)
+    - (exp(2*k*(t - tau1)) - 1)/(exp(2*k*(t - tau1)) + 1)
+  )
+  + beta1*0.5 * (
+      (exp(2*k*(t - tau1)) - 1)/(exp(2*k*(t - tau1)) + 1)
+    + 1
+  )
+end
+
+model SIR_smooth_step()
+
+  // -------------------------------------------------------------------
+  // Parameters
+  // -------------------------------------------------------------------
+  S0    = 1e5;      // initial S
+  I0    = 1.0;      // initial I
+  R0    = 0.0;      // initial R
+
+  beta0 = 3e-6;     // contact rate in [tau0, tau1)
+  beta1 = 15e-6;    // contact rate for t >= tau1
+  gamma = 0.1;      // recovery rate
+  delta = 0.05;     // loss-of-immunity rate
+
+  k     = 1.0;      // steepness of smooth step
+  tau0  = 5.0;      // first switch time
+  tau1  = 200.0;    // second switch time
+
+  // -------------------------------------------------------------------
+  // State variables
+  // -------------------------------------------------------------------
+  species S, I, R, t;
+
+  // -------------------------------------------------------------------
+  // ODE system
+  // -------------------------------------------------------------------
+  S' = -beta_t(t)*S*I + delta*R;
+  I' =  beta_t(t)*S*I - gamma*I;
+  R' =  gamma*I       - delta*R;
+  t' =  1;
+
+  // -------------------------------------------------------------------
+  // Initial conditions
+  // -------------------------------------------------------------------
+  S = S0;
+  I = I0;
+  R = R0;
+  t = 0;
+
+end
