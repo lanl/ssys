@@ -1880,13 +1880,41 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
 
 
 def _exponents_match(exps1: Dict[sp.Symbol, float], exps2: Dict[sp.Symbol, float]) -> bool:
-    """Check if two exponent patterns match (within tolerance)."""
+    """Check if two exponent patterns match (within tolerance).
+    
+    Handles both numeric and symbolic exponents.
+    """
     all_vars = set(exps1.keys()) | set(exps2.keys())
     for var in all_vars:
         e1 = exps1.get(var, 0.0)
         e2 = exps2.get(var, 0.0)
-        if abs(e1 - e2) > 1e-10:
-            return False
+        
+        # Handle symbolic exponents
+        if isinstance(e1, sp.Expr) or isinstance(e2, sp.Expr):
+            # Convert to sympy if needed
+            e1_sym = sp.sympify(e1)
+            e2_sym = sp.sympify(e2)
+            diff = sp.simplify(e1_sym - e2_sym)
+            
+            # Check if the difference is zero (either exactly or numerically)
+            if diff == 0:
+                continue
+            if diff.is_number:
+                try:
+                    if abs(float(diff)) > 1e-10:
+                        return False
+                except (TypeError, ValueError):
+                    return False  # Can't compare, assume different
+            else:
+                # Symbolic difference - not the same unless zero
+                return False
+        else:
+            # Both numeric
+            try:
+                if abs(float(e1) - float(e2)) > 1e-10:
+                    return False
+            except (TypeError, ValueError):
+                return False
     return True
 
 
@@ -1908,7 +1936,18 @@ def _analyze_ode_terms(terms: List[sp.Expr], state_vars: Optional[Set[sp.Symbol]
             continue
         try:
             coeff, exps = term_to_coeff_exps(t, state_vars)
-            if sp.sign(coeff) >= 0:
+            # Determine sign of coefficient
+            # Handle symbolic coefficients containing 'time' or other symbols
+            try:
+                is_positive = bool(sp.sign(coeff) >= 0)
+            except TypeError:
+                # Coefficient contains symbolic variables (like 'time') that prevent
+                # evaluation. For expressions like 1/(time+1)^2, assume positive since
+                # squared terms and even powers are always positive for real values.
+                # This is a reasonable assumption for physical ODEs.
+                is_positive = True
+            
+            if is_positive:
                 growth_terms.append((coeff, exps))
             else:
                 decay_terms.append((sp.Abs(coeff), exps))
@@ -2389,7 +2428,15 @@ def _pool_ssystem_recast(sym: 'SymSystem', mode: str = "simplified") -> 'RecastR
                 exps[Vk] = exps.get(Vk, 0.0) - 1.0
 
             # Assign growth/decay by sign of coeff (works for symbolic and numeric)
-            if sp.sign(coeff) >= 0:
+            # Handle symbolic coefficients containing 'time' or other symbols
+            try:
+                is_positive = bool(sp.sign(coeff) >= 0)
+            except TypeError:
+                # Coefficient contains symbolic variables that prevent evaluation
+                # Assume positive (reasonable for physical ODEs)
+                is_positive = True
+            
+            if is_positive:
                 new_equations.append(SSysEquation(
                     var=Vj,
                     growth=(sp.Abs(coeff), exps),

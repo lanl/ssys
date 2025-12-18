@@ -25,6 +25,30 @@ ssys/
 
 ## Installation
 
+### Quick Setup with uv (Recommended)
+
+Use the provided setup script to create a development environment with [uv](https://astral.sh/uv):
+
+```bash
+# One-time setup - creates ssys_dev environment
+./setup_env.sh
+
+# Activate environment
+source ssys_dev/bin/activate
+```
+
+The script:
+- Creates a `ssys_dev` virtual environment
+- Installs ssys with all development dependencies
+- Includes libRoadRunner for ODE simulation (if available)
+
+**Options:**
+```bash
+./setup_env.sh --minimal  # Skip libroadrunner (uses RK4 fallback)
+```
+
+### Manual Installation
+
 ```bash
 pip install -e .
 ```

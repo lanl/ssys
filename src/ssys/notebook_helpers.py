@@ -12,33 +12,58 @@ from ssys.recaster import RecastStatus, SystemClass, classify_system, classify_r
 FILL_MISSING_PARAMS = False  # set True to auto-fill absent params with 1.0
 
 
+import warnings
+
+
 def rk4(f, t_span, y0, n_steps):
-    """Simple RK4 integrator."""
+    """Simple RK4 integrator.
+    
+    Suppresses overflow/invalid warnings which can occur in some mathematical
+    models (e.g., superexponential growth) but are not bugs.
+    """
     t0, t1 = t_span
     t = np.linspace(t0, t1, n_steps+1)
     h = (t1 - t0) / n_steps
     y = np.zeros((len(t), len(y0)), dtype=float)
     y[0] = np.array(y0, dtype=float)
-    for i in range(n_steps):
-        ti = t[i]
-        yi = y[i]
-        k1 = f(ti, yi)
-        k2 = f(ti + 0.5*h, yi + 0.5*h*k1)
-        k3 = f(ti + 0.5*h, yi + 0.5*h*k2)
-        k4 = f(ti + h, yi + h*k3)
-        y[i+1] = yi + (h/6.0)*(k1 + 2*k2 + 2*k3 + k4)
+    
+    # Suppress overflow/invalid warnings - these are expected for some models
+    with warnings.catch_warnings():
+        warnings.filterwarnings('ignore', category=RuntimeWarning)
+        for i in range(n_steps):
+            ti = t[i]
+            yi = y[i]
+            k1 = f(ti, yi)
+            k2 = f(ti + 0.5*h, yi + 0.5*h*k1)
+            k3 = f(ti + 0.5*h, yi + 0.5*h*k2)
+            k4 = f(ti + h, yi + h*k3)
+            y[i+1] = yi + (h/6.0)*(k1 + 2*k2 + 2*k3 + k4)
     return t, y
 
 
 def build_rhs_from_sympy(vars_syms, rhs_exprs, param_vals):
-    """Build numerical RHS function from symbolic expressions."""
+    """Build numerical RHS function from symbolic expressions.
+    
+    Special handling for 'time' symbol: recognized as the independent variable
+    (integration time t), not a parameter requiring a numeric value.
+    """
     var_set = set(vars_syms)
     rhs_free = set().union(*[expr.free_symbols for expr in rhs_exprs])
+    
+    # Identify 'time' symbol if present (this is the independent variable, not a parameter)
+    time_sym = None
+    for s in rhs_free:
+        if s.name == 'time':
+            time_sym = s
+            break
 
     param_subs = {}
     missing = []
     for s in sorted(rhs_free - var_set, key=lambda z: z.name):
         name = s.name
+        # Skip 'time' - it's the independent variable, not a parameter
+        if name == 'time':
+            continue
         if name in param_vals:
             param_subs[s] = float(param_vals[name])
         else:
@@ -55,6 +80,9 @@ def build_rhs_from_sympy(vars_syms, rhs_exprs, param_vals):
     def f(t, y):
         subs = {s: float(y[i]) for i, s in enumerate(vars_syms)}
         subs.update(param_subs)
+        # If 'time' symbol exists, substitute the current integration time
+        if time_sym is not None:
+            subs[time_sym] = float(t)
         vals = [float(expr.evalf(subs=subs)) for expr in rhs_exprs]
         return np.array(vals, dtype=float)
     return f
@@ -481,7 +509,7 @@ def latex_factor_map(rec):
 
 def load_and_report(ant_path, recast_path, T=20.0, steps=400,
                      mode="simplified", validation_json=None,
-                     solver="rk4"):
+                     solver="roadrunner"):
     """Load and report on a single recast model.
     
     Args:
@@ -491,7 +519,7 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400,
         steps: Number of simulation steps
         mode: Output mode ('simplified' or 'canonical')
         validation_json: Optional path to validation JSON file
-        solver: ODE solver to use - "rk4" (default) or "roadrunner"
+        solver: ODE solver to use - "roadrunner" (default) or "rk4"
     """
     ant_text = open(ant_path).read()
     rec_text = open(recast_path).read()
