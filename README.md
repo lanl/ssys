@@ -27,9 +27,13 @@ ssys/
 
 ### Quick Setup with uv (Recommended)
 
-Use the provided setup script to create a development environment with [uv](https://astral.sh/uv):
+Use [uv](https://astral.sh/uv) for fast, reliable Python environment management:
 
 ```bash
+# Install uv (if not already installed)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source $HOME/.local/bin/env
+
 # One-time setup - creates ssys_dev environment
 ./setup_env.sh
 
@@ -38,7 +42,7 @@ source ssys_dev/bin/activate
 ```
 
 The script:
-- Creates a `ssys_dev` virtual environment
+- Creates a `ssys_dev` virtual environment using uv
 - Installs ssys with all development dependencies
 - Includes libRoadRunner for ODE simulation (if available)
 
@@ -47,15 +51,28 @@ The script:
 ./setup_env.sh --minimal  # Skip libroadrunner (uses RK4 fallback)
 ```
 
-### Manual Installation
+### Manual Installation (Alternative)
+
+If you prefer not to use the setup script, you can install manually:
 
 ```bash
-pip install -e .
+# Create virtual environment
+uv venv ssys_dev
+source ssys_dev/bin/activate
+
+# Install in editable mode with all development dependencies
+uv pip install -e ".[dev,notebook,simulation]"
+
+# Or minimal (without libroadrunner simulation backend):
+uv pip install -e ".[dev,notebook]"
 ```
 
-Or use directly with PYTHONPATH:
+### Installing Additional Packages
+
+With the environment active, use uv for package management:
+
 ```bash
-export PYTHONPATH=/path/to/ssys/src:$PYTHONPATH
+uv pip install <package_name>
 ```
 
 ---
@@ -144,6 +161,58 @@ The notebook shows for each model:
 
 ---
 
+## Running Test Problems (tests2)
+
+The `tests2/` directory contains 69 ODE models from published literature demonstrating S-system recasting techniques. These models cover a wide range of mathematical structures from Savageau & Voit (1987) and other foundational papers.
+
+### Quick Start
+
+```bash
+# Ensure environment is set up and activated
+source ssys_dev/bin/activate
+
+# Run all test problems in both modes
+python run_tests2.py --both
+```
+
+### Usage Options
+
+```bash
+python run_tests2.py                    # Simplified mode only (default)
+python run_tests2.py --mode canonical   # Canonical mode only
+python run_tests2.py --both             # Both modes (for comparison)
+```
+
+### Output
+
+The script generates:
+- `out_tests2_simplified/` - Recast models + notebook (simplified mode)
+- `out_tests2_canonical/` - Recast models + notebook (canonical mode)
+
+Each directory contains:
+- Individual `*_recast.ant` files for each model
+- `*_validation.json` files with validation results
+- `recast_report.ipynb` - Interactive notebook with all results
+
+### Viewing the Notebook Reports
+
+```bash
+# View simplified mode results
+jupyter notebook out_tests2_simplified/recast_report.ipynb
+
+# View canonical mode results  
+jupyter notebook out_tests2_canonical/recast_report.ipynb
+```
+
+Each model entry in the notebook shows:
+- Original and recast Antimony code
+- LaTeX equations (original and S-system)
+- Numerical simulation comparison plots
+- Validation results (symbolic + numerical tests)
+- System classification
+
+---
+
 ## Output Modes: Simplified vs. Canonical
 
 ### Simplified Mode (`--mode simplified`)
@@ -191,16 +260,13 @@ Verification notebooks support two ODE solvers for trajectory simulation:
 
 ### Installation
 
-Install libRoadRunner in your conda environment:
+Install libRoadRunner in your environment:
 ```bash
-conda activate ssys_env
-conda install -c conda-forge libroadrunner
+source ssys_dev/bin/activate
+uv pip install libroadrunner
 ```
 
-Or via pip:
-```bash
-pip install libroadrunner
-```
+Note: The `./setup_env.sh` script installs libRoadRunner by default.
 
 ### Usage in Notebooks
 

@@ -830,25 +830,82 @@ def canonicalize_aux_names(res: 'RecastResult', prefix: str = "Z") -> 'RecastRes
         for s, e in exps.items():
             out[name_map.get(s, s)] = e
         return out
+    
+    def remap_coeff(coeff: sp.Expr) -> sp.Expr:
+        """Apply name_map substitutions to coefficient expression.
+        
+        This handles symbolic coefficients that contain original variable names
+        (e.g., sqrt(Z2^2 + 1) should become sqrt(Z_2^2 + 1)).
+        
+        Note: We must match symbols by NAME, not by object identity, because
+        the coefficient may contain symbols created during parsing that are
+        different objects from those in name_map but have the same name.
+        """
+        if isinstance(coeff, sp.Expr) and not coeff.is_Number:
+            result = coeff
+            # Build name-to-new-symbol map
+            name_to_new = {old_sym.name: new_sym for old_sym, new_sym in name_map.items()}
+            
+            # Find all symbols in the coefficient and substitute by name
+            for sym in result.free_symbols:
+                if sym.name in name_to_new:
+                    result = result.subs(sym, name_to_new[sym.name])
+            return result
+        return coeff
 
-    # 3) Remap equations (var and exponent maps)
-    new_eqs: List[SSysEquation] = []
-    for eq in res.equations:
-        # Keep coefficients in their original form (symbolic or numeric)
-        new_eqs.append(SSysEquation(
-            var=name_map.get(eq.var, eq.var),
-            growth=(eq.growth[0], remap_exps(eq.growth[1])),
-            decay=(eq.decay[0], remap_exps(eq.decay[1])),
-        ))
-
-    # 4) Remap initials (keys)
-    new_initials = {name_map.get(s, s): float(v) for s, v in res.initials.items()}
-
-    # 5) Remap factor_map (lists of auxiliaries)
+    # 3) Remap factor_map FIRST (needed for coefficient substitution)
     new_factor_map = {
         orig: [name_map.get(a, a) for a in aux_list]
         for orig, aux_list in res.factor_map.items()
     }
+    
+    def remap_coeff_with_factors(coeff: sp.Expr) -> sp.Expr:
+        """Apply name_map AND factor_map substitutions to coefficient expression.
+        
+        Two substitutions are needed:
+        1. Pool auxiliaries: Z1_t1 -> Z_1 (via name_map)
+        2. Original variables: Z2 -> Z_2 (via new_factor_map)
+        
+        This handles symbolic coefficients like sqrt(Z2^2 + 1) where Z2 is
+        an original variable that should become Z_2.
+        """
+        if not isinstance(coeff, sp.Expr) or coeff.is_Number:
+            return coeff
+        
+        result = coeff
+        
+        # Step 1: Remap pool auxiliary names (Z1_t1 -> Z_1)
+        name_to_new = {old_sym.name: new_sym for old_sym, new_sym in name_map.items()}
+        for sym in list(result.free_symbols):
+            if sym.name in name_to_new:
+                result = result.subs(sym, name_to_new[sym.name])
+        
+        # Step 2: Remap original variables to their factor products
+        # e.g., Z2 -> Z_2 (the product of its renamed factors)
+        for orig_var, aux_list in new_factor_map.items():
+            if not aux_list:
+                continue
+            # Build product of factors
+            factor_product = aux_list[0] if len(aux_list) == 1 else sp.Mul(*aux_list)
+            # Substitute original variable by name matching
+            for sym in list(result.free_symbols):
+                if sym.name == orig_var.name and sym != factor_product:
+                    result = result.subs(sym, factor_product)
+        
+        return result
+
+    # 4) Remap equations (var, exponent maps, AND coefficients)
+    new_eqs: List[SSysEquation] = []
+    for eq in res.equations:
+        # Remap coefficients to use canonical variable names
+        new_eqs.append(SSysEquation(
+            var=name_map.get(eq.var, eq.var),
+            growth=(remap_coeff_with_factors(eq.growth[0]), remap_exps(eq.growth[1])),
+            decay=(remap_coeff_with_factors(eq.decay[0]), remap_exps(eq.decay[1])),
+        ))
+
+    # 5) Remap initials (keys)
+    new_initials = {name_map.get(s, s): float(v) for s, v in res.initials.items()}
 
     # 6) Canonical variables list, in canonical order
     new_variables = [name_map[old] for old in aux_order]
