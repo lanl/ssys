@@ -5,3 +5,4 @@ a = 1.1; b = 0.4; c = 0.1; d = 0.4
 X' = a*X - b*X*Y
 Y' = c*X*Y - d*Y
 end
+// @SIM T_START=0 T_END=20 N_STEPS=400

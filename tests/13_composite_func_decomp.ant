@@ -19,3 +19,4 @@ model composite_func_decomp()
   // * No parameters appear in the paper's minimal example; treat as unit scaling.
   // * Recasting typically introduces an auxiliary variable Z = exp(X) to obtain S-system form.
 end
+// @SIM T_START=0 T_END=20 N_STEPS=400

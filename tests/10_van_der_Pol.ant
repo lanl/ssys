@@ -17,3 +17,4 @@ model van_der_Pol()
   R1:  -> x; y
   R2:  -> y; mu*(1 - x^2)*y - x
 end
+// @SIM T_START=0 T_END=20 N_STEPS=400

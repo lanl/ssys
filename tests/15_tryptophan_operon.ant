@@ -33,3 +33,4 @@ model tryptophan_operon()
   X_2 = 12;
   X_3 = 25.0;
 end
+// @SIM T_START=0 T_END=20 N_STEPS=400
