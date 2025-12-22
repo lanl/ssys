@@ -137,11 +137,16 @@ def parse_antimony(text: str) -> ModelIR:
                 ir.explicit_rates[sp_name] = _antimony_to_sympy_syntax(expr)
                 continue
 
-            # parameter/initial assignment: X = 2.5
+            # parameter/initial assignment: X = 2.5  or  const X = 2.5
             if ("=" in stmt) and (":=" not in stmt):
                 left, right = stmt.split("=", 1)
                 left = left.strip()
                 right = right.strip()
+                
+                # Handle 'const' keyword (strip it - const is just documentation)
+                if left.startswith("const "):
+                    left = left[6:].strip()
+                
                 # Store the expression string for later resolution
                 if left.startswith("$"):
                     left = left[1:].strip()
