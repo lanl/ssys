@@ -47,6 +47,19 @@ def recast_file(ant_path: str, out_dir: str, mode: str = "simplified",
     sym = build_sym_system(ir)
     rec = recast_to_ssystem(sym, mode=mode)
     out_text = ssystem_to_antimony(rec, model_name=f"{name}_recast", mode=mode)
+    
+    # Propagate @SIM metadata from input to recast output
+    # This ensures notebook simulations use the same time parameters for both
+    sim_parts = []
+    if ir.sim_t_start is not None:
+        sim_parts.append(f"T_START={ir.sim_t_start:g}")
+    if ir.sim_t_end is not None:
+        sim_parts.append(f"T_END={ir.sim_t_end:g}")
+    if ir.sim_n_steps is not None:
+        sim_parts.append(f"N_STEPS={ir.sim_n_steps}")
+    if sim_parts:
+        sim_line = "// @SIM " + " ".join(sim_parts) + "\n"
+        out_text = out_text.rstrip() + "\n" + sim_line
 
     out_path = os.path.join(out_dir, f"{name}_recast.ant")
     with open(out_path, "w") as f:
