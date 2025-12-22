@@ -423,6 +423,177 @@ This follows Savageau & Voit (1987): positive orthant assumption, decomposition 
 
 ---
 
+## Antimony Parser Limitations and Remedies
+
+The ssys Antimony parser supports a **subset** of the full Antimony language. This section documents common parser limitations and how to remedy them by reformulating your model.
+
+### Summary of Limitations
+
+| Limitation | Error Symptom | Remedy |
+|------------|---------------|--------|
+| Parameterized functions | `FunctionClass error` | Inline expressions into ODEs |
+| Multi-line expressions | `could not parse '( 1'` | Reformat to single line |
+| `piecewise()` function | `unsupported function` | Use smooth approximations (see below) |
+| Events | Parse error | Not recastable; approximate or remove |
+| Modules | Parse error | Flatten to single model |
+| Reserved names | SymPy conflicts | Rename variables (e.g., `I` → `I_var`) |
+
+### Parameterized Functions → Inline Expressions
+
+**Problem:** Antimony allows user-defined functions with parameters like `f(u, K) := ...`. The ssys parser does not support these.
+
+**Before (unsupported):**
+```antimony
+// Parameterized Hill function - NOT SUPPORTED
+f(u, K) := u^H / (K^H + u^H);
+
+Y' = b_1 * f(X, K_xy) - a_1 * Y;
+```
+
+**After (supported):**
+```antimony
+// Inline the Hill function directly into the ODE
+Y' = b_1 * X^H / (K_xy^H + X^H) - a_1 * Y;
+```
+
+**Example:** Goldbeter1996 used `V1(C) := V_M1 * C / (K_c + C)`. This was fixed by defining `V_1 := V_M1 * C / (K_c + C)` (simple assignment rule without parameters) and using `V_1` in the ODEs.
+
+### Multi-Line Expressions → Single Line
+
+**Problem:** The parser may fail on expressions split across multiple lines within assignment rules.
+
+**Before (may fail):**
+```antimony
+x011 := ( 1
+          - (x000*(1 + IP3/d1) + x001*(1 + IP3/d3))
+        ) / (1 + IP3/d3);
+```
+
+**After (works):**
+```antimony
+x011 := (1 - (x000*(1 + IP3/d_1) + x001*(1 + IP3/d_3))) / (1 + IP3/d_3);
+```
+
+### Reserved Names and LaTeX-Friendly Nomenclature
+
+**Problem:** Some variable names may conflict with SymPy reserved symbols or render poorly in LaTeX.
+
+**Best practices:**
+- Use underscores for subscripts: `k_1` instead of `k1` (renders as $k_1$)
+- Avoid single-letter names that conflict with SymPy: `I` → `I_var` or `I_0`
+- Use descriptive subscripts: `K_xy` instead of `Kxy` (renders as $K_{xy}$)
+
+---
+
+## Replacing Step Functions with Smooth Approximations
+
+The ssys recaster requires **differentiable** expressions because it uses symbolic differentiation (chain rule) during lifting. Discontinuous functions like `piecewise()`, Heaviside steps, and ReLU cannot be processed directly.
+
+However, these can be replaced with **smooth (C∞) approximations** that match the original behavior within a small tolerance.
+
+### Smooth ReLU: max(0, x)
+
+**Original (discontinuous):**
+```antimony
+J := piecewise(0, x < 0, x);   // = max(0, x)
+```
+
+**Smooth approximation:**
+```antimony
+const eps = 0.01;  // Smoothing parameter
+
+// Smooth max(0, x) using sqrt
+J := 0.5 * (x + sqrt(x^2 + eps^2));
+```
+
+**Properties:**
+- Matches `max(0, x)` within ε/2 everywhere
+- C∞ smooth (infinitely differentiable)
+- As ε → 0, converges to exact max(0, x)
+
+**Example:** Fink2000 used `piecewise(0, Ca <= Ca_c, g0*(Ca - Ca_c))` for calcium extrusion with a threshold. This was replaced with:
+```antimony
+const eps_pm = 0.01;
+J_pm := 0.5 * g_0 * ((Ca - Ca_c) + sqrt((Ca - Ca_c)^2 + eps_pm^2));
+```
+
+### Smooth Heaviside Step Function
+
+**Original (discontinuous):**
+```antimony
+H := piecewise(0, t < t_0, 1);   // = H(t - t_0) Heaviside step
+```
+
+**Smooth approximation using tanh:**
+```antimony
+const k_steep = 5.0;  // Steepness parameter (larger = sharper transition)
+
+// Smooth step: 0 → 1 transition at t = t_0
+H := 0.5 * (1 + tanh(k_steep * (time - t_0)));
+```
+
+**Properties:**
+- Transitions smoothly from 0 to 1 around t = t₀
+- Width of transition ≈ 2/k_steep
+- C∞ smooth
+
+### Time Windows (On/Off Pulses)
+
+**Original (discontinuous):**
+```antimony
+// Active only during t_1 < t < t_2
+Y := piecewise(0, time <= t_1, 1 - cos(2*pi*time/30), time < t_2, 0);
+```
+
+**Smooth approximation:**
+```antimony
+const k_steep = 5.0;
+
+// Smooth turn-on at t_1, turn-off at t_2
+H_on  := 0.5 * (1 + tanh(k_steep * (time - t_1)));
+H_off := 0.5 * (1 + tanh(k_steep * (t_2 - time)));
+Y := (1 - cos(2*pi*time/30)) * H_on * H_off;
+```
+
+**Example:** Weber2018 used a piecewise time window for 5 < t < 70. This was replaced with:
+```antimony
+const k_steep = 5.0;
+const eps_k = 0.01;
+
+H_on  := 0.5*(1 + tanh(k_steep*(time - 5)));
+H_off := 0.5*(1 + tanh(k_steep*(70 - time)));
+Y_1   := (1 - cos(2*pi*time/30)) * H_on * H_off;
+
+// Also needed smooth ReLU for k_23 = max(0, k_23_0 + beta*Y_1)
+k_23_raw := k_23_0 + beta*Y_1;
+k_23 := 0.5 * (k_23_raw + sqrt(k_23_raw^2 + eps_k^2));
+```
+
+### Choosing Smoothing Parameters
+
+| Parameter | Typical Value | Effect |
+|-----------|---------------|--------|
+| `eps` (ReLU) | 0.01 | Smaller = sharper corner, larger = smoother |
+| `k_steep` (tanh) | 5.0 | Larger = sharper transition, smaller = gradual |
+
+**Guidelines:**
+- Start with default values (eps = 0.01, k_steep = 5.0)
+- Verify that dynamics are qualitatively unchanged
+- Decrease eps or increase k_steep if sharper transitions are needed
+- Ensure smoothing scale is small compared to system timescales
+
+### Summary of Smooth Approximations
+
+| Original | Smooth Approximation |
+|----------|---------------------|
+| `max(0, x)` | `0.5*(x + sqrt(x² + ε²))` |
+| `H(t - t₀)` (Heaviside) | `0.5*(1 + tanh(k*(t - t₀)))` |
+| `abs(x)` | `sqrt(x² + ε²)` |
+| `sign(x)` | `tanh(k*x)` |
+| `min(a, b)` | `0.5*(a + b - sqrt((a-b)² + ε²))` |
+
+---
+
 ## Algorithm Overview
 
 1. **Parse** Antimony → intermediate representation (species, parameters, reactions, rate rules)
