@@ -41,13 +41,71 @@ def rk4(f, t_span, y0, n_steps):
     return t, y
 
 
-def build_rhs_from_sympy(vars_syms, rhs_exprs, param_vals):
+def build_rhs_from_sympy(vars_syms, rhs_exprs, param_vals, assignment_rules=None):
     """Build numerical RHS function from symbolic expressions.
     
     Special handling for 'time' symbol: recognized as the independent variable
     (integration time t), not a parameter requiring a numeric value.
+    
+    Args:
+        vars_syms: List of sympy symbols for state variables
+        rhs_exprs: List of sympy expressions for ODE RHS
+        param_vals: Dict mapping parameter names to numeric values
+        assignment_rules: Optional dict mapping rule name to expression string.
+            These are substituted into the ODEs before evaluation.
     """
     var_set = set(vars_syms)
+    
+    # Build assignment rule substitutions if provided
+    # Assignment rules may depend on each other, so we need to repeatedly substitute
+    # until no more rules can be applied
+    if assignment_rules:
+        # Build a mapping from symbol name to existing sympy symbol (to preserve identity)
+        all_existing_syms = set().union(*[expr.free_symbols for expr in rhs_exprs])
+        name_to_sym = {s.name: s for s in all_existing_syms}
+        name_to_sym.update({s.name: s for s in vars_syms})
+        
+        # IMPORTANT: Also add all parameter names to prevent SymPy from interpreting
+        # common names like 'beta', 'gamma' as built-in functions
+        for param_name in param_vals.keys():
+            if param_name not in name_to_sym:
+                name_to_sym[param_name] = sp.Symbol(param_name)
+        
+        # Pre-create symbols for ALL assignment rule names BEFORE parsing
+        # This ensures that inter-rule dependencies use the same symbol instances
+        for rule_name in assignment_rules.keys():
+            if rule_name not in name_to_sym:
+                name_to_sym[rule_name] = sp.Symbol(rule_name)
+        
+        # Now parse all assignment rules into sympy expressions
+        # Use name_to_sym to ensure consistent symbol identity
+        rule_exprs = {}
+        for rule_name, rule_str in assignment_rules.items():
+            try:
+                # Parse expression using existing/pre-created symbols
+                rule_expr = sp.sympify(rule_str, locals=name_to_sym)
+                rule_sym = name_to_sym[rule_name]  # Use the pre-created symbol
+                rule_exprs[rule_sym] = rule_expr
+            except Exception as e:
+                # Skip rules that can't be parsed
+                pass
+        
+        # Repeatedly substitute rules into each other until fixed point
+        # This handles dependencies like: A := B*C, B := X+Y
+        max_iterations = 20  # Increased for longer dependency chains
+        for _ in range(max_iterations):
+            changed = False
+            for rule_sym, rule_expr in list(rule_exprs.items()):
+                new_expr = rule_expr.subs(rule_exprs)
+                if new_expr != rule_expr:
+                    rule_exprs[rule_sym] = new_expr
+                    changed = True
+            if not changed:
+                break
+        
+        # Now substitute all assignment rules into the ODE RHS expressions
+        rhs_exprs = [expr.subs(rule_exprs) for expr in rhs_exprs]
+    
     rhs_free = set().union(*[expr.free_symbols for expr in rhs_exprs])
     
     # Identify 'time' symbol if present (this is the independent variable, not a parameter)
@@ -615,7 +673,9 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400,
             var_syms = sorted(sym.odes.keys(), key=lambda s: s.name)
             rhs_exprs = [sp.simplify(sym.odes[s]) for s in var_syms]
             y0 = [float(sym.initials[s]) for s in var_syms]
-            f_orig = build_rhs_from_sympy(var_syms, rhs_exprs, params)
+            # Pass assignment rules from IR so they get substituted into ODEs
+            assignment_rules = getattr(ir, 'assignment_rules', None)
+            f_orig = build_rhs_from_sympy(var_syms, rhs_exprs, params, assignment_rules=assignment_rules)
             t_orig, y_orig = rk4(f_orig, (0.0, T), y0, steps)
             # For RK4 fallback, use alphabetical ordering
             orig_state_names = [str(s) for s in var_syms]
@@ -652,7 +712,9 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400,
                     for eq in rec.equations
                 ]
             aux_y0 = [float(rec.initials[s]) for s in aux_syms]
-            f_rec = build_rhs_from_sympy(aux_syms, rec_rhs, params)
+            # Recast models shouldn't have assignment rules (they're inlined), but check anyway
+            recast_assignment_rules = getattr(recast_ir, 'assignment_rules', None)
+            f_rec = build_rhs_from_sympy(aux_syms, rec_rhs, params, assignment_rules=recast_assignment_rules)
             t_rec, y_rec = rk4(f_rec, (0.0, T), aux_y0, steps)
             # For RK4 fallback, use alphabetical ordering
             rec_state_names = [str(s) for s in aux_syms]
