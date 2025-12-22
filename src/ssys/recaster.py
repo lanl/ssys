@@ -71,6 +71,9 @@ class ModelIR:
     param_exprs: Dict[str, str] = field(default_factory=dict)  # Store parameter expressions before evaluation
     initial_exprs: Dict[str, str] = field(default_factory=dict)  # Store initial condition expressions
     antimony_text: str = ""  # Cache original Antimony text for RoadRunner
+    # Simulation metadata (from @SIMTIME comments)
+    sim_t_end: Optional[float] = None  # Simulation end time
+    sim_n_steps: Optional[int] = None  # Number of simulation steps
 
 def _antimony_to_sympy_syntax(expr_str: str) -> str:
     """Convert Antimony exponentiation syntax (^) to Python/SymPy syntax (**)."""
@@ -88,6 +91,26 @@ def parse_antimony(text: str) -> ModelIR:
     ir = ModelIR()
     ir.antimony_text = text  # Cache original text for RoadRunner
     ir.raw_lines = [ln.rstrip() for ln in text.splitlines()]
+    
+    # First pass: extract @SIMTIME metadata from comments
+    import re
+    simtime_pattern = re.compile(r'@SIMTIME\s+(\w+)\s*=\s*([0-9.eE+-]+)')
+    for raw in ir.raw_lines:
+        if '//' in raw:
+            comment_part = raw.split('//', 1)[1]
+            for match in simtime_pattern.finditer(comment_part):
+                key = match.group(1).upper()
+                value = match.group(2)
+                if key == 'T_END':
+                    try:
+                        ir.sim_t_end = float(value)
+                    except ValueError:
+                        pass
+                elif key == 'N_STEPS':
+                    try:
+                        ir.sim_n_steps = int(float(value))
+                    except ValueError:
+                        pass
 
     for raw in ir.raw_lines:
         # strip inline comments

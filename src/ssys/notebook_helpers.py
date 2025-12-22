@@ -565,7 +565,7 @@ def latex_factor_map(rec):
     return "\\begin{aligned}\n" + " \\\\\n".join(rows) + "\n\\end{aligned}"
 
 
-def load_and_report(ant_path, recast_path, T=20.0, steps=400,
+def load_and_report(ant_path, recast_path, T=None, steps=None,
                      mode="simplified", validation_json=None,
                      solver="roadrunner"):
     """Load and report on a single recast model.
@@ -573,14 +573,23 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400,
     Args:
         ant_path: Path to input Antimony file
         recast_path: Path to recast output Antimony file
-        T: Simulation time
-        steps: Number of simulation steps
+        T: Simulation time (if None, uses @SIMTIME T_END from file, default 20.0)
+        steps: Number of simulation steps (if None, uses @SIMTIME N_STEPS from file, default 400)
         mode: Output mode ('simplified' or 'canonical')
         validation_json: Optional path to validation JSON file
         solver: ODE solver to use - "roadrunner" (default) or "rk4"
     """
     ant_text = open(ant_path).read()
     rec_text = open(recast_path).read()
+    
+    # Parse original model to extract simulation metadata
+    ir = ssys.parse_antimony(ant_text)
+    
+    # Use @SIMTIME values if T/steps not explicitly provided
+    if T is None:
+        T = ir.sim_t_end if ir.sim_t_end is not None else 20.0
+    if steps is None:
+        steps = ir.sim_n_steps if ir.sim_n_steps is not None else 400
     display(Markdown("**Files**"))
     display(Markdown(f"- Antimony input: `{os.path.basename(ant_path)}`"
                      f"<br>- Recast output: "
@@ -590,7 +599,7 @@ def load_and_report(ant_path, recast_path, T=20.0, steps=400,
     display(Markdown("**Recast Antimony**"))
     display(Code(rec_text, language="text"))
 
-    ir = ssys.parse_antimony(ant_text)
+    # Build symbolic system (ir already parsed above for @SIMTIME)
     sym = ssys.build_sym_system(ir)
     rec = ssys.recast_to_ssystem(sym, mode=mode)
 
