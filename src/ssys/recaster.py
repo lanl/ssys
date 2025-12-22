@@ -2768,8 +2768,20 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
         lines.append("// ========================================================================")
         lines.append("")
     
-    # Initial assignments
-    for s, v in sorted(result.initials.items(), key=lambda kv: kv[0].name):
+    # Initial assignments - handle both Symbol and tuple keys
+    def _init_sort_key(kv):
+        k = kv[0]
+        if hasattr(k, 'name'):
+            return k.name
+        elif isinstance(k, tuple):
+            return str(k)
+        else:
+            return str(k)
+    
+    for s, v in sorted(result.initials.items(), key=_init_sort_key):
+        # Skip tuple keys (compartment info, const params)
+        if not hasattr(s, 'name'):
+            continue
         lines.append(f"{s.name} = {float(v):g}")
     
     lines.append("")
@@ -2951,7 +2963,20 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         lines.append("//       while maintaining dynamics qualitatively equivalent to zero ICs")
     
     auxiliary_vars = set(result.variables)  # These are the Z_1, Z_2, ... variables
-    for s, v in sorted(result.initials.items(), key=lambda kv: kv[0].name):
+    # Sort initials - handle both Symbol and tuple keys
+    def _init_sort_key(kv):
+        k = kv[0]
+        if hasattr(k, 'name'):
+            return k.name
+        elif isinstance(k, tuple):
+            return str(k)
+        else:
+            return str(k)
+    
+    for s, v in sorted(result.initials.items(), key=_init_sort_key):
+        # Skip tuple keys (compartment info, const params) - only process Symbol keys
+        if not hasattr(s, 'name'):
+            continue
         # Only output ICs for auxiliary variables, NOT original variables or parameters
         if s in auxiliary_vars and s.name not in result.params:
             # Check if we have a symbolic expression for this IC
