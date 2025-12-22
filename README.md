@@ -418,8 +418,16 @@ This follows Savageau & Voit (1987): positive orthant assumption, decomposition 
 ❌ **Not yet supported:**
 - Modules
 - Events and piecewise functions
-- Time-dependent forcing
 - Non-positive variables (requires preprocessing)
+
+✅ **Simulation metadata:**
+- `@SIM` comments specify simulation time parameters:
+  ```antimony
+  // @SIM T_START=0 T_END=100 N_STEPS=500
+  ```
+  - `T_START`: Simulation start time (default: 0.0)
+  - `T_END`: Simulation end time (default: 20.0)
+  - `N_STEPS`: Number of steps (default: 400)
 
 ---
 

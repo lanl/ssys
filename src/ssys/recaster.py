@@ -71,7 +71,7 @@ class ModelIR:
     param_exprs: Dict[str, str] = field(default_factory=dict)  # Store parameter expressions before evaluation
     initial_exprs: Dict[str, str] = field(default_factory=dict)  # Store initial condition expressions
     antimony_text: str = ""  # Cache original Antimony text for RoadRunner
-    # Simulation metadata (from @SIM or @SIMTIME comments)
+    # Simulation metadata (from @SIM comments)
     sim_t_start: Optional[float] = None  # Simulation start time
     sim_t_end: Optional[float] = None  # Simulation end time
     sim_n_steps: Optional[int] = None  # Number of simulation steps
@@ -93,13 +93,11 @@ def parse_antimony(text: str) -> ModelIR:
     ir.antimony_text = text  # Cache original text for RoadRunner
     ir.raw_lines = [ln.rstrip() for ln in text.splitlines()]
     
-    # First pass: extract @SIM or @SIMTIME metadata from comments
-    # Supports both formats for backward compatibility:
-    #   // @SIM T_START=0 T_END=100 N_STEPS=500  (multiple on one line)
-    #   // @SIMTIME T_END=100                     (single param per line)
+    # First pass: extract @SIM metadata from comments
+    # Format: // @SIM T_START=0 T_END=100 N_STEPS=500
     import re
-    # Match @SIM or @SIMTIME marker
-    sim_marker_pattern = re.compile(r'@(?:SIM|SIMTIME)\b')
+    # Match @SIM marker
+    sim_marker_pattern = re.compile(r'@SIM\b')
     # Match individual key=value pairs
     key_value_pattern = re.compile(r'(\w+)\s*=\s*([0-9.eE+-]+)')
     
