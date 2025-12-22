@@ -2462,10 +2462,12 @@ def _pool_ssystem_recast(sym: 'SymSystem', mode: str = "simplified") -> 'RecastR
             mono_terms.append((coeff, exps))
 
         # Handle degenerate X' == 0
+        # Use original variable's initial condition, not hardcoded 1.0
         if not mono_terms:
             V = sp.symbols(f"{Xi.name}_t1", positive=True)
             new_variables.append(V)
-            new_initials[V] = 1.0
+            xi0 = float(new_initials.get(Xi, 1.0))
+            new_initials[V] = xi0 if xi0 != 0.0 else 1.0  # Preserve non-zero IC
             new_equations.append(SSysEquation(V, (0.0, {}), (0.0, {})))
             factor_map[Xi] = [V]
             continue
