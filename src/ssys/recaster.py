@@ -71,7 +71,8 @@ class ModelIR:
     param_exprs: Dict[str, str] = field(default_factory=dict)  # Store parameter expressions before evaluation
     initial_exprs: Dict[str, str] = field(default_factory=dict)  # Store initial condition expressions
     antimony_text: str = ""  # Cache original Antimony text for RoadRunner
-    # Simulation metadata (from @SIMTIME comments)
+    # Simulation metadata (from @SIM or @SIMTIME comments)
+    sim_t_start: Optional[float] = None  # Simulation start time
     sim_t_end: Optional[float] = None  # Simulation end time
     sim_n_steps: Optional[int] = None  # Number of simulation steps
 
@@ -92,25 +93,40 @@ def parse_antimony(text: str) -> ModelIR:
     ir.antimony_text = text  # Cache original text for RoadRunner
     ir.raw_lines = [ln.rstrip() for ln in text.splitlines()]
     
-    # First pass: extract @SIMTIME metadata from comments
+    # First pass: extract @SIM or @SIMTIME metadata from comments
+    # Supports both formats for backward compatibility:
+    #   // @SIM T_START=0 T_END=100 N_STEPS=500  (multiple on one line)
+    #   // @SIMTIME T_END=100                     (single param per line)
     import re
-    simtime_pattern = re.compile(r'@SIMTIME\s+(\w+)\s*=\s*([0-9.eE+-]+)')
+    # Match @SIM or @SIMTIME marker
+    sim_marker_pattern = re.compile(r'@(?:SIM|SIMTIME)\b')
+    # Match individual key=value pairs
+    key_value_pattern = re.compile(r'(\w+)\s*=\s*([0-9.eE+-]+)')
+    
     for raw in ir.raw_lines:
         if '//' in raw:
             comment_part = raw.split('//', 1)[1]
-            for match in simtime_pattern.finditer(comment_part):
-                key = match.group(1).upper()
-                value = match.group(2)
-                if key == 'T_END':
-                    try:
-                        ir.sim_t_end = float(value)
-                    except ValueError:
-                        pass
-                elif key == 'N_STEPS':
-                    try:
-                        ir.sim_n_steps = int(float(value))
-                    except ValueError:
-                        pass
+            # Check if this line has @SIM or @SIMTIME
+            if sim_marker_pattern.search(comment_part):
+                # Extract all key=value pairs from this line
+                for match in key_value_pattern.finditer(comment_part):
+                    key = match.group(1).upper()
+                    value = match.group(2)
+                    if key == 'T_START':
+                        try:
+                            ir.sim_t_start = float(value)
+                        except ValueError:
+                            pass
+                    elif key == 'T_END':
+                        try:
+                            ir.sim_t_end = float(value)
+                        except ValueError:
+                            pass
+                    elif key == 'N_STEPS':
+                        try:
+                            ir.sim_n_steps = int(float(value))
+                        except ValueError:
+                            pass
 
     for raw in ir.raw_lines:
         # strip inline comments

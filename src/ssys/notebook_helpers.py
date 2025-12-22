@@ -565,7 +565,7 @@ def latex_factor_map(rec):
     return "\\begin{aligned}\n" + " \\\\\n".join(rows) + "\n\\end{aligned}"
 
 
-def load_and_report(ant_path, recast_path, T=None, steps=None,
+def load_and_report(ant_path, recast_path, T=None, T_start=None, steps=None,
                      mode="simplified", validation_json=None,
                      solver="roadrunner"):
     """Load and report on a single recast model.
@@ -573,8 +573,9 @@ def load_and_report(ant_path, recast_path, T=None, steps=None,
     Args:
         ant_path: Path to input Antimony file
         recast_path: Path to recast output Antimony file
-        T: Simulation time (if None, uses @SIMTIME T_END from file, default 20.0)
-        steps: Number of simulation steps (if None, uses @SIMTIME N_STEPS from file, default 400)
+        T: Simulation end time (if None, uses @SIM T_END from file, default 20.0)
+        T_start: Simulation start time (if None, uses @SIM T_START from file, default 0.0)
+        steps: Number of simulation steps (if None, uses @SIM N_STEPS from file, default 400)
         mode: Output mode ('simplified' or 'canonical')
         validation_json: Optional path to validation JSON file
         solver: ODE solver to use - "roadrunner" (default) or "rk4"
@@ -585,7 +586,9 @@ def load_and_report(ant_path, recast_path, T=None, steps=None,
     # Parse original model to extract simulation metadata
     ir = ssys.parse_antimony(ant_text)
     
-    # Use @SIMTIME values if T/steps not explicitly provided
+    # Use @SIM values if T/T_start/steps not explicitly provided
+    if T_start is None:
+        T_start = ir.sim_t_start if ir.sim_t_start is not None else 0.0
     if T is None:
         T = ir.sim_t_end if ir.sim_t_end is not None else 20.0
     if steps is None:
@@ -674,7 +677,7 @@ def load_and_report(ant_path, recast_path, T=None, steps=None,
         from ssys.ode_backends import simulate_ode
         
         # Simulate original model
-        result_orig = simulate_ode(ir, 0.0, T, steps+1, backend=solver)
+        result_orig = simulate_ode(ir, T_start, T, steps+1, backend=solver)
         if not result_orig["success"]:
             display(Markdown(f"**Warning:** Original simulation failed with {solver}: {result_orig['message']}"))
             display(Markdown("Falling back to RK4..."))
@@ -685,7 +688,7 @@ def load_and_report(ant_path, recast_path, T=None, steps=None,
             # Pass assignment rules from IR so they get substituted into ODEs
             assignment_rules = getattr(ir, 'assignment_rules', None)
             f_orig = build_rhs_from_sympy(var_syms, rhs_exprs, params, assignment_rules=assignment_rules)
-            t_orig, y_orig = rk4(f_orig, (0.0, T), y0, steps)
+            t_orig, y_orig = rk4(f_orig, (T_start, T), y0, steps)
             # For RK4 fallback, use alphabetical ordering
             orig_state_names = [str(s) for s in var_syms]
         else:
@@ -696,7 +699,7 @@ def load_and_report(ant_path, recast_path, T=None, steps=None,
         
         # Build recast IR for simulation
         recast_ir = ssys.parse_antimony(rec_text)
-        result_rec = simulate_ode(recast_ir, 0.0, T, steps+1, backend=solver)
+        result_rec = simulate_ode(recast_ir, T_start, T, steps+1, backend=solver)
         if not result_rec["success"]:
             display(Markdown(f"**Warning:** Recast simulation failed with {solver}: {result_rec['message']}"))
             display(Markdown("Falling back to RK4..."))
@@ -724,7 +727,7 @@ def load_and_report(ant_path, recast_path, T=None, steps=None,
             # Recast models shouldn't have assignment rules (they're inlined), but check anyway
             recast_assignment_rules = getattr(recast_ir, 'assignment_rules', None)
             f_rec = build_rhs_from_sympy(aux_syms, rec_rhs, params, assignment_rules=recast_assignment_rules)
-            t_rec, y_rec = rk4(f_rec, (0.0, T), aux_y0, steps)
+            t_rec, y_rec = rk4(f_rec, (T_start, T), aux_y0, steps)
             # For RK4 fallback, use alphabetical ordering
             rec_state_names = [str(s) for s in aux_syms]
         else:
