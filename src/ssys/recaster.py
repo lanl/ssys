@@ -1881,8 +1881,11 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
             base_prime += partial_t  # d(time)/dt = 1
         
         # Z' = base' / (2*Z)
+        # CRITICAL: Do NOT simplify - for complex time-dependent bases (like Weber model),
+        # sp.simplify() can hang indefinitely on the massive derivative expression.
+        # The ODE is mathematically correct without simplification.
         Z_ode = base_prime / (2 * Z)
-        sqrt_aux_odes[Z] = sp.simplify(Z_ode)
+        sqrt_aux_odes[Z] = Z_ode  # Skip simplify - too expensive for complex expressions
     
     # Add sqrt auxiliary ODEs to new_aux_odes
     new_aux_odes.update(sqrt_aux_odes)
