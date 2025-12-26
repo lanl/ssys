@@ -2074,7 +2074,12 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
     # FOURTH PASS: Recursively lift any NEW composite functions introduced by inverse mappings
     # This handles cases where inverse mappings create expressions like exp(-Z_2)
     # which are mathematically correct but still contain composite functions
-    max_recursive_lifts = 3  # Prevent infinite loops
+    # 
+    # IMPORTANT: For time-dependent models with complex nested functions (like Weber2018),
+    # the recursive lifting can create infinite loops. DISABLE recursive lifting entirely
+    # when sqrt(sum) expressions are present since they indicate complex time-dependent
+    # models that don't benefit from recursive lifting.
+    max_recursive_lifts = 0 if sqrt_to_aux else 1  # Disable for sqrt(sum) models
     for recursive_iteration in range(max_recursive_lifts):
         # Scan all ODEs for remaining composite functions
         has_composite = False
@@ -2087,6 +2092,18 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
         
         if not has_composite:
             break  # All ODEs are now in power-law form
+        
+        # Check if all remaining functions are already lifted auxiliaries
+        # If so, we're done (avoid infinite recursion)
+        already_lifted = set(aux_to_func_with_offset.values())
+        new_funcs_not_lifted = set()
+        for func in all_new_functions:
+            if func not in already_lifted:
+                new_funcs_not_lifted.add(func)
+        
+        if not new_funcs_not_lifted:
+            # All remaining functions are already lifted - we're done
+            break
         
         # Found composite functions - recursively lift them
         # CRITICAL: Find max Z_n index to avoid duplicate names in recursive call
