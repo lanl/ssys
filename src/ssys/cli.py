@@ -14,14 +14,23 @@ from ssys import parse_antimony, build_sym_system, recast_to_ssystem, ssystem_to
 
 
 def read_manifest(path: str) -> list[str]:
-    """Read a manifest file and return list of absolute paths to .ant files."""
+    """Read a manifest file and return list of absolute paths to .ant files.
+    
+    Relative paths in the manifest are resolved relative to the manifest
+    file's directory, not the current working directory.
+    """
+    manifest_dir = os.path.dirname(os.path.abspath(path))
     items = []
     with open(path, "r") as f:
         for ln in f:
             s = ln.strip()
             if not s or s.startswith("#"):
                 continue
-            items.append(os.path.abspath(s))
+            # Resolve relative paths from manifest's directory
+            if os.path.isabs(s):
+                items.append(s)
+            else:
+                items.append(os.path.join(manifest_dir, s))
     return items
 
 
