@@ -46,7 +46,7 @@ model WeberRaymondMunsky2018_Model2_LambdaA
   species R   in cell;   // mean mRNA count
 
   // Constants and parameters
-  const pi      = 3.14159265358979;
+  // Note: 'pi' is a built-in constant in Antimony, no need to define it
 
   // Base transition rates k_ij(0)
   const k_12_0  = 3;      // k_12(0)
