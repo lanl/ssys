@@ -1,110 +1,89 @@
-// Dreisigmeyer2008_LacOperon_Lactose.ant
+// Dreisigmeyer2008_LacOperon_Lactose_uM.ant
 //
-// Source:
-//   Dreisigmeyer DW, Stajic J, Nemenman I, Hlavacek WS, Wall ME (2008)
-//   "Determinants of bistability in induction of the Escherichia coli lac operon."
-//   IET Systems Biology 2(5):293–303.  (arXiv:0802.1223)
+// Use µM everywhere for concentrations:
+//   l, a, z, l_ext, K_i, K_m_l, K_m_a, eps, c, K_z  are all in µM
 //
-// Lactose-induction model (Eqs. (1a–1c) in the paper):
-//   Variables:
-//     l(t) : internal lactose concentration
-//     a(t) : allolactose concentration
-//     z(t) : β-galactosidase concentration
+// Conversions applied:
+//   nM -> µM : divide by 1000
+//   mM -> µM : multiply by 1000
 //
-//   Parameters (nominal values from Table I; lactose case uses φ = 0.5):
-//     γ     : growth dilution rate                     (min^-1)
-//     α     : permease import turnover number         (min^-1)
-//     φ     : export/import turnover ratio (lactose)  (dimensionless)
-//     K_i   : permease Michaelis constant             (nM)
-//     β     : β-gal lactose turnover number           (min^-1)
-//     ν     : branching fraction lactose→allolactose  (dimensionless)
-//     K_m_l : β-gal lactose Michaelis constant        (mM)
-//     δ     : β-gal allolactose turnover number       (min^-1)
-//     K_m_a : β-gal allolactose Michaelis constant    (mM)
-//     ε     : fully induced β-gal level               (nM)
-//     c     : basal β-gal level                       (nM)
-//     K_z   : allolactose at half-maximal induction   (nM)
-//     n_Hill: Hill exponent for induction             (dimensionless)
-//
-//   ODEs (paper notation; l* = external lactose):
-//
-//     dl/dt = α z (l* - φ l)/(Ki + l + l*)
-//             - β z l / [ (1 + a/Km_a) (Km_l + l) ] - γ l          (1a)
-//
-//     da/dt = ν β z l / [ (1 + a/Km_a) (Km_l + l) ]
-//             - δ z a / [ (1 + l/Km_l) (Km_a + a) ] - γ a          (1b)
-//
-//     dz/dt = c γ + ε γ a^nHill / (Kz^nHill + a^nHill) - γ z       (1c)
-//
-//   Here we keep l* as a constant parameter (external lactose), so the
-//   system is 3D in (l, a, z). Units are as in Table I; since everything
-//   is self-consistent, we can treat them as arbitrary concentration units.
+// Rates (min^-1) and dimensionless parameters unchanged.
 
-model Dreisigmeyer2008_LacOperon_Lactose
+model Dreisigmeyer2008_LacOperon_Lactose_uM
 
   // Compartment (dimensionless volume)
   compartment cell = 1;
 
-  // State variables
-  species l in cell;   // internal lactose
-  species a in cell;   // allolactose
-  species z in cell;   // β-galactosidase
+  // State variables (µM)
+  species l in cell;   // internal lactose (µM)
+  species a in cell;   // allolactose (µM)
+  species z in cell;   // β-galactosidase (µM)
 
-  // External lactose (constant input; user can change)
-  const l_ext = 1.0;   // l* [same units as l], example 1 mM
+  // External lactose (constant input; µM)
+  // Original example: 1.0 mM -> 1000 µM
+  const l_ext = 1000.0;
 
-  // Nominal parameter values (from Table I; lactose case) 
+  // -----------------------------
+  // Parameters
+  // -----------------------------
 
   // Growth dilution
-  const growth_rate = 0.02;    // min^-1 (chosen within 0.0116–0.0231 min^-1 range)
+  const growth_rate = 0.02;    // min^-1
 
   // Permease transport
-  const alpha = 600.0;         // min^-1  (permease import turnover number)
-  const phi   = 0.5;           // dimensionless (export/import turnover ratio, lactose)
+  const alpha = 600.0;         // min^-1
+  const phi   = 0.5;           // dimensionless
 
-  const K_i     = 5.0e5;       // nM      (permease Michaelis constant)
+  // Michaelis constants / saturation constants (µM)
+  // Original K_i = 5.0e5 nM -> 500 µM
+  const K_i   = 500.0;
 
   // β-galactosidase lactose metabolism
-  const beta    = 2.85e4;      // min^-1  (lactose turnover)
-  const nu      = 0.468;       // fraction (lactose flux to allolactose)
-  const K_m_l   = 2.53;        // mM      (Km for lactose)
+  const beta  = 2.85e4;        // min^-1
+  const nu    = 0.468;         // dimensionless
+  // Original K_m_l = 2.53 mM -> 2530 µM
+  const K_m_l = 2530.0;
 
   // β-galactosidase allolactose metabolism
-  const delta   = 2.30e4;      // min^-1  (allolactose turnover)
-  const K_m_a   = 1.2;         // mM      (Km for allolactose)
+  const delta = 2.30e4;        // min^-1
+  // Original K_m_a = 1.2 mM -> 1200 µM
+  const K_m_a = 1200.0;
 
-  // β-gal expression parameters
-  const eps     = 34285.0;     // nM      (fully induced β-gal level ε)
-  const c       = 34.3;        // nM      (basal β-gal level c)
-  const K_z     = 1.05e5;      // nM      (allolactose at half-max induction)
-  const n_Hill  = 2.0;         // Hill coefficient n
+  // β-gal expression parameters (µM)
+  // Original eps = 34285 nM -> 34.285 µM
+  const eps    = 34.285;
+  // Original c = 34.3 nM -> 0.0343 µM
+  const c      = 0.0343;
+  // Original K_z = 1.05e5 nM -> 105 µM
+  const K_z    = 105.0;
+  const n_Hill = 2.0;
 
   // -----------------------------
   // ODEs
   // -----------------------------
 
-  // Internal lactose l
+  // Internal lactose l (µM)
   l' =  alpha * z * (l_ext - phi*l) / (K_i + l + l_ext)
         - beta * z * l / ((1 + a/K_m_a) * (K_m_l + l))
         - growth_rate * l;
 
-  // Allolactose a
+  // Allolactose a (µM)
   a' =  nu * beta * z * l / ((1 + a/K_m_a) * (K_m_l + l))
         - delta * z * a / ((1 + l/K_m_l) * (K_m_a + a))
         - growth_rate * a;
 
-  // β-galactosidase z
+  // β-galactosidase z (µM)
   z' =  c * growth_rate
         + eps * growth_rate * a^n_Hill / (K_z^n_Hill + a^n_Hill)
         - growth_rate * z;
 
   // -----------------------------
-  // Initial conditions
+  // Initial conditions (µM)
   // -----------------------------
-  // "Uninduced" state: no internal lactose/allolactose, basal β-gal
+  // Uninduced baseline
   l = 0.0;
   a = 0.0;
   z = c;
 
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0 T_END=500 N_STEPS=2000
