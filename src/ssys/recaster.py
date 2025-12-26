@@ -2895,7 +2895,7 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
         # Skip tuple keys (compartment info, const params)
         if not hasattr(s, 'name'):
             continue
-        lines.append(f"{s.name} = {float(v):g}")
+        lines.append(f"{s.name} = {float(v):g};")
     
     lines.append("")
     
@@ -2928,11 +2928,11 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
                 total_const = sum(float(c) if not isinstance(c, sp.Expr) else float(sp.simplify(c)) 
                                   for c, e in eq.production)
                 # Output as (C+1) - 1
-                lines.append(f"{eq.var.name}' = {total_const + 1:g} - 1")
+                lines.append(f"{eq.var.name}' = {total_const + 1:g} - 1;")
             else:
-                lines.append(f"{eq.var.name}' = {production}")
+                lines.append(f"{eq.var.name}' = {production};")
         else:
-            lines.append(f"{eq.var.name}' = {production} - ({degradation})")
+            lines.append(f"{eq.var.name}' = {production} - ({degradation});")
     
     lines.append("end")
     # Convert ** to ^ for valid Antimony syntax
