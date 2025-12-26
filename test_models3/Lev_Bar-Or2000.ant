@@ -146,4 +146,4 @@ model LevBarOr2000_p53_Mdm2
   threshold = k_deg * signal_0;  // = 1.93
 
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0 T_END=200 N_STEPS=400

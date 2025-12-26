@@ -80,4 +80,4 @@ model Bergman1989_MinimalGlucoseModel
   I = I_b;    // µU/mL, basal insulin
 
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0 T_END=200 N_STEPS=400

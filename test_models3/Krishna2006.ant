@@ -75,4 +75,4 @@ model Krishna2006_NFkB_3Variable_Core
   I  = 0;
 
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0 T_END=10 N_STEPS=400

@@ -20,9 +20,9 @@ model Selkov_1968()
   a = 0.08;        // dimensionless feedback parameter
   b = 0.6;         // dimensionless input parameter
 
-  // Dynamics
-  dx/dt = -x + a*y + x^2*y;
-  dy/dt =  b - a*y - x^2*y;
+  // Dynamics (using prime notation for ssys parser)
+  x' = -x + a*y + x^2*y;
+  y' =  b - a*y - x^2*y;
 
   // Initial conditions (generic off-fixed-point start; adjust as needed)
   x = 1.0;

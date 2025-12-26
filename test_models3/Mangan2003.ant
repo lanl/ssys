@@ -71,4 +71,4 @@ model ManganAlon2003_CoherentFFL_AND
   Z = 0.01;
 
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0 T_END=10 N_STEPS=400

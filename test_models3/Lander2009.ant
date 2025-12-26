@@ -73,4 +73,4 @@ model Lander2009_OE_p1_feedback
   X_2 = 0;
 
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0 T_END=12 N_STEPS=400
