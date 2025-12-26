@@ -586,13 +586,22 @@ def load_and_report(ant_path, recast_path, T=None, T_start=None, steps=None,
     # Parse original model to extract simulation metadata
     ir = ssys.parse_antimony(ant_text)
     
-    # Use @SIM values if T/T_start/steps not explicitly provided
-    if T_start is None:
-        T_start = ir.sim_t_start if ir.sim_t_start is not None else 0.0
-    if T is None:
-        T = ir.sim_t_end if ir.sim_t_end is not None else 20.0
-    if steps is None:
-        steps = ir.sim_n_steps if ir.sim_n_steps is not None else 400
+    # Model @SIM values take PRECEDENCE over function parameters
+    # This ensures per-model simulation settings are respected
+    if ir.sim_t_start is not None:
+        T_start = ir.sim_t_start
+    elif T_start is None:
+        T_start = 0.0  # default
+    
+    if ir.sim_t_end is not None:
+        T = ir.sim_t_end
+    elif T is None:
+        T = 20.0  # default
+    
+    if ir.sim_n_steps is not None:
+        steps = ir.sim_n_steps
+    elif steps is None:
+        steps = 400  # default
     display(Markdown("**Files**"))
     display(Markdown(f"- Antimony input: `{os.path.basename(ant_path)}`"
                      f"<br>- Recast output: "
@@ -679,18 +688,9 @@ def load_and_report(ant_path, recast_path, T=None, T_start=None, steps=None,
         # Simulate original model
         result_orig = simulate_ode(ir, T_start, T, steps+1, backend=solver)
         if not result_orig["success"]:
-            display(Markdown(f"**Warning:** Original simulation failed with {solver}: {result_orig['message']}"))
-            display(Markdown("Falling back to RK4..."))
-            # Fallback to old RK4 method
-            var_syms = sorted(sym.odes.keys(), key=lambda s: s.name)
-            rhs_exprs = [sp.simplify(sym.odes[s]) for s in var_syms]
-            y0 = [float(sym.initials[s]) for s in var_syms]
-            # Pass assignment rules from IR so they get substituted into ODEs
-            assignment_rules = getattr(ir, 'assignment_rules', None)
-            f_orig = build_rhs_from_sympy(var_syms, rhs_exprs, params, assignment_rules=assignment_rules)
-            t_orig, y_orig = rk4(f_orig, (T_start, T), y0, steps)
-            # For RK4 fallback, use alphabetical ordering
-            orig_state_names = [str(s) for s in var_syms]
+            display(Markdown(f"**❌ Original simulation failed with {solver}:** {result_orig['message']}"))
+            display(Markdown("*Cannot proceed without successful simulation.*"))
+            return  # Exit early - no fallback
         else:
             t_orig = result_orig["t"]
             y_orig = result_orig["y"]
@@ -701,35 +701,9 @@ def load_and_report(ant_path, recast_path, T=None, T_start=None, steps=None,
         recast_ir = ssys.parse_antimony(rec_text)
         result_rec = simulate_ode(recast_ir, T_start, T, steps+1, backend=solver)
         if not result_rec["success"]:
-            display(Markdown(f"**Warning:** Recast simulation failed with {solver}: {result_rec['message']}"))
-            display(Markdown("Falling back to RK4..."))
-            # Fallback to old RK4 method
-            aux_syms = list(sorted(rec.variables, key=lambda s: s.name))
-            if rec.status == RecastStatus.GMA:
-                rec_rhs = []
-                for eq in rec.gma_equations:
-                    prod = sp.Integer(0)
-                    for c, e in eq.production:
-                        prod += product_expr(c, e)
-                    deg = sp.Integer(0)
-                    for c, e in eq.degradation:
-                        deg += product_expr(c, e)
-                    rec_rhs.append(sp.simplify(prod - deg))
-            else:
-                rec_rhs = [
-                    sp.simplify(
-                        product_expr(eq.growth[0], _expand_exps_through_factors(eq.growth[1], rec.factor_map)) -
-                        product_expr(eq.decay[0], _expand_exps_through_factors(eq.decay[1], rec.factor_map))
-                    )
-                    for eq in rec.equations
-                ]
-            aux_y0 = [float(rec.initials[s]) for s in aux_syms]
-            # Recast models shouldn't have assignment rules (they're inlined), but check anyway
-            recast_assignment_rules = getattr(recast_ir, 'assignment_rules', None)
-            f_rec = build_rhs_from_sympy(aux_syms, rec_rhs, params, assignment_rules=recast_assignment_rules)
-            t_rec, y_rec = rk4(f_rec, (T_start, T), aux_y0, steps)
-            # For RK4 fallback, use alphabetical ordering
-            rec_state_names = [str(s) for s in aux_syms]
+            display(Markdown(f"**❌ Recast simulation failed with {solver}:** {result_rec['message']}"))
+            display(Markdown("*Cannot proceed without successful simulation.*"))
+            return  # Exit early - no fallback
         else:
             t_rec = result_rec["t"]
             y_rec = result_rec["y"]
@@ -791,3 +765,93 @@ def load_and_report(ant_path, recast_path, T=None, T_start=None, steps=None,
     ax.tick_params(labelsize=8)
 
     fig.tight_layout()
+    plt.show()
+    
+    # ==============================
+    # Trajectory Comparison Table
+    # ==============================
+    # Compute scaled relative error between original and reconstructed trajectories
+    # Error = |X_orig - X_recast| / (1 + max(|X_orig|, |X_recast|))
+    
+    display(Markdown("### Trajectory Comparison"))
+    
+    # Build reconstructed values from recast simulation
+    n_points = len(t_orig)
+    n_vars = len(var_syms)
+    X_orig_array = np.zeros((n_points, n_vars))
+    X_recast_array = np.zeros((n_points, n_vars))
+    
+    # Fill original values
+    for i, s in enumerate(var_syms):
+        idx = orig_name_to_idx.get(str(s))
+        if idx is not None:
+            X_orig_array[:, i] = y_orig[:, idx]
+    
+    # Fill reconstructed values from recast
+    if rec.factor_map:
+        for i, (k, factors) in enumerate(sorted(rec.factor_map.items(), key=lambda kv: kv[0].name)):
+            prod = np.ones(n_points, dtype=float)
+            for s in factors:
+                idx = rec_name_to_idx.get(str(s))
+                if idx is not None:
+                    prod *= y_rec[:, idx]
+            # Find which original variable this corresponds to
+            var_idx = next((j for j, v in enumerate(var_syms) if str(v) == str(k)), None)
+            if var_idx is not None:
+                X_recast_array[:, var_idx] = prod
+    else:
+        for i, s in enumerate(var_syms):
+            idx = rec_name_to_idx.get(str(s))
+            if idx is not None:
+                X_recast_array[:, i] = y_rec[:, idx]
+    
+    # Compute error relative to characteristic scale (max value over trajectory)
+    # This avoids false positives from small absolute differences at early time
+    # when values are near zero.
+    #
+    # For each variable:
+    #   scale = max(|orig|, |recast|) over all time points
+    #   error = |orig - recast| / scale
+    #
+    # This gives intuitive results: if curves look the same, error is small.
+    scale = np.maximum(
+        np.max(np.abs(X_orig_array), axis=0),
+        np.max(np.abs(X_recast_array), axis=0)
+    )
+    scale = np.maximum(scale, 1e-10)  # Avoid division by zero for zero trajectories
+    
+    errors = np.abs(X_orig_array - X_recast_array) / scale[np.newaxis, :]
+    
+    # Build table
+    # 5% threshold is reasonable for GMA recasts with auxiliary variables
+    # The coupled systems can have small numerical integration differences
+    threshold = 5e-2  # 5% error threshold
+    table_rows = []
+    table_rows.append("| Variable | Max Error | Mean Error | Status |")
+    table_rows.append("|----------|-----------|------------|--------|")
+    
+    overall_pass = True
+    for i, s in enumerate(var_syms):
+        var_errors = errors[:, i]
+        max_err = float(np.max(var_errors))
+        mean_err = float(np.mean(var_errors))
+        
+        status = "✓" if max_err < threshold else "✗"
+        if max_err >= threshold:
+            overall_pass = False
+        
+        table_rows.append(f"| {s} | {max_err:.2e} | {mean_err:.2e} | {status} |")
+    
+    # Overall row
+    overall_max = float(np.max(errors))
+    overall_mean = float(np.mean(errors))
+    overall_status = "✓" if overall_pass else "✗"
+    table_rows.append(f"| **Overall** | **{overall_max:.2e}** | **{overall_mean:.2e}** | **{overall_status}** |")
+    
+    display(Markdown("\n".join(table_rows)))
+    
+    # Show interpretation
+    if overall_pass:
+        display(Markdown(f"*Trajectories match within {threshold*100:.1f}% tolerance.*"))
+    else:
+        display(Markdown(f"⚠️ *Trajectories diverge. Max scaled error: {overall_max:.2e} exceeds {threshold*100:.1f}% threshold.*"))

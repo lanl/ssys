@@ -47,21 +47,15 @@ def simulate_ode(
                 model_ir, t0, t_end, n_points, y0_override, options
             )
         except ImportError as e:
-            # libRoadRunner not available
-            if options.get("fallback_to_rk4", True):
-                from .rk4_backend import simulate_with_rk4
-                return simulate_with_rk4(
-                    model_ir, t0, t_end, n_points, y0_override, options
-                )
-            else:
-                return {
-                    "t": np.array([]),
-                    "y": np.array([]),
-                    "state_names": [],
-                    "success": False,
-                    "message": f"libRoadRunner not available: {e}",
-                    "integrator_stats": {}
-                }
+            # libRoadRunner not available - fail explicitly, no fallback
+            return {
+                "t": np.array([]),
+                "y": np.array([]),
+                "state_names": [],
+                "success": False,
+                "message": f"libRoadRunner not available: {e}",
+                "integrator_stats": {}
+            }
     elif backend == "rk4":
         from .rk4_backend import simulate_with_rk4
         return simulate_with_rk4(

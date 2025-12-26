@@ -93,6 +93,36 @@ def parse_antimony(text: str) -> ModelIR:
     ir.antimony_text = text  # Cache original text for RoadRunner
     ir.raw_lines = [ln.rstrip() for ln in text.splitlines()]
     
+    # FIRST: Extract @SIM metadata from comments BEFORE any processing
+    # This must happen before raw_lines is overwritten by joined_lines
+    # Format: // @SIM T_START=0 T_END=100 N_STEPS=500
+    import re
+    sim_marker_pattern = re.compile(r'@SIM\b')
+    key_value_pattern = re.compile(r'(\w+)\s*=\s*([0-9.eE+-]+)')
+    
+    for raw in ir.raw_lines:
+        if '//' in raw:
+            comment_part = raw.split('//', 1)[1]
+            if sim_marker_pattern.search(comment_part):
+                for match in key_value_pattern.finditer(comment_part):
+                    key = match.group(1).upper()
+                    value = match.group(2)
+                    if key == 'T_START':
+                        try:
+                            ir.sim_t_start = float(value)
+                        except ValueError:
+                            pass
+                    elif key == 'T_END':
+                        try:
+                            ir.sim_t_end = float(value)
+                        except ValueError:
+                            pass
+                    elif key == 'N_STEPS':
+                        try:
+                            ir.sim_n_steps = int(float(value))
+                        except ValueError:
+                            pass
+    
     # Pre-process: join continuation lines (lines without semicolons)
     # Antimony statements end with semicolons. Lines that don't end with ';'
     # (after stripping comments) are continuations of the previous statement.
@@ -2842,6 +2872,11 @@ def _format_factor(factor: sp.Expr) -> str:
             exp_str = str(exp)
         
         return f"{base_str}^{exp_str}"
+    
+    # Sum expression - MUST be wrapped in parentheses to preserve operator precedence
+    # This is critical for expressions like H*(A + B + C)*X^-1 where the sum is a factor
+    if factor.is_Add:
+        return f"({factor})"
     
     # Anything else - fallback to string representation
     return str(factor)

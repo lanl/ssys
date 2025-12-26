@@ -158,6 +158,152 @@ def simulate_with_roadrunner(
         }
 
 
+def _expand_func_calls(text: str, func_name: str, param: str, body: str) -> str:
+    """
+    Expand all calls to func_name(arg) in text, handling balanced parentheses.
+    
+    Args:
+        text: Text to process
+        func_name: Name of function to expand
+        param: Parameter name in function definition
+        body: Body of function definition
+        
+    Returns:
+        Text with function calls expanded
+    """
+    import re
+    result = []
+    i = 0
+    
+    # Pattern to find start of function call
+    pattern = re.compile(r'\b' + re.escape(func_name) + r'\s*\(')
+    
+    while i < len(text):
+        match = pattern.search(text, i)
+        if not match:
+            # No more calls - append rest and done
+            result.append(text[i:])
+            break
+        
+        # Append text before the call
+        result.append(text[i:match.start()])
+        
+        # Find the matching closing paren
+        paren_start = match.end() - 1  # Position of opening paren
+        depth = 1
+        j = paren_start + 1
+        while j < len(text) and depth > 0:
+            if text[j] == '(':
+                depth += 1
+            elif text[j] == ')':
+                depth -= 1
+            j += 1
+        
+        if depth != 0:
+            # Unbalanced parens - don't expand, just append as-is
+            result.append(text[match.start():j])
+            i = j
+            continue
+        
+        # Extract argument (between parens)
+        arg = text[paren_start + 1:j - 1].strip()
+        
+        # Expand: replace param with arg in body
+        expanded_body = re.sub(
+            r'\b' + re.escape(param) + r'\b',
+            f'({arg})',
+            body
+        )
+        
+        # Add wrapped expansion
+        result.append(f'({expanded_body})')
+        i = j
+    
+    return ''.join(result)
+
+
+def _expand_parametric_functions(text: str) -> str:
+    """
+    Expand user-defined parametric functions in Antimony text.
+    
+    Handles function definitions like:
+        M(x) := 1 + gamma * x^2;
+    And expands their usages like:
+        x1' = beta / M(x1);
+    To:
+        x1' = beta / (1 + gamma * x1^2);
+    
+    This is NOT standard Antimony syntax, but is commonly used in
+    mathematical biology papers for readability.
+    
+    IMPORTANT: Only expands in ODE lines (lines with X' =), not in comments.
+    """
+    import re
+    
+    # Step 1: Find all parametric function definitions
+    # Pattern: name(arg) := expression;
+    func_def_pattern = re.compile(
+        r'^\s*([a-zA-Z_]\w*)\s*\(\s*([a-zA-Z_]\w*)\s*\)\s*:=\s*(.+?)\s*;?\s*$',
+        re.MULTILINE
+    )
+    
+    functions = {}  # name -> (param, body)
+    for match in func_def_pattern.finditer(text):
+        func_name = match.group(1)
+        param_name = match.group(2)
+        body = match.group(3).rstrip(';').strip()
+        functions[func_name] = (param_name, body)
+    
+    if not functions:
+        return text  # No parametric functions found
+    
+    # Step 2: Remove function definitions from text
+    text = func_def_pattern.sub('', text)
+    
+    # Step 3: Split into lines and only expand in ODE lines
+    lines = text.split('\n')
+    expanded_lines = []
+    
+    for line in lines:
+        # Check if this is an ODE line (contains ' = with a derivative)
+        # or an initial condition line (var = value)
+        stripped = line.strip()
+        if stripped.startswith('//') or not stripped:
+            # Comment or empty - don't expand
+            expanded_lines.append(line)
+            continue
+        
+        # Only expand in lines that look like executable code
+        # (ODE lines, assignments, etc.)
+        if "'" in line or ('=' in line and ':=' not in line):
+            # This is an ODE or assignment line - expand functions
+            expanded = line
+            
+            # Expand each function, handling dependencies
+            # Sort so that functions used by other functions are expanded first
+            # E.g., expand s(x) before f(x) if f uses s
+            max_iterations = 20
+            for _ in range(max_iterations):
+                changed = False
+                for func_name, (param, body) in functions.items():
+                    # Use a function to find and expand calls with balanced parens
+                    new_expanded = _expand_func_calls(
+                        expanded, func_name, param, body
+                    )
+                    if new_expanded != expanded:
+                        expanded = new_expanded
+                        changed = True
+                
+                if not changed:
+                    break
+            
+            expanded_lines.append(expanded)
+        else:
+            expanded_lines.append(line)
+    
+    return '\n'.join(expanded_lines)
+
+
 def _get_antimony_text(model_ir: ModelIR) -> str:
     """
     Get Antimony text from ModelIR.
@@ -167,6 +313,7 @@ def _get_antimony_text(model_ir: ModelIR) -> str:
     - Numeric model names: "model 24_name" → "model m_24_name"
     - Multi-line equations: join continuation lines
     - gamma() function: compute at Python level (Antimony only has incomplete gamma)
+    - Parametric functions: expand inline (e.g., M(x1) → full expression)
     """
     import re
     from math import gamma as math_gamma, pi, sqrt
@@ -174,6 +321,9 @@ def _get_antimony_text(model_ir: ModelIR) -> str:
     # Check if antimony_text was cached during parsing
     if hasattr(model_ir, 'antimony_text') and model_ir.antimony_text:
         text = model_ir.antimony_text
+        
+        # CRITICAL: Expand parametric functions FIRST, before other fixes
+        text = _expand_parametric_functions(text)
         
         # Fix 1: Numeric model names
         text = re.sub(r'^(model\s+)(\d)', r'\1m_\2', text, flags=re.MULTILINE)

@@ -110,33 +110,62 @@ def _build_rhs_function(state_vars, odes, params):
         
     Returns:
         Function f(t, y) -> dydt
+    
+    Note:
+        Handles time-dependent ODEs by detecting 'time' symbol and including
+        it as the first argument to the lambdified functions.
     """
+    import sympy as sp
+    
     # Build param substitution dict by matching symbol names
     # Find all parameter symbols used in ODEs
     all_syms = set()
     for ode_expr in odes.values():
         all_syms.update(ode_expr.free_symbols)
     
-    # Match param symbols by name
+    # Check for 'time' symbol (independent variable, not a parameter)
+    time_sym = None
+    for sym in all_syms:
+        if str(sym) == 'time':
+            time_sym = sym
+            break
+    
+    # Match param symbols by name (exclude 'time' - it's the independent variable)
     param_subs = {}
     for sym in all_syms:
+        if str(sym) == 'time':
+            continue  # Don't substitute time - pass it as argument
         if str(sym) in params:
             param_subs[sym] = params[str(sym)]
     
     # Build lambdified function for each ODE
+    # If time_sym exists, include it as first argument
     rhs_funcs = []
     for var in state_vars:
         ode_expr = odes[var]
         # Substitute parameter values, then lambdify
         ode_numeric = ode_expr.subs(param_subs)
-        func = lambdify(state_vars, ode_numeric, modules='numpy')
+        
+        if time_sym is not None:
+            # Time-dependent ODE: lambdify with (time, *state_vars)
+            func = lambdify([time_sym] + list(state_vars), ode_numeric, modules='numpy')
+        else:
+            # Time-independent ODE: lambdify with state_vars only
+            func = lambdify(state_vars, ode_numeric, modules='numpy')
         rhs_funcs.append(func)
     
-    def f(t, y):
-        """RHS function: dydt = f(t, y)"""
-        # Evaluate each ODE with current state
-        dydt = np.array([func(*y) for func in rhs_funcs], dtype=float)
-        return dydt
+    if time_sym is not None:
+        def f(t, y):
+            """RHS function (time-dependent): dydt = f(t, y)"""
+            # Evaluate each ODE with current time and state
+            dydt = np.array([func(t, *y) for func in rhs_funcs], dtype=float)
+            return dydt
+    else:
+        def f(t, y):
+            """RHS function (time-independent): dydt = f(t, y)"""
+            # Evaluate each ODE with current state (time not used)
+            dydt = np.array([func(*y) for func in rhs_funcs], dtype=float)
+            return dydt
     
     return f
 

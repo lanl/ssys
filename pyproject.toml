@@ -57,6 +57,7 @@ sbml = [
 ]
 simulation = [
     "libroadrunner>=2.5",
+    "antimony>=2.13",
     "python-libsbml>=5.20",
 ]
 

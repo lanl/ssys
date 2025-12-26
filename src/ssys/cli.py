@@ -198,8 +198,18 @@ def main():
              for ant in ant_files]
     
     if args.validate:
-        # Count validation results
-        validated = sum(1 for _, _, _, vpath in cases if vpath is not None)
+        # Count validation results - check if validation PASSED, not just file exists
+        import json
+        validated = 0
+        for _, _, _, vpath in cases:
+            if vpath and os.path.exists(vpath):
+                try:
+                    with open(vpath) as f:
+                        report = json.load(f)
+                        if report.get('overall_pass'):
+                            validated += 1
+                except (json.JSONDecodeError, IOError):
+                    pass  # Skip malformed/unreadable files
         print(f"✓ Validated {validated}/{len(cases)} models")
 
     nb_path = build_notebook(cases, args.outdir, mode=args.mode)

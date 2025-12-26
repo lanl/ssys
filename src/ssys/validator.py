@@ -1100,6 +1100,12 @@ class RecastValidator:
                 # Initialize array for all recast variables
                 Z_sample = np.zeros(len(recast_vars_ordered))
                 
+                # Sample time FIRST if time-dependent (needed for auxiliary evaluation)
+                t_sample = None
+                if time_symbol is not None:
+                    # Sample time in [0.1, 100] range (log-uniform)
+                    t_sample = np.exp(np.random.uniform(np.log(0.1), np.log(100.0)))
+                
                 # Sample independent variables (originals + pool auxiliaries)
                 for idx, var in independent_vars:
                     Z_sample[idx] = np.exp(np.random.uniform(log_min, log_max))
@@ -1132,6 +1138,14 @@ class RecastValidator:
                                 subs_dict[sym] = param_val
                                 break
                     
+                    # Substitute time value if auxiliary depends on time
+                    if t_sample is not None:
+                        for sym in aux_def.free_symbols:
+                            sym_name = str(sym).lower()
+                            if sym_name == 'time' or sym_name == 't':
+                                subs_dict[sym] = t_sample
+                                break
+                    
                     # Evaluate - use evalf() then convert to float
                     try:
                         aux_val = float(aux_def.subs(subs_dict).evalf())
@@ -1146,8 +1160,6 @@ class RecastValidator:
                 # Also include sampled time value if time-dependent
                 all_vals = tuple(Z_sample) + tuple(param_vals_ordered)
                 if time_symbol is not None:
-                    # Sample time in [0.1, 100] range (log-uniform)
-                    t_sample = np.exp(np.random.uniform(np.log(0.1), np.log(100.0)))
                     all_vals = all_vals + (t_sample,)
                 
                 # Evaluate J_Φ(Z) element by element - returns a matrix
@@ -1221,6 +1233,344 @@ class RecastValidator:
                 details=f"Exception during numerical test: {str(e)}"
             )
     
+    def check_trajectory_comparison(self,
+                                     t_end: float = 20.0,
+                                     n_points: int = 200,
+                                     threshold: float = 1e-3) -> EquivalenceTest:
+        """
+        Compare simulation trajectories between original and reconstructed recast.
+        
+        Steps:
+        1. Simulate original model → X_orig(t)
+        2. Simulate recast model → Z_recast(t)
+        3. Reconstruct original vars: X_recast(t) = Φ(Z_recast(t))
+        4. Compare X_orig vs X_recast using scaled relative error
+        
+        Error metric: |X_orig - X_recast| / (1 + max(|X_orig|, |X_recast|))
+        This is bounded in [0, 1] and scale-invariant.
+        
+        Solver priority: roadrunner → scipy LSODA → rk4
+        
+        Args:
+            t_end: End time for simulation
+            n_points: Number of time points
+            threshold: Error threshold for pass/fail (default 0.1%)
+            
+        Returns:
+            EquivalenceTest with trajectory validation results
+        """
+        try:
+            # Get initial conditions from models
+            orig_vars_ordered = sorted(self.orig_odes.keys(), key=str)
+            recast_vars_ordered = self.recast_state_vars
+            
+            # Get parameter values
+            param_values = dict(self.recast_ir.params)
+            
+            # Build ODE functions for both systems
+            all_symbols = list(recast_vars_ordered)
+            param_symbols = [self.canonical_symbols[name] for name in sorted(param_values.keys())]
+            
+            # Check for time symbol
+            all_ode_symbols = set()
+            for ode in self.orig_odes.values():
+                all_ode_symbols.update(ode.free_symbols)
+            for ode in self.recast_odes.values():
+                all_ode_symbols.update(ode.free_symbols)
+            
+            time_symbol = None
+            for sym in all_ode_symbols:
+                if str(sym).lower() == 'time' or str(sym) == 't':
+                    time_symbol = sym
+                    break
+            
+            # Step 1: Simulate original model
+            orig_result = self._simulate_model(
+                self.orig_ir, self.orig_odes, orig_vars_ordered,
+                t_end, n_points, param_values, time_symbol, "original"
+            )
+            
+            if not orig_result['success']:
+                return EquivalenceTest(
+                    name="trajectory_comparison",
+                    result=ValidationResult.NOT_ATTEMPTED,
+                    details=f"Original simulation failed: {orig_result['message']}"
+                )
+            
+            # Step 2: Simulate recast model
+            # Need to compute initial conditions for auxiliary variables
+            recast_y0 = self._compute_recast_initial_conditions(
+                recast_vars_ordered, orig_vars_ordered, param_values
+            )
+            
+            recast_result = self._simulate_model(
+                self.recast_ir, self.recast_odes, recast_vars_ordered,
+                t_end, n_points, param_values, time_symbol, "recast",
+                y0_override=recast_y0
+            )
+            
+            if not recast_result['success']:
+                return EquivalenceTest(
+                    name="trajectory_comparison",
+                    result=ValidationResult.NOT_ATTEMPTED,
+                    details=f"Recast simulation failed: {recast_result['message']}"
+                )
+            
+            # Step 3: Reconstruct original variables from recast
+            t_orig = orig_result['t']
+            X_orig = orig_result['y']  # shape: (n_points, n_orig_vars)
+            
+            t_recast = recast_result['t']
+            Z_recast = recast_result['y']  # shape: (n_points, n_recast_vars)
+            
+            # Interpolate if time grids differ
+            if len(t_orig) != len(t_recast) or not np.allclose(t_orig, t_recast):
+                # Use common time grid
+                from scipy.interpolate import interp1d
+                t_common = t_orig
+                Z_interp = np.zeros((len(t_common), len(recast_vars_ordered)))
+                for j, var in enumerate(recast_vars_ordered):
+                    f = interp1d(t_recast, Z_recast[:, j], kind='linear', fill_value='extrapolate')
+                    Z_interp[:, j] = f(t_common)
+                Z_recast = Z_interp
+            else:
+                t_common = t_orig
+            
+            # Build mapping functions to reconstruct original from recast
+            X_reconstructed = self._reconstruct_from_recast(
+                Z_recast, recast_vars_ordered, orig_vars_ordered, 
+                param_values, t_common, time_symbol
+            )
+            
+            # Step 4: Compute scaled relative error
+            # error(t) = |X_orig - X_recast| / (1 + max(|X_orig|, |X_recast|))
+            errors = np.abs(X_orig - X_reconstructed) / (
+                1.0 + np.maximum(np.abs(X_orig), np.abs(X_reconstructed))
+            )
+            
+            max_error = float(np.max(errors))
+            mean_error = float(np.mean(errors))
+            
+            # Find worst time point and variable
+            worst_idx = np.unravel_index(np.argmax(errors), errors.shape)
+            worst_t = t_common[worst_idx[0]]
+            worst_var = str(orig_vars_ordered[worst_idx[1]])
+            
+            if max_error < threshold:
+                return EquivalenceTest(
+                    name="trajectory_comparison",
+                    result=ValidationResult.PASS,
+                    max_error=max_error,
+                    mean_error=mean_error,
+                    details=f"Trajectories match. Max scaled error: {max_error:.2e} at t={worst_t:.2f} ({worst_var})"
+                )
+            else:
+                return EquivalenceTest(
+                    name="trajectory_comparison",
+                    result=ValidationResult.FAIL,
+                    max_error=max_error,
+                    mean_error=mean_error,
+                    details=f"Trajectories diverge. Max scaled error: {max_error:.2e} at t={worst_t:.2f} ({worst_var})",
+                    counterexamples=[{
+                        't': float(worst_t),
+                        'variable': worst_var,
+                        'X_orig': float(X_orig[worst_idx]),
+                        'X_recast': float(X_reconstructed[worst_idx]),
+                        'error': float(errors[worst_idx])
+                    }]
+                )
+                
+        except Exception as e:
+            import traceback
+            return EquivalenceTest(
+                name="trajectory_comparison",
+                result=ValidationResult.NOT_ATTEMPTED,
+                details=f"Exception during trajectory test: {str(e)}\n{traceback.format_exc()}"
+            )
+    
+    def _simulate_model(self, model_ir, odes, vars_ordered, t_end, n_points, 
+                        param_values, time_symbol, model_name, y0_override=None):
+        """
+        Simulate a model using available solvers.
+        
+        Solver priority: roadrunner → scipy LSODA → rk4
+        """
+        # Try roadrunner first
+        try:
+            from .ode_backends.roadrunner_backend import simulate_with_roadrunner
+            
+            result = simulate_with_roadrunner(
+                model_ir, 0.0, t_end, n_points, y0_override=y0_override
+            )
+            
+            if result['success']:
+                # Reorder columns to match vars_ordered
+                state_names = result['state_names']
+                y_reordered = np.zeros((len(result['t']), len(vars_ordered)))
+                
+                for i, var in enumerate(vars_ordered):
+                    var_name = str(var)
+                    if var_name in state_names:
+                        j = state_names.index(var_name)
+                        y_reordered[:, i] = result['y'][:, j]
+                    else:
+                        # Variable not in simulation - may be auxiliary computed separately
+                        y_reordered[:, i] = 0.0
+                
+                return {
+                    'success': True,
+                    't': result['t'],
+                    'y': y_reordered,
+                    'message': ''
+                }
+        except Exception as e:
+            pass  # Fall through to scipy
+        
+        # Try scipy LSODA
+        try:
+            # Build ODE function for scipy
+            ode_funcs = []
+            for var in vars_ordered:
+                ode_expr = odes[var]
+                func = lambdify(
+                    list(vars_ordered) + list(sorted(param_values.keys(), key=str)),
+                    ode_expr,
+                    modules='numpy'
+                )
+                ode_funcs.append(func)
+            
+            param_vals = [param_values[str(p)] for p in sorted(param_values.keys())]
+            
+            def ode_rhs(t, y):
+                args = list(y) + param_vals
+                return np.array([f(*args) for f in ode_funcs])
+            
+            # Get initial conditions
+            if y0_override:
+                y0 = np.array([y0_override.get(str(var), model_ir.initial.get(str(var), 1.0)) 
+                               for var in vars_ordered])
+            else:
+                y0 = np.array([model_ir.initial.get(str(var), 1.0) for var in vars_ordered])
+            
+            t_span = (0.0, t_end)
+            t_eval = np.linspace(0.0, t_end, n_points)
+            
+            sol = solve_ivp(ode_rhs, t_span, y0, method='LSODA', t_eval=t_eval)
+            
+            if sol.success:
+                return {
+                    'success': True,
+                    't': sol.t,
+                    'y': sol.y.T,  # Transpose to (n_points, n_vars)
+                    'message': ''
+                }
+            else:
+                return {
+                    'success': False,
+                    't': np.array([]),
+                    'y': np.array([]),
+                    'message': f"scipy LSODA failed: {sol.message}"
+                }
+                
+        except Exception as e:
+            return {
+                'success': False,
+                't': np.array([]),
+                'y': np.array([]),
+                'message': f"All solvers failed. Last error: {str(e)}"
+            }
+    
+    def _compute_recast_initial_conditions(self, recast_vars, orig_vars, param_values):
+        """
+        Compute initial conditions for recast model.
+        
+        For auxiliary variables, compute from their definitions.
+        For original variables, use original initial conditions.
+        """
+        y0 = {}
+        orig_var_names = {str(v) for v in orig_vars}
+        
+        # Get original initial values
+        orig_initials = {}
+        for var in orig_vars:
+            var_name = str(var)
+            if var_name in self.orig_ir.initial:
+                orig_initials[var_name] = self.orig_ir.initial[var_name]
+            else:
+                orig_initials[var_name] = 1.0  # Default
+        
+        for var in recast_vars:
+            var_name = str(var)
+            
+            if var_name in orig_var_names:
+                # Original variable - use original IC
+                y0[var_name] = orig_initials.get(var_name, 1.0)
+            elif var in self.auxiliary_defs:
+                # Auxiliary variable - compute from definition
+                aux_def = self.auxiliary_defs[var]
+                subs_dict = {}
+                
+                # Substitute original variable initial values
+                for sym in aux_def.free_symbols:
+                    sym_name = str(sym)
+                    if sym_name in orig_initials:
+                        subs_dict[sym] = orig_initials[sym_name]
+                    elif sym_name in param_values:
+                        subs_dict[sym] = param_values[sym_name]
+                
+                try:
+                    y0[var_name] = float(aux_def.subs(subs_dict).evalf())
+                except:
+                    y0[var_name] = 1.0  # Fallback
+            else:
+                # Unknown - check recast IR initial
+                if var_name in self.recast_ir.initial:
+                    y0[var_name] = self.recast_ir.initial[var_name]
+                else:
+                    y0[var_name] = 1.0
+        
+        return y0
+    
+    def _reconstruct_from_recast(self, Z_recast, recast_vars, orig_vars, 
+                                  param_values, t_array, time_symbol):
+        """
+        Reconstruct original variables from recast simulation.
+        
+        Applies mapping Φ(Z) to get X values.
+        """
+        n_points = len(t_array)
+        n_orig = len(orig_vars)
+        X_reconstructed = np.zeros((n_points, n_orig))
+        
+        # Build reconstruction functions
+        recast_var_names = [str(v) for v in recast_vars]
+        
+        for i, orig_var in enumerate(orig_vars):
+            mapping_expr = self.mapping[orig_var]
+            
+            # If mapping is identity, just copy
+            if mapping_expr == orig_var:
+                var_name = str(orig_var)
+                if var_name in recast_var_names:
+                    j = recast_var_names.index(var_name)
+                    X_reconstructed[:, i] = Z_recast[:, j]
+                continue
+            
+            # Build lambdified function for mapping
+            func = lambdify(
+                list(recast_vars) + [sp.Symbol(k) for k in sorted(param_values.keys())],
+                mapping_expr,
+                modules='numpy'
+            )
+            
+            param_vals = [param_values[k] for k in sorted(param_values.keys())]
+            
+            for t_idx in range(n_points):
+                args = list(Z_recast[t_idx, :]) + param_vals
+                X_reconstructed[t_idx, i] = float(func(*args))
+        
+        return X_reconstructed
+
     def validate(self,
                  run_symbolic: bool = True,
                  run_numerical: bool = True,
@@ -1257,27 +1607,36 @@ class RecastValidator:
                 # JAX not available, use symbolic Jacobian method
                 report.numerical_test = self.check_numerical_pointwise()
         
+        if run_trajectory:
+            report.trajectory_test = self.check_trajectory_comparison()
+        
         # Determine overall pass/fail
         tests_run = []
         if report.symbolic_test:
             tests_run.append(report.symbolic_test)
         if report.numerical_test:
             tests_run.append(report.numerical_test)
+        if report.trajectory_test:
+            tests_run.append(report.trajectory_test)
         
-        # Pass if any strong test passes (symbolic OR numerical)
-        strong_pass = any(t.result == ValidationResult.PASS 
-                         for t in tests_run)
+        # STRICT: Pass only if ALL tests pass (both symbolic AND numerical)
+        # A recast is validated only when both tests confirm equivalence
+        all_pass = all(t.result == ValidationResult.PASS for t in tests_run)
         
-        # Only fail if ALL tests definitively fail
-        all_fail = all(t.result == ValidationResult.FAIL 
-                      for t in tests_run)
+        # Handle cases where a test was not attempted (e.g., time-dependent models)
+        # Count as not failing, but still require at least one definitive pass
+        any_fail = any(t.result == ValidationResult.FAIL for t in tests_run)
+        any_pass = any(t.result == ValidationResult.PASS for t in tests_run)
         
-        report.overall_pass = strong_pass and not all_fail
+        # Overall pass requires:
+        # 1. No test failures, AND
+        # 2. At least one test passed (not all skipped/timeout)
+        report.overall_pass = (not any_fail) and any_pass
         
         # Generate summary
         if report.overall_pass:
             report.summary = "✓ Validation PASSED: Recast is mathematically equivalent"
-        elif all_fail:
+        elif any_fail:
             report.summary = "✗ Validation FAILED: Recast differs from original"
         else:
             report.summary = "? Validation INCONCLUSIVE: Tests timed out or not attempted"

@@ -21,7 +21,8 @@
 //   h      : Hill coefficient in s(x) = x^h / (1 + x^h)
 //   alpha  : combined production parameter α
 //   beta   : degradation ratio β = d_P / d_R
-//   gamma  : binding parameter γ (strength of repressor binding)
+//   gam    : binding parameter γ (strength of repressor binding)
+//            (Note: 'gamma' is reserved in Antimony for the gamma function)
 //
 // Dynamics:
 //   dx_i/dt = beta * (y_i - x_i) / M(x_i)
@@ -50,7 +51,7 @@ model Mueller2006_RepLeaky_n3
   const h     = 2;      // Hill coefficient
   const alpha = 2.0;    // combined production parameter α
   const beta  = 1.0;    // degradation ratio β
-  const gamma = 1.0;    // binding strength γ
+  const gam   = 1.0;    // binding strength γ (renamed from gamma, reserved)
 
   // Helper functions: Hill sigmoid s(x), transcription f(x), and M(x)
   s(x) := x^h / (1 + x^h);
@@ -59,7 +60,7 @@ model Mueller2006_RepLeaky_n3
   f(x) := (1 - delta) * (1 - s(x)) + delta;
 
   // M(x) = 1 + γ * h * x^(h-1) / (1 + x^h)^2
-  M(x) := 1 + gamma * h * x^(h - 1) / (1 + x^h)^2;
+  M(x) := 1 + gam * h * x^(h - 1) / (1 + x^h)^2;
 
   // ODEs for n = 3 (indices modulo 3: 1←3, 2←1, 3←2)
 
