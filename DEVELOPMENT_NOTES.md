@@ -16,6 +16,128 @@ This document contains development plans and investigation records for the ssys 
 
 # Work Plans
 
+## Autonomous Lifting for Strict GMA/S-System
+
+**Status:** In Progress
+
+### Objective
+
+Transform nonautonomous ODE systems (with explicit `time` dependence) into equivalent autonomous systems by lifting time-dependent functions to state variables with their own ODEs.
+
+### Problem Statement
+
+Current recaster produces output like:
+```antimony
+Z_1 := cos(pi*time/15) + 2.0;  // Assignment rule - NOT GMA!
+```
+
+This is **not strict GMA** because:
+1. GMA means sums of power-law monomials in **state variables only**
+2. Assignment rules depending on `time` make the system nonautonomous
+3. The RHS still contains transcendental functions (cos, tanh, sqrt)
+
+### Solution: Autonomous Lifting
+
+Replace each time-dependent function with a state variable whose ODE generates that function.
+
+### Phase 1: Pattern-Based Lifting
+
+#### 1.1 Exponential Decay: `exp(-k*time)`
+```
+f(t) = exp(-k*t)
+→ E' = -k*E      (GMA: one decay term)
+  E(0) = 1
+```
+
+#### 1.2 Harmonic Oscillator: `cos(ω*time)`, `sin(ω*time)`
+```
+f(t) = cos(ωt), g(t) = sin(ωt)
+→ c' = -ω*s     (GMA: one decay term)
+  s' = ω*c      (GMA: one growth term)
+  c(0) = 1, s(0) = 0
+```
+
+For `cos(ωt + φ)`: use `c(0) = cos(φ)`, `s(0) = sin(φ)`
+
+#### 1.3 Logistic Sigmoid: `tanh(k*(time - a))`
+
+The sigmoid function `σ(x) = 1/(1 + exp(-x))` satisfies:
+```
+σ'(x) = σ(x)*(1 - σ(x))
+```
+
+For `h(t) = 1/(1 + exp(-2k*(t-a)))`:
+```
+→ h' = 2k*h - 2k*h²   (GMA: growth - decay)
+  h(0) = 1/(1 + exp(2k*a))
+```
+
+Connection to tanh:
+```
+tanh(k*(t-a)) = 2*sigmoid(2k*(t-a)) - 1 = 2*h - 1
+```
+
+So: `H_on = 0.5*(1 + tanh(k*(t-5)))` becomes simply `h` after lifting.
+
+### Phase 2: Squared Variable Lifting for sqrt
+
+For smooth ReLU approximations like:
+```
+k23 = 0.5*(raw + sqrt(raw² + ε²))
+```
+
+Lift `u = raw² + ε²` with ODE:
+```
+u' = 2*raw*raw'   (chain rule)
+u(0) = raw(0)² + ε²
+```
+
+Then use `u^(0.5)` which is a GMA monomial.
+
+### Implementation Functions
+
+```python
+def lift_exp_decay(expr: sp.Expr, state_vars: Set[sp.Symbol]) 
+    -> Optional[Tuple[sp.Symbol, sp.Expr, float]]
+    """Detect exp(-k*time) → (E, -k*E, 1.0)"""
+
+def lift_harmonic(expr: sp.Expr, state_vars: Set[sp.Symbol])
+    -> Optional[Tuple[sp.Symbol, sp.Symbol, sp.Expr, sp.Expr, float, float]]
+    """Detect cos/sin(ω*time) → (c, s, -ω*s, ω*c, c0, s0)"""
+
+def lift_logistic(expr: sp.Expr, state_vars: Set[sp.Symbol])
+    -> Optional[Tuple[sp.Symbol, sp.Expr, float]]
+    """Detect tanh(k*(time±a)) → (h, 2k*h - 2k*h², h0)"""
+
+def lift_squared_for_sqrt(expr: sp.Expr, sym: SymSystem)
+    -> Optional[Tuple[sp.Symbol, sp.Expr, float]]
+    """Detect sqrt(X² + c) → (u, 2*X*X', u0)"""
+```
+
+### Test Cases
+
+1. **Fink2000**: `exp(-k_0 * time)` → single exponential decay
+2. **Weber2018**: 
+   - `cos(2*pi*time/30)` → harmonic oscillator
+   - `tanh(k_steep*(time - 5))` → logistic h
+   - `tanh(k_steep*(70 - time))` → logistic w (complement)
+   - `sqrt(raw² + eps_k²)` → squared lifting
+
+### Future Work (Phase 4)
+
+General nonautonomous → autonomous transformation:
+- Given arbitrary `f(time)`, attempt to find ODE such that `y(t) = f(t)` is a solution
+- Use SymPy's ODE matching capabilities
+- Fallback to error/warning if no ODE found
+
+### References
+
+- Weber, Raymond, Munsky (2018): Model 2, Lambda_A
+- Fink et al. (2000): "An image-based model of calcium waves"
+- Savageau & Voit (1987): Recasting nonlinear differential equations
+
+---
+
 ## GMA→S-System Condensation
 
 **Status:** Planned (future work)

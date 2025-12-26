@@ -1727,11 +1727,728 @@ def _requires_positivity_transform(func: sp.Expr) -> Tuple[bool, float]:
     return False, 0.0
 
 
+# =============================================================================
+# AUTONOMOUS LIFTING: Convert time-dependent functions to state variables
+# =============================================================================
+
+@dataclass
+class AutonomousLiftResult:
+    """Result of autonomous lifting for a time-dependent expression."""
+    new_vars: List[sp.Symbol]  # New state variables to add
+    new_odes: Dict[sp.Symbol, sp.Expr]  # ODEs for new variables
+    new_initials: Dict[sp.Symbol, sp.Expr]  # Initial conditions (symbolic)
+    substitution: sp.Expr  # Expression to substitute for original function
+    aux_defs: Dict[sp.Symbol, sp.Expr]  # Auxiliary definitions for documentation
+
+
+def _detect_exp_decay_pattern(expr: sp.Expr) -> Optional[Tuple[sp.Expr, sp.Expr]]:
+    """
+    Detect exponential decay pattern: exp(-k*time) or exp(k*time) where k is constant.
+    
+    Returns: (coefficient, time_coeff) where expr = exp(time_coeff * time)
+             or None if not matching pattern.
+    
+    Examples:
+        exp(-k_0 * time) → (1, -k_0)
+        exp(-0.5 * time) → (1, -0.5)
+        2*exp(-k*time) → (2, -k)
+    """
+    time_sym = sp.Symbol('time')
+    
+    # Handle case where expr is just exp(...)
+    if expr.func == sp.exp:
+        arg = expr.args[0]
+        # Check if arg is linear in time: coeff * time
+        if arg.is_Mul and time_sym in arg.free_symbols:
+            # Extract coefficient of time
+            time_coeff = arg / time_sym
+            # Check that time_coeff doesn't contain time
+            if time_sym not in time_coeff.free_symbols:
+                return (sp.Integer(1), sp.simplify(time_coeff))
+        elif arg == time_sym:
+            return (sp.Integer(1), sp.Integer(1))
+        elif arg == -time_sym:
+            return (sp.Integer(1), sp.Integer(-1))
+    
+    return None
+
+
+def _detect_harmonic_pattern(expr: sp.Expr) -> Optional[Tuple[str, sp.Expr, sp.Expr]]:
+    """
+    Detect harmonic pattern: cos(ω*time + φ) or sin(ω*time + φ)
+    
+    Returns: (func_type, omega, phase) where func_type is 'cos' or 'sin'
+             or None if not matching pattern.
+    
+    Examples:
+        cos(2*pi*time/30) → ('cos', pi/15, 0)
+        sin(omega*time) → ('sin', omega, 0)
+        cos(pi*time/15) → ('cos', pi/15, 0)
+    """
+    time_sym = sp.Symbol('time')
+    
+    # Check if this is cos or sin
+    if expr.func == sp.cos:
+        func_type = 'cos'
+    elif expr.func == sp.sin:
+        func_type = 'sin'
+    else:
+        return None
+    
+    arg = expr.args[0]
+    
+    # Check if arg contains time
+    if time_sym not in arg.free_symbols:
+        return None
+    
+    # Try to decompose arg = omega * time + phase
+    # Collect coefficients of time
+    arg_expanded = sp.expand(arg)
+    
+    # Get coefficient of time (omega) and constant term (phase)
+    omega = arg_expanded.diff(time_sym)
+    if time_sym in omega.free_symbols:
+        # omega shouldn't depend on time for linear case
+        return None
+    
+    # Compute phase: arg - omega*time at time=0
+    phase = arg_expanded.subs(time_sym, 0)
+    
+    return (func_type, sp.simplify(omega), sp.simplify(phase))
+
+
+def _detect_tanh_sigmoid_pattern(expr: sp.Expr) -> Optional[Tuple[sp.Expr, sp.Expr]]:
+    """
+    Detect tanh sigmoid pattern: tanh(k*(time - a)) or tanh(k*(a - time))
+    
+    Returns: (k, a) where expr = tanh(k*(time - a)) or tanh(k*(a - time))
+             or None if not matching pattern.
+    
+    Note: tanh(x) = 2*sigmoid(2x) - 1, where sigmoid(x) = 1/(1+exp(-x))
+    We lift to logistic form: h' = 2k*h - 2k*h² for h = sigmoid(2k*(t-a))
+    
+    Examples:
+        tanh(k_steep*(time - 5)) → (k_steep, 5) [increasing sigmoid]
+        tanh(k_steep*(70 - time)) → (-k_steep, 70) [decreasing sigmoid]
+    """
+    time_sym = sp.Symbol('time')
+    
+    if not hasattr(expr, 'func') or expr.func != sp.tanh:
+        return None
+    
+    arg = expr.args[0]
+    
+    # Check if arg contains time
+    if time_sym not in arg.free_symbols:
+        return None
+    
+    # Try to decompose arg = k * (time - a) or k * (a - time)
+    # arg should be linear in time
+    arg_expanded = sp.expand(arg)
+    
+    # Get coefficient of time (this is k or -k)
+    k_coeff = arg_expanded.diff(time_sym)
+    if time_sym in k_coeff.free_symbols:
+        return None  # Not linear in time
+    
+    # Compute constant term: arg at time=0
+    const_term = arg_expanded.subs(time_sym, 0)
+    
+    # arg = k_coeff * time + const_term
+    # For tanh(k*(time - a)): k_coeff = k, const_term = -k*a → a = -const_term/k
+    # For tanh(k*(a - time)): k_coeff = -k, const_term = k*a → a = const_term/(-k_coeff) = -const_term/k_coeff
+    
+    if k_coeff == 0:
+        return None
+    
+    # a = -const_term / k_coeff
+    a = sp.simplify(-const_term / k_coeff)
+    
+    return (k_coeff, a)
+
+
+def lift_exp_decay(
+    expr: sp.Expr,
+    aux_counter: int,
+    params: Dict[str, float]
+) -> Optional[AutonomousLiftResult]:
+    """
+    Lift exponential decay exp(-k*time) to autonomous ODE.
+    
+    For E = exp(c*time) where c is the time coefficient:
+        E' = c * E
+        E(0) = 1
+    
+    This is already in GMA form (single term).
+    """
+    pattern = _detect_exp_decay_pattern(expr)
+    if pattern is None:
+        return None
+    
+    outer_coeff, time_coeff = pattern
+    
+    # Create new state variable
+    E = sp.Symbol(f"E_{aux_counter}", positive=True)
+    
+    # ODE: E' = time_coeff * E
+    E_ode = time_coeff * E
+    
+    # Initial condition: E(0) = exp(time_coeff * 0) = 1
+    E_init = sp.Integer(1)
+    
+    return AutonomousLiftResult(
+        new_vars=[E],
+        new_odes={E: E_ode},
+        new_initials={E: E_init},
+        substitution=outer_coeff * E,  # exp(-k*t) → E
+        aux_defs={E: expr}
+    )
+
+
+def lift_harmonic(
+    expr: sp.Expr,
+    aux_counter: int,
+    params: Dict[str, float],
+    existing_harmonics: Dict[sp.Expr, Tuple[sp.Symbol, sp.Symbol]] = None
+) -> Optional[AutonomousLiftResult]:
+    """
+    Lift harmonic function cos(ω*time + φ) or sin(ω*time + φ) to autonomous ODEs.
+    
+    For coupled oscillator:
+        c' = -ω * s
+        s' = ω * c
+        c(0) = cos(φ)
+        s(0) = sin(φ)
+    
+    where c = cos(ω*time + φ), s = sin(ω*time + φ)
+    
+    This is GMA form (single term per ODE).
+    
+    Args:
+        existing_harmonics: Dict mapping omega -> (c_symbol, s_symbol) for reuse
+    """
+    pattern = _detect_harmonic_pattern(expr)
+    if pattern is None:
+        return None
+    
+    func_type, omega, phase = pattern
+    
+    # Check if we already have this omega (can reuse oscillator)
+    if existing_harmonics and omega in existing_harmonics:
+        c_sym, s_sym = existing_harmonics[omega]
+        if func_type == 'cos':
+            # cos(ω*t + φ) = cos(ω*t)cos(φ) - sin(ω*t)sin(φ)
+            if phase == 0:
+                return AutonomousLiftResult(
+                    new_vars=[],
+                    new_odes={},
+                    new_initials={},
+                    substitution=c_sym,
+                    aux_defs={}
+                )
+            else:
+                return AutonomousLiftResult(
+                    new_vars=[],
+                    new_odes={},
+                    new_initials={},
+                    substitution=c_sym * sp.cos(phase) - s_sym * sp.sin(phase),
+                    aux_defs={}
+                )
+        else:  # sin
+            # sin(ω*t + φ) = sin(ω*t)cos(φ) + cos(ω*t)sin(φ)
+            if phase == 0:
+                return AutonomousLiftResult(
+                    new_vars=[],
+                    new_odes={},
+                    new_initials={},
+                    substitution=s_sym,
+                    aux_defs={}
+                )
+            else:
+                return AutonomousLiftResult(
+                    new_vars=[],
+                    new_odes={},
+                    new_initials={},
+                    substitution=s_sym * sp.cos(phase) + c_sym * sp.sin(phase),
+                    aux_defs={}
+                )
+    
+    # Create new coupled oscillator
+    c_sym = sp.Symbol(f"c_{aux_counter}", positive=True)
+    s_sym = sp.Symbol(f"s_{aux_counter}", positive=True)
+    
+    # ODEs: c' = -ω*s, s' = ω*c (GMA form)
+    c_ode = -omega * s_sym
+    s_ode = omega * c_sym
+    
+    # Initial conditions for oscillator with phase
+    # c(0) = cos(φ), s(0) = sin(φ)
+    c_init = sp.cos(phase)
+    s_init = sp.sin(phase)
+    
+    # Determine substitution based on function type
+    if func_type == 'cos':
+        substitution = c_sym
+    else:  # sin
+        substitution = s_sym
+    
+    return AutonomousLiftResult(
+        new_vars=[c_sym, s_sym],
+        new_odes={c_sym: c_ode, s_sym: s_ode},
+        new_initials={c_sym: c_init, s_sym: s_init},
+        substitution=substitution,
+        aux_defs={c_sym: sp.cos(omega * sp.Symbol('time') + phase),
+                  s_sym: sp.sin(omega * sp.Symbol('time') + phase)}
+    )
+
+
+# Perturbation constant for logistic ICs near fixed points
+EPS_LOGISTIC = 1e-2
+
+
+def lift_tanh_sigmoid(
+    expr: sp.Expr,
+    aux_counter: int,
+    params: Dict[str, float]
+) -> Optional[AutonomousLiftResult]:
+    """
+    Lift tanh sigmoid to autonomous logistic ODE.
+    
+    For tanh(k*(time - a)):
+        Let h = sigmoid(2k*(t-a)) = 1/(1 + exp(-2k*(t-a)))
+        Then tanh(k*(t-a)) = 2*h - 1
+    
+    The logistic equation is:
+        h' = 2k * h * (1 - h) = 2k*h - 2k*h²
+        h(0) = 1/(1 + exp(2k*a))
+    
+    This is GMA form (two terms: growth and decay).
+    
+    CRITICAL: h=0 and h=1 are fixed points of the logistic equation.
+    If h(0) is at or very near a fixed point, the dynamics don't evolve.
+    We perturb ICs away from fixed points to ensure proper gate dynamics.
+    
+    For tanh(k*(a - time)) (decreasing sigmoid):
+        This is -tanh(k*(time - a)) = 1 - 2*h
+        where h follows the same logistic equation
+    """
+    pattern = _detect_tanh_sigmoid_pattern(expr)
+    if pattern is None:
+        return None
+    
+    k, a = pattern
+    
+    # Create new state variable for logistic
+    h = sp.Symbol(f"h_{aux_counter}", positive=True)
+    
+    # Determine if this is increasing (k > 0) or decreasing (k < 0)
+    # ODE: h' = 2|k|*h - 2|k|*h² (always positive rate constant for GMA)
+    # The sign of k determines direction of sigmoid
+    
+    # ODE coefficient: we use the absolute value of k for the rate
+    # h' = 2*|k|*h*(1-h) but k already encodes direction in the substitution
+    # Actually, for correct dynamics:
+    # If k > 0: h increases from 0 to 1 as t increases (standard logistic)
+    # If k < 0: h decays from h(0) toward 0
+    
+    # For standard logistic with rate coefficient r:
+    # h' = r*h*(1-h) = r*h - r*h²
+    # Here r = 2*k (where k is the coefficient of time in tanh argument)
+    
+    # The ODE is: h' = 2*k*h - 2*k*h²
+    # When k > 0: h grows from h(0) toward 1
+    # When k < 0: h decays from h(0) toward 0
+    rate = 2 * k
+    h_ode = rate * h - rate * h**2
+    
+    # Initial condition: h(0) = 1/(1 + exp(2*k*a))
+    # Note: exp(2*k*a) where a = time offset
+    # 
+    # CRITICAL FIX: h=0 and h=1 are fixed points of h' = r*h*(1-h).
+    # If h_init is at or very near a fixed point, the gate never moves.
+    # We must perturb away from fixed points.
+    #
+    # For "on" gate (k > 0, starts near 0): perturb up to EPS_LOGISTIC
+    # For "off" gate (k < 0, starts near 1): perturb down to 1 - EPS_LOGISTIC
+    h_init_exact = 1 / (1 + sp.exp(2 * k * a))
+    
+    # Use symbolic form for perturbation that will be evaluated numerically later
+    # We create a symbolic expression that clamps away from fixed points
+    # h_init = max(EPS_LOGISTIC, min(1 - EPS_LOGISTIC, h_init_exact))
+    h_init = sp.Max(EPS_LOGISTIC, sp.Min(1 - EPS_LOGISTIC, h_init_exact))
+    
+    # Substitution: tanh(k*(t-a)) = 2*h - 1
+    substitution = 2 * h - 1
+    
+    return AutonomousLiftResult(
+        new_vars=[h],
+        new_odes={h: h_ode},
+        new_initials={h: h_init},
+        substitution=substitution,
+        aux_defs={h: (1 + expr) / 2}  # h = (1 + tanh(...))/2 = sigmoid(2*arg)
+    )
+
+
+def _detect_sqrt_of_squared_pattern(expr: sp.Expr) -> Optional[Tuple[sp.Expr, sp.Expr]]:
+    """
+    Detect sqrt(X² + c) pattern for squared variable lifting.
+    
+    Returns: (X, c) where expr = sqrt(X² + c)
+             or None if not matching pattern.
+    
+    This handles smooth ReLU approximations like:
+        sqrt(raw² + ε²)
+        sqrt(X² + 0.01)
+    
+    Examples:
+        sqrt(raw^2 + eps_k^2) → (raw, eps_k^2)
+        sqrt(X^2 + 1) → (X, 1)
+    """
+    # Check if this is a square root: Pow(base, 0.5) or Pow(base, 1/2)
+    if not isinstance(expr, sp.Pow):
+        return None
+    
+    base, exp = expr.args
+    
+    # Check if exponent is 0.5
+    is_sqrt = False
+    if exp.is_number:
+        try:
+            exp_val = float(exp)
+            is_sqrt = abs(exp_val - 0.5) < 1e-10
+        except (TypeError, ValueError):
+            pass
+    elif exp == sp.Rational(1, 2):
+        is_sqrt = True
+    
+    if not is_sqrt:
+        return None
+    
+    # Check if base is X² + c (a sum with a squared term and a constant)
+    if not base.is_Add:
+        return None
+    
+    # Expand and look for pattern
+    base_expanded = sp.expand(base)
+    
+    # Collect terms: look for X² and constants
+    squared_term = None
+    constant = sp.Integer(0)
+    other_terms = []
+    
+    for term in base_expanded.as_ordered_terms():
+        # Check if term is X² (a symbol squared)
+        if isinstance(term, sp.Pow):
+            term_base, term_exp = term.args
+            if term_exp == 2:
+                # Found X²
+                if squared_term is None:
+                    squared_term = term_base
+                else:
+                    # Multiple squared terms - not our pattern
+                    other_terms.append(term)
+        elif term.is_number:
+            constant += term
+        elif term.is_Mul:
+            # Check if it's coeff * X²
+            has_square = False
+            for factor in term.args:
+                if isinstance(factor, sp.Pow) and factor.args[1] == 2:
+                    has_square = True
+                    break
+            if has_square:
+                other_terms.append(term)
+            else:
+                # Could be a constant expression with parameters
+                # Check if it contains any state variables
+                # For now, treat as constant if no free symbols or only parameters
+                other_terms.append(term)
+        else:
+            other_terms.append(term)
+    
+    if squared_term is None:
+        return None
+    
+    if other_terms:
+        # Has terms that don't fit pattern - not simple sqrt(X² + c)
+        return None
+    
+    return (squared_term, constant)
+
+
+def lift_squared_for_sqrt(
+    expr: sp.Expr,
+    aux_counter: int,
+    sym: SymSystem
+) -> Optional[AutonomousLiftResult]:
+    """
+    Lift sqrt(X² + c) to squared variable u = X² + c with ODE.
+    
+    For u = X² + c:
+        u' = 2*X*X'
+        u(0) = X(0)² + c
+    
+    Then sqrt(X² + c) = u^(0.5) which is a GMA monomial.
+    """
+    pattern = _detect_sqrt_of_squared_pattern(expr)
+    if pattern is None:
+        return None
+    
+    X, c = pattern
+    
+    # Create new state variable for squared expression
+    u = sp.Symbol(f"u_{aux_counter}", positive=True)
+    
+    # ODE: u' = 2*X*X'
+    # Need to compute X' from the SymSystem
+    # X might be a state variable or an expression involving state variables
+    
+    # If X is a state variable, use its ODE directly
+    if isinstance(X, sp.Symbol) and X in sym.odes:
+        X_prime = sym.odes[X]
+    else:
+        # X is an expression - compute X' via chain rule
+        X_prime = sp.Integer(0)
+        for var, ode in sym.odes.items():
+            if var in X.free_symbols:
+                partial = sp.diff(X, var)
+                X_prime += partial * ode
+    
+    u_ode = 2 * X * X_prime
+    
+    # Initial condition: u(0) = X(0)² + c
+    X_at_0 = X
+    for var in sym.vars:
+        if var in X.free_symbols:
+            X_at_0 = X_at_0.subs(var, sym.initials.get(var, 1.0))
+    # Substitute parameters
+    for param_name, param_val in sym.params.items():
+        X_at_0 = X_at_0.subs(sp.Symbol(param_name), param_val)
+    
+    # Evaluate c at t=0
+    c_at_0 = c
+    for param_name, param_val in sym.params.items():
+        c_at_0 = c_at_0.subs(sp.Symbol(param_name), param_val)
+    
+    try:
+        u_init = float(X_at_0)**2 + float(c_at_0)
+    except (TypeError, ValueError):
+        u_init = 1.0  # Fallback
+    
+    # Substitution: sqrt(X² + c) → u^(0.5)
+    substitution = u**sp.Rational(1, 2)
+    
+    return AutonomousLiftResult(
+        new_vars=[u],
+        new_odes={u: sp.simplify(u_ode)},
+        new_initials={u: sp.Float(u_init)},
+        substitution=substitution,
+        aux_defs={u: X**2 + c}
+    )
+
+
+def lift_time_functions_to_autonomous(
+    sym: SymSystem,
+    aux_counter_start: int = 1
+) -> Tuple[SymSystem, Dict[sp.Symbol, sp.Expr], int]:
+    """
+    Transform all time-dependent functions in a SymSystem to autonomous ODEs.
+    
+    This is the main entry point for autonomous lifting. It scans all ODEs for
+    time-dependent patterns and lifts them to state variables with their own ODEs.
+    
+    Patterns handled:
+    1. exp(-k*time) → exponential decay ODE
+    2. cos(ω*time), sin(ω*time) → coupled harmonic oscillator
+    3. tanh(k*(time±a)) → logistic ODE
+    4. sqrt(X² + c) → squared variable ODE (Phase 2)
+    
+    Args:
+        sym: SymSystem to transform
+        aux_counter_start: Starting index for auxiliary variable names
+    
+    Returns:
+        Tuple of (transformed SymSystem, auxiliary definitions, next aux counter)
+    """
+    time_sym = sp.Symbol('time')
+    
+    # Collect all time-dependent expressions across all ODEs
+    time_exprs: Set[sp.Expr] = set()
+    sqrt_exprs: Set[sp.Expr] = set()  # Phase 2: sqrt(X² + c) patterns
+    
+    for var, ode in sym.odes.items():
+        # Find all subexpressions that depend on time
+        for atom in ode.atoms(sp.Function):
+            if time_sym in atom.free_symbols:
+                time_exprs.add(atom)
+        # Also check for exp specifically
+        for atom in ode.atoms(sp.exp):
+            if time_sym in atom.free_symbols:
+                time_exprs.add(atom)
+        # Phase 2: Check for sqrt(X² + c) patterns
+        for atom in ode.atoms(sp.Pow):
+            # Check if this is a square root
+            if len(atom.args) == 2:
+                base, exp = atom.args
+                is_sqrt = False
+                if exp.is_number:
+                    try:
+                        exp_val = float(exp)
+                        is_sqrt = abs(exp_val - 0.5) < 1e-10
+                    except (TypeError, ValueError):
+                        pass
+                elif exp == sp.Rational(1, 2):
+                    is_sqrt = True
+                
+                if is_sqrt and base.is_Add:
+                    # This is sqrt(sum) - potential sqrt(X² + c) pattern
+                    sqrt_exprs.add(atom)
+    
+    if not time_exprs and not sqrt_exprs:
+        # No time-dependent expressions or sqrt patterns
+        return sym, {}, aux_counter_start
+    
+    # Track which expressions have been lifted and their substitutions
+    expr_to_sub: Dict[sp.Expr, sp.Expr] = {}
+    all_new_vars: List[sp.Symbol] = []
+    all_new_odes: Dict[sp.Symbol, sp.Expr] = {}
+    all_new_initials: Dict[sp.Symbol, sp.Expr] = {}
+    all_aux_defs: Dict[sp.Symbol, sp.Expr] = {}
+    
+    # Track harmonics by omega for reuse
+    omega_to_oscillator: Dict[sp.Expr, Tuple[sp.Symbol, sp.Symbol]] = {}
+    
+    aux_counter = aux_counter_start
+    
+    # Process each time-dependent expression
+    for expr in sorted(time_exprs, key=str):
+        if expr in expr_to_sub:
+            continue  # Already processed
+        
+        result: Optional[AutonomousLiftResult] = None
+        
+        # Try exponential decay pattern
+        result = lift_exp_decay(expr, aux_counter, sym.params)
+        if result is not None:
+            aux_counter += len(result.new_vars)
+        
+        # Try harmonic pattern
+        if result is None:
+            result = lift_harmonic(expr, aux_counter, sym.params, omega_to_oscillator)
+            if result is not None:
+                # Track this oscillator for potential reuse
+                pattern = _detect_harmonic_pattern(expr)
+                if pattern and result.new_vars:
+                    omega = pattern[1]
+                    omega_to_oscillator[omega] = (result.new_vars[0], result.new_vars[1])
+                aux_counter += len(result.new_vars)
+        
+        # Try tanh sigmoid pattern
+        if result is None:
+            result = lift_tanh_sigmoid(expr, aux_counter, sym.params)
+            if result is not None:
+                aux_counter += len(result.new_vars)
+        
+        # If we found a pattern, record the results
+        if result is not None:
+            expr_to_sub[expr] = result.substitution
+            all_new_vars.extend(result.new_vars)
+            all_new_odes.update(result.new_odes)
+            all_new_initials.update(result.new_initials)
+            all_aux_defs.update(result.aux_defs)
+    
+    # Phase 2: Process sqrt(X² + c) patterns
+    # These need to be lifted to u = X² + c with u' = 2*X*X'
+    for sqrt_expr in sorted(sqrt_exprs, key=str):
+        if sqrt_expr in expr_to_sub:
+            continue  # Already processed
+        
+        # Try squared variable lifting
+        result = lift_squared_for_sqrt(sqrt_expr, aux_counter, sym)
+        if result is not None:
+            expr_to_sub[sqrt_expr] = result.substitution
+            all_new_vars.extend(result.new_vars)
+            all_new_odes.update(result.new_odes)
+            all_new_initials.update(result.new_initials)
+            all_aux_defs.update(result.aux_defs)
+            aux_counter += len(result.new_vars)
+    
+    if not expr_to_sub:
+        # No patterns matched
+        return sym, {}, aux_counter
+    
+    # Substitute time-dependent expressions in original ODEs
+    new_odes: Dict[sp.Symbol, sp.Expr] = {}
+    for var, ode in sym.odes.items():
+        new_ode = ode
+        for expr, sub in expr_to_sub.items():
+            new_ode = new_ode.subs(expr, sub)
+        new_odes[var] = sp.simplify(new_ode)
+    
+    # Combine with new auxiliary ODEs
+    combined_odes = {**new_odes, **all_new_odes}
+    
+    # Compute numeric initial conditions
+    new_initials = dict(sym.initials)
+    for var, init_expr in all_new_initials.items():
+        # Evaluate symbolic initial condition
+        init_val = init_expr
+        for param_name, param_val in sym.params.items():
+            init_val = init_val.subs(sp.Symbol(param_name), param_val)
+        try:
+            new_initials[var] = float(init_val)
+        except (TypeError, ValueError):
+            # Keep symbolic if can't evaluate
+            new_initials[var] = 1.0  # Fallback
+    
+    # Create new variable list
+    new_vars = list(sym.vars) + all_new_vars
+    
+    return (
+        SymSystem(
+            vars=new_vars,
+            params=sym.params,
+            odes=combined_odes,
+            initials=new_initials,
+            initial_exprs=sym.initial_exprs,
+            assignment_rules={}  # Clear assignment rules - we're using autonomous form
+        ),
+        all_aux_defs,
+        aux_counter
+    )
+
+
+def _is_time_only_function(func: sp.Expr, state_vars: Set[sp.Symbol]) -> bool:
+    """
+    Check if a composite function depends only on time (and parameters), not state variables.
+    
+    Time-only functions should be assignment rules, not state variables with ODEs,
+    because they can be computed directly from time without differential equations.
+    
+    Args:
+        func: The function expression to check
+        state_vars: Set of state variable symbols
+    
+    Returns:
+        True if function depends only on time/parameters, False if it depends on state variables
+    """
+    func_symbols = func.free_symbols
+    # Check if any state variable appears in the function
+    for sym in func_symbols:
+        if sym in state_vars:
+            return False
+    return True
+
+
 def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol, sp.Expr]]:
     """
     Augment system with auxiliary variables for all composite functions.
     
-    For each unique composite function f(X) (exp, sin, log, etc.):
+    CRITICAL DISTINCTION:
+    - Functions of STATE VARIABLES (exp(X), log(Y)) → lift with ODEs via chain rule
+    - Functions of TIME ONLY (sin(t), cos(t), tanh(k*t)) → assignment rules, NOT state ODEs
+    
+    For state-dependent functions f(X):
     1. Check if f requires positivity transformation (sin/cos need offset)
     2. Create auxiliary Z = f(X) + offset
     3. For sin/cos: create BOTH auxiliaries as a coupled pair
@@ -1739,11 +2456,12 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
     5. Replace f(X) with (Z - offset) in all ODEs
     6. Set Z(0) = f(X(0)) + offset
     
-    Also lifts sqrt(sum) patterns: sqrt(a + b + ...) into auxiliary Z.
-    These are NOT monomials and need lifting for proper S-system form.
-    Z' = f'/(2*Z) via chain rule for sqrt.
+    For time-only functions f(t):
+    1. Create auxiliary Z = f(t) + offset
+    2. Output as ASSIGNMENT RULE (Z := f(t) + offset), NOT ODE
+    3. Replace f(t) with (Z - offset) in all ODEs
     
-    This implements the Savageau 1987 transformation for sign-changing functions.
+    Also lifts sqrt(sum) patterns: sqrt(a + b + ...) into auxiliary Z.
     
     Returns:
         Tuple of (augmented SymSystem, auxiliary_defs dict mapping Z -> f(X)+offset)
@@ -1761,11 +2479,26 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
         # No composite functions or sqrt(sum) to lift
         return sym, {}
     
+    # CRITICAL: Separate time-only functions from state-dependent functions
+    # Time-only → assignment rules (no ODE needed)
+    # State-dependent → ODEs via chain rule
+    state_vars = set(sym.vars)
+    
+    time_only_functions = set()
+    state_dependent_functions = set()
+    
+    for func in all_functions:
+        if _is_time_only_function(func, state_vars):
+            time_only_functions.add(func)
+        else:
+            state_dependent_functions.add(func)
+    
     # Group functions by type and argument for coupled handling (sin/cos pairs)
+    # Only for state-dependent functions that need ODE lifting
     sin_cos_pairs: Dict[sp.Expr, Dict[str, sp.Expr]] = {}  # arg -> {"sin": sin(arg), "cos": cos(arg)}
     other_functions = set()
     
-    for func in all_functions:
+    for func in state_dependent_functions:
         arg = func.args[0] if func.args else None
         if arg is None:
             other_functions.add(func)
@@ -1789,9 +2522,34 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
     # Create auxiliary symbols for each function with offsets
     func_to_aux: Dict[sp.Expr, sp.Symbol] = {}
     func_to_offset: Dict[sp.Expr, float] = {}
+    time_only_aux: Dict[sp.Expr, sp.Symbol] = {}  # Time-only functions → assignment rules
     aux_counter = 1
     
-    # Handle sin/cos pairs - create BOTH auxiliaries even if only one appears
+    # Handle time-only functions FIRST - these become assignment rules, NOT state ODEs
+    # This is critical for models like Weber where sin(πt/15), cos(πt/15), tanh(k*(t-5))
+    # are known functions of time and should NOT be integrated as state variables
+    assignment_rules: Dict[str, str] = dict(sym.assignment_rules)  # Copy existing rules
+    
+    for func in sorted(time_only_functions, key=str):
+        Z = sp.symbols(f"Z_{aux_counter}", positive=True)
+        time_only_aux[func] = Z
+        
+        # Determine offset for positivity
+        needs_offset, offset = _requires_positivity_transform(func)
+        func_to_offset[func] = offset
+        
+        # Create assignment rule: Z := func + offset
+        if offset > 0:
+            rule_expr = f"{func} + {offset}"
+        else:
+            rule_expr = str(func)
+        assignment_rules[Z.name] = rule_expr
+        
+        # Also add to func_to_aux for substitution
+        func_to_aux[func] = Z
+        aux_counter += 1
+    
+    # Handle sin/cos pairs (state-dependent only) - create BOTH auxiliaries even if only one appears
     for arg, funcs in sin_cos_pairs.items():
         sin_func = funcs.get("sin", sp.sin(arg))
         cos_func = funcs.get("cos", sp.cos(arg))
@@ -1819,8 +2577,19 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
     # Create auxiliary Z = sqrt(base) with Z' = (d base/dt) / (2*Z)
     sqrt_to_aux: Dict[sp.Expr, sp.Symbol] = {}
     for sqrt_expr in sorted(all_sqrt_sums, key=str):
-        Z = sp.symbols(f"Z_{aux_counter}", positive=True)
-        sqrt_to_aux[sqrt_expr] = Z
+        # Check if sqrt is time-only
+        if _is_time_only_function(sqrt_expr, state_vars):
+            # Time-only sqrt → assignment rule
+            Z = sp.symbols(f"Z_{aux_counter}", positive=True)
+            time_only_aux[sqrt_expr] = Z
+            assignment_rules[Z.name] = str(sqrt_expr)
+            func_to_aux[sqrt_expr] = Z  # For substitution
+            func_to_offset[sqrt_expr] = 0.0  # sqrt is always positive, no offset
+            sqrt_to_aux[sqrt_expr] = Z  # Keep in sqrt_to_aux for substitution tracking
+        else:
+            Z = sp.symbols(f"Z_{aux_counter}", positive=True)
+            sqrt_to_aux[sqrt_expr] = Z
+            func_to_offset[sqrt_expr] = 0.0  # sqrt is always positive, no offset
         aux_counter += 1
     
     # CRITICAL: DO NOT substitute auxiliaries in original ODEs yet
@@ -1865,6 +2634,9 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
     # This uses the chain rule: d/dt sqrt(f) = f' / (2*sqrt(f)) = f' / (2*Z)
     sqrt_aux_odes: Dict[sp.Symbol, sp.Expr] = {}
     for sqrt_expr, Z in sqrt_to_aux.items():
+        # Skip time-only sqrts - they're assignment rules, not state variables
+        if sqrt_expr in time_only_aux:
+            continue
         base = sqrt_expr.args[0]  # The base of sqrt(base)
         
         # Compute d(base)/dt using chain rule
@@ -1881,11 +2653,15 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
             base_prime += partial_t  # d(time)/dt = 1
         
         # Z' = base' / (2*Z)
-        # CRITICAL: Do NOT simplify - for complex time-dependent bases (like Weber model),
-        # sp.simplify() can hang indefinitely on the massive derivative expression.
-        # The ODE is mathematically correct without simplification.
+        # CRITICAL FIX: Substitute sqrt(base) → Z in base_prime BEFORE dividing
+        # This enforces the identity Z = sqrt(base), producing clean compact form:
+        #   Z' = (Ca - Ca_c) * Ca' / Z  (instead of unsimplified form with sqrt(...))
+        # This is a generally applicable fix - any time we create Z = f(expr),
+        # occurrences of f(expr) in the ODE should be replaced with Z.
+        base_prime = base_prime.subs(sqrt_expr, Z)
+        
         Z_ode = base_prime / (2 * Z)
-        sqrt_aux_odes[Z] = Z_ode  # Skip simplify - too expensive for complex expressions
+        sqrt_aux_odes[Z] = Z_ode  # Skip expensive simplify - algebraically correct
     
     # Add sqrt auxiliary ODEs to new_aux_odes
     new_aux_odes.update(sqrt_aux_odes)
@@ -2015,11 +2791,17 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
     # Compute initial conditions for auxiliaries with offsets (before recursive lifting)
     new_initials = dict(sym.initials)
     for func, Z in func_to_aux.items():
+        # Skip sqrt expressions - they're handled separately below
+        if func in sqrt_to_aux:
+            continue
         # Evaluate function at t=0
         func_at_0 = func
-        # First substitute state variables
+        # CRITICAL: Substitute time=0 FIRST for time-only functions
+        time_sym = sp.Symbol('time')
+        func_at_0 = func_at_0.subs(time_sym, 0)
+        # Then substitute state variables
         for var in sym.vars:
-            if var in func.free_symbols:
+            if var in func_at_0.free_symbols:
                 func_at_0 = func_at_0.subs(var, sym.initials.get(var, 1.0))
         # Then substitute parameters - use actual symbols from expression
         for param_sym in func_at_0.free_symbols:
@@ -2027,7 +2809,7 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
             if param_name in sym.params:
                 func_at_0 = func_at_0.subs(param_sym, sym.params[param_name])
         # Z(0) = f(X(0)) + offset
-        offset = func_to_offset[func]
+        offset = func_to_offset.get(func, 0.0)  # Use .get() to handle missing keys
         try:
             Z_init = float(func_at_0) + offset
         except:
@@ -2056,8 +2838,11 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
             Z_init = 1.0  # Fallback if evaluation fails
         new_initials[Z] = Z_init
     
-    # Create new variable list: keep original vars, add Z auxiliaries (including sqrt)
-    new_vars = list(sym.vars) + list(func_to_aux.values()) + list(sqrt_to_aux.values())
+    # Create new variable list: keep original vars, add Z auxiliaries (excluding time-only)
+    # Time-only auxiliaries are assignment rules, NOT state variables with ODEs
+    state_aux_vars = [Z for func, Z in func_to_aux.items() if func not in time_only_aux]
+    sqrt_state_vars = [Z for sqrt_expr, Z in sqrt_to_aux.items() if sqrt_expr not in time_only_aux]
+    new_vars = list(sym.vars) + state_aux_vars + sqrt_state_vars
     
     # Create auxiliary definitions with offsets: Z -> f(X) + offset
     aux_to_func_with_offset = {}
@@ -2210,7 +2995,8 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
             params=sym.params,
             odes=combined_odes,
             initials=new_initials,
-            initial_exprs=sym.initial_exprs  # Propagate symbolic IC expressions
+            initial_exprs=sym.initial_exprs,  # Propagate symbolic IC expressions
+            assignment_rules=assignment_rules  # Time-only auxiliaries as assignment rules
         ),
         aux_to_func_with_offset  # Dictionary mapping Z_i -> f(X) + offset
     )
@@ -2392,14 +3178,15 @@ def recast_to_ssystem(sym: 'SymSystem', mode: str = "simplified") -> 'RecastResu
     Recast system to canonical S-system or GMA format.
     
     Strategy:
-    1. Lift composite functions (exp, sin, log, etc.)
-    2. Lift rational functions (1/(X+1), etc.)
-    3. Check for constant terms (S-systems cannot represent these)
-    4. Attempt canonical S-system recast:
+    1. Lift time-dependent functions to autonomous ODEs (exp(-kt), cos(ωt), tanh(k(t-a)))
+    2. Lift remaining composite functions (exp, sin, log, etc.)
+    3. Lift rational functions (1/(X+1), etc.)
+    4. Check for constant terms (S-systems cannot represent these)
+    5. Attempt canonical S-system recast:
        - If lifting occurred: use direct form
        - Otherwise: use pool construction
-    5. Check if output has GMA characteristics (multi-term incompatible)
-    6. If canonical failed, fall back to GMA format
+    6. Check if output has GMA characteristics (multi-term incompatible)
+    7. If canonical failed, fall back to GMA format
     
     Args:
         sym: SymSystem to recast
@@ -2414,7 +3201,13 @@ def recast_to_ssystem(sym: 'SymSystem', mode: str = "simplified") -> 'RecastResu
     # Collect auxiliary definitions from lifting operations
     all_auxiliary_defs: Dict[sp.Symbol, sp.Expr] = {}
     
-    # Lift composite functions first (exp, sin, log, etc.)
+    # FIRST: Lift time-dependent functions to autonomous ODEs
+    # This converts exp(-k*time), cos(ω*time), tanh(k*(time-a)) to state variables
+    # with their own differential equations (strict GMA form)
+    sym, time_aux_defs, _ = lift_time_functions_to_autonomous(sym)
+    all_auxiliary_defs.update(time_aux_defs)
+    
+    # Lift remaining composite functions (exp, sin, log of state variables)
     sym, composite_aux_defs = lift_composite_functions(sym)
     all_auxiliary_defs.update(composite_aux_defs)
     
@@ -2508,6 +3301,9 @@ def recast_to_ssystem(sym: 'SymSystem', mode: str = "simplified") -> 'RecastResu
 
     # Add auxiliary definitions to result
     result.auxiliary_defs = all_auxiliary_defs
+    
+    # Pass assignment rules (time-only auxiliaries) to result
+    result.assignment_rules = sym.assignment_rules
 
     return result
 
@@ -3055,7 +3851,17 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
         lines.append("// ========================================================================")
         lines.append("")
     
+    # --- Assignment rules (time-dependent quantities) ---
+    # These are variables that depend only on time, not state variables
+    if result.assignment_rules:
+        lines.append("// Assignment rules (time-dependent quantities)")
+        for var_name in sorted(result.assignment_rules.keys()):
+            expr = result.assignment_rules[var_name]
+            lines.append(f"{var_name} := {expr};")
+        lines.append("")
+    
     # Initial assignments - handle both Symbol and tuple keys
+    # Skip variables that are assignment rules (they don't have ICs)
     def _init_sort_key(kv):
         k = kv[0]
         if hasattr(k, 'name'):
@@ -3068,6 +3874,9 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
     for s, v in sorted(result.initials.items(), key=_init_sort_key):
         # Skip tuple keys (compartment info, const params)
         if not hasattr(s, 'name'):
+            continue
+        # Skip variables that are assignment rules (they use := not =)
+        if result.assignment_rules and s.name in result.assignment_rules:
             continue
         lines.append(f"{s.name} = {float(v):g};")
     
@@ -3238,6 +4047,17 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         for param_name in sorted(result.params.keys()):
             param_val = result.params[param_name]
             lines.append(f"{param_name} = {param_val:g};")
+        lines.append("")
+
+    # --- Assignment rules (time-dependent quantities) ---
+    # These are variables that depend only on time, not state variables
+    if result.assignment_rules:
+        lines.append("// ========================================================================")
+        lines.append("// ASSIGNMENT RULES (time-dependent quantities)")
+        lines.append("// ========================================================================")
+        for var_name in sorted(result.assignment_rules.keys()):
+            expr = result.assignment_rules[var_name]
+            lines.append(f"{var_name} := {expr};")
         lines.append("")
 
     # --- Initial conditions for auxiliary variables ONLY ---
