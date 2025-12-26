@@ -93,6 +93,44 @@ def parse_antimony(text: str) -> ModelIR:
     ir.antimony_text = text  # Cache original text for RoadRunner
     ir.raw_lines = [ln.rstrip() for ln in text.splitlines()]
     
+    # Pre-process: join continuation lines (lines without semicolons)
+    # Antimony statements end with semicolons. Lines that don't end with ';'
+    # (after stripping comments) are continuations of the previous statement.
+    joined_lines: List[str] = []
+    current_stmt = ""
+    for raw in ir.raw_lines:
+        # Strip inline comments
+        code_part = raw.split("//", 1)[0].rstrip()
+        if not code_part:
+            continue  # Skip empty/comment-only lines
+        
+        current_stmt += " " + code_part if current_stmt else code_part
+        
+        # Check if statement is complete (ends with ; or is model/end/special)
+        trimmed = current_stmt.strip()
+        is_complete = (
+            trimmed.endswith(';') or
+            trimmed.lower().startswith('model ') or
+            trimmed.lower() == 'end' or
+            # Special declarations without semicolons
+            trimmed.lower().startswith('species ') or
+            trimmed.lower().startswith('compartment ') or
+            trimmed.lower().startswith('const ') or
+            # Assignment rules (X := ...) may or may not have semicolons
+            (':=' in trimmed and trimmed.endswith(')'))
+        )
+        
+        if is_complete or trimmed.endswith(';'):
+            joined_lines.append(current_stmt.strip())
+            current_stmt = ""
+    
+    # Don't forget any remaining statement
+    if current_stmt.strip():
+        joined_lines.append(current_stmt.strip())
+    
+    # Use joined lines for parsing
+    ir.raw_lines = joined_lines
+
     # First pass: extract @SIM metadata from comments
     # Format: // @SIM T_START=0 T_END=100 N_STEPS=500
     import re
