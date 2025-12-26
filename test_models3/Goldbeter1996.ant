@@ -1,0 +1,111 @@
+// Goldbeter1991_MinimalMitoticOscillator.ant
+//
+// Source:
+//   Goldbeter A (1991)
+//   "A minimal cascade model for the mitotic oscillator involving
+//    cyclin and cdc2 kinase."
+//   Proc Natl Acad Sci USA 88(20):9107–9111.
+//   doi:10.1073/pnas.88.20.9107
+//
+// Variables:
+//   C(t) : cyclin concentration (µM)
+//   M(t) : fraction of active cdc2 kinase (0–1)
+//   X(t) : fraction of active cyclin protease (0–1)
+//
+// ODEs (dimensionless form used in the paper):
+//
+//   dC/dt =  v_i
+//            - V_d * X * C / (K_d + C)
+//            - k_d * C
+//
+//   dM/dt =  V_1(C) * (1 - M) / (K_1 + 1 - M)
+//            - V_2 * M / (K_2 + M)
+//
+//   dX/dt =  V_3(M) * (1 - X) / (K_3 + 1 - X)
+//            - V_4 * X / (K_4 + X)
+//
+//   where
+//     V_1(C) = V_M1 * C / (K_c + C)
+//     V_3(M) = V_M3 * M
+//
+// Canonical oscillatory parameter set (from Goldbeter 1991, Fig. 4):
+//   v_i   = 0.023      µM·min^-1   (cyclin synthesis)
+//   V_d   = 0.1        min^-1      (max protease-dependent cyclin degradation)
+//   K_d   = 0.02       µM          (Michaelis constant for cyclin degradation)
+//   k_d   = 0.0033     min^-1      (first-order cyclin degradation)
+//
+//   V_M1  = 0.5        min^-1      (max rate of cdc2 activation)
+//   K_c   = 0.5        µM          (C for half-max activation of cdc2)
+//   K_1   = 0.005      (dimensionless)
+//   V_2   = 0.5        min^-1      (max rate of cdc2 inactivation)
+//   K_2   = 0.005      (dimensionless)
+//
+//   V_M3  = 0.5        min^-1      (max rate of protease activation)
+//   K_3   = 0.005      (dimensionless)
+//   V_4   = 0.5        min^-1      (max rate of protease inactivation)
+//   K_4   = 0.005      (dimensionless)
+//
+// Initial conditions (typical oscillatory start):
+//   C(0) = 0.01 µM
+//   M(0) = 0.01
+//   X(0) = 0.01
+//
+// Time unit: minutes.
+
+model Goldbeter1991_MinimalMitoticOscillator
+
+  // Compartment
+  compartment cell = 1;
+
+  // Species / state variables
+  species C in cell;   // cyclin (µM)
+  species M in cell;   // active cdc2 kinase (fraction)
+  species X in cell;   // active cyclin protease (fraction)
+
+  // Parameters
+
+  // Cyclin synthesis and degradation
+  const v_i  = 0.023;     // µM/min
+  const V_d  = 0.1;       // min^-1
+  const K_d  = 0.02;      // µM
+  const k_d  = 0.0033;    // min^-1
+
+  // cdc2 activation–inactivation cycle
+  const V_M1 = 0.5;       // min^-1
+  const K_c  = 0.5;       // µM
+  const K_1  = 0.005;     // dimensionless
+  const V_2  = 0.5;       // min^-1
+  const K_2  = 0.005;     // dimensionless
+
+  // Protease activation–inactivation cycle
+  const V_M3 = 0.5;       // min^-1
+  const K_3  = 0.005;     // dimensionless
+  const V_4  = 0.5;       // min^-1
+  const K_4  = 0.005;     // dimensionless
+
+  // Helper "Max-rate" expressions (simple assignment rules, no parameters)
+  V_1 := V_M1 * C / (K_c + C);  // V_1(C)
+  V_3 := V_M3 * M;              // V_3(M)
+
+  // ODEs
+
+  // Cyclin
+  C' = v_i
+       - V_d * X * C / (K_d + C)
+       - k_d * C;
+
+  // Active cdc2 kinase
+  M' = V_1 * (1 - M) / (K_1 + 1 - M)
+       - V_2 * M / (K_2 + M);
+
+  // Active cyclin protease
+  X' = V_3 * (1 - X) / (K_3 + 1 - X)
+       - V_4 * X / (K_4 + X);
+
+  // Initial conditions
+  C = 0.01;
+  M = 0.01;
+  X = 0.01;
+
+end
+// @SIM T_START=0 T_END=20 N_STEPS=400

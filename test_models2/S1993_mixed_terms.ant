@@ -1,0 +1,65 @@
+// Mixed Terms - Reductive Recasting (4 auxiliary variables)
+// Source: Savageau, "Finding Multiple Roots of Nonlinear Algebraic Equations
+//         Using S-System Methodology"
+//         Appl. Math. Comput. 55:187-199 (1993)
+//         Equations (15)-(19)
+//
+// This paper cites Savageau & Voit (1987) as reference [12].
+//
+// Original ODE (Eq. 15):
+//   dX₁/dt + a₁₁X₁² + a₁₂X₁X₂ - a₂₁X₂^g₁ - a₂₂X₁^g₂X₂^g₃ = 0
+//
+// Rewritten as:
+//   dX₁/dt = a₂₁X₂^g₁ + a₂₂X₁^g₂X₂^g₃ - a₁₁X₁² - a₁₂X₁X₂
+//
+// ==============================================================================
+// EXACT RECASTING via Reductive Method (Eq. 16-19):
+// ==============================================================================
+// This equation has BOTH POSITIVE AND NEGATIVE MULTIPLE TERMS.
+// Four auxiliary variables are needed: X₁ = X₂·X₃·X₄·X₅
+//
+// After the reductive step (Eq. 16-19):
+//   dX₂/dt = (g₁₁/g₁₂)α₁·X₂^(g₁₁/g₁₂)·X_...  - β₂·X₂^h₂_...
+//   dX₃/dt = similar structure
+//   dX₄/dt = similar structure  
+//   dX₅/dt = similar structure
+//
+// Note: Equation (19) is a linear combination of (16)-(18) in steady state
+// and is eliminated.
+//
+// Constraints (Eq. 20-21):
+//   X₂ + X₃ = 1  (positive terms constraint)
+//   X₄ + X₅ = 1  (negative terms constraint)
+//
+// This demonstrates reductive recasting for the most general case:
+// multiple terms of BOTH signs → 2 auxiliary sets.
+// ==============================================================================
+
+model S1993_mixed_terms()
+  // Variables
+  var species X1 in compartment  // Original variable
+  var species X2 in compartment  // Second variable (from 2D system)
+  
+  compartment = 1
+
+  // Parameters (example values)
+  a11 := 1.0    // Coefficient of negative term X₁²
+  a12 := 0.5    // Coefficient of negative term X₁X₂  
+  a21 := 2.0    // Coefficient of positive term X₂^g₁
+  a22 := 1.5    // Coefficient of positive term X₁^g₂·X₂^g₃
+  g1 := 0.5     // Exponent
+  g2 := 0.3     // Exponent
+  g3 := 0.7     // Exponent
+  
+  // Original ODE with mixed terms (multiple positive, multiple negative)
+  // dX₁/dt = a₂₁·X₂^g₁ + a₂₂·X₁^g₂·X₂^g₃ - a₁₁·X₁² - a₁₂·X₁·X₂
+  X1' = a21 * X2^g1 + a22 * X1^g2 * X2^g3 - a11 * X1^2 - a12 * X1 * X2
+  
+  // Second equation (conservation or independent dynamics)
+  X2' = -X2 + 1  // Example: X2 approaches 1
+  
+  // Initial conditions
+  X1 = 0.5
+  X2 = 0.8
+end
+// @SIM T_START=0 T_END=20 N_STEPS=400

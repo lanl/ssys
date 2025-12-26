@@ -1,0 +1,59 @@
+// Central F-Distribution - Original Form
+// Source: Rust & Voit, "Statistical Densities, Cumulatives, Quantiles, and Power..."
+//         JASA 85(410):572-578 (1990)
+//         Equation (10)
+//
+// Both papers explicitly cite Savageau & Voit (1987).
+//
+// Central F density with v1 numerator and v2 denominator degrees of freedom:
+//   g(v1, v2, 0; t) = C · t^((v1/2)-1) · (v2 + v1·t)^(-(v1+v2)/2)
+//
+// Differentiating:
+//   g'(t) = ((v1/2)-1)/t · g(t) - (v1(v1+v2)/2)/(v2 + v1·t) · g(t)
+//
+// Problem: The SUM (v2 + v1·t) in denominator is not S-system compatible.
+//
+// ==============================================================================
+// EXACT RECASTING TO S-SYSTEM (Eq. 10):
+// ==============================================================================
+// Define auxiliary variables:
+//   X₁ = t
+//   X₂ = v₂ + v₁·t   (the troublesome sum term)
+//   X₃ = t · g(v₁, v₂, 0; t)  (product form to handle all v1 > 0)
+//   X₄ = G(v₁, v₂, 0; t)  (cumulative)
+//
+// Recast S-system (1 → 4 variables):
+//   X₁' = 1
+//   X₂' = v₁
+//   X₃' = (v₁/2) · X₁⁻¹ · X₃ - (v₁(v₁+v₂)/2) · X₂⁻¹ · X₃
+//   X₄' = X₁⁻¹ · X₃
+//
+// The pdf is: g(v₁, v₂, 0; t) = X₁⁻¹ · X₃
+// ==============================================================================
+
+model RV1990_central_F()
+  // ORIGINAL ODE (not S-system form due to sum in denominator)
+  var species t in compartment  // t (argument)
+  var species g in compartment  // g(v1, v2, 0; t) = F density
+  var species G in compartment  // G(v1, v2, 0; t) = cumulative distribution function
+  
+  compartment = 1
+
+  // Parameters
+  v1 := 11      // numerator degrees of freedom
+  v2 := 200     // denominator degrees of freedom
+  
+  // ORIGINAL ODEs
+  // g'(t) = ((v1/2)-1)/t · g - (v1(v1+v2)/2)/(v2 + v1·t) · g
+  // Note: (v2 + v1·t) is a SUM - not S-system compatible
+  t' = 1
+  g' = (v1 / 2 - 1) / t * g - (v1 * (v1 + v2) / 2) / (v2 + v1 * t) * g
+  G' = g
+  
+  // Initial conditions at t = 1
+  // For F(11, 200): f(1) and F(1) from tables
+  t = 1.0
+  g = 0.95     // approximate F(11,200) density at t=1
+  G = 0.55     // approximate F(11,200) cdf at t=1
+end
+// @SIM T_START=0 T_END=20 N_STEPS=400
