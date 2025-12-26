@@ -1,6 +1,6 @@
 # Development Notes
 
-This document consolidates development plans, design notes, and investigation records for the ssys project.
+This document contains development plans and investigation records for the ssys project.
 
 ---
 
@@ -8,11 +8,7 @@ This document consolidates development plans, design notes, and investigation re
 
 1. [Work Plans](#work-plans)
    - [GMA→S-System Condensation](#gma-to-s-system-condensation)
-   - [ODE Solver Integration (Tellurium/RoadRunner)](#ode-solver-integration)
-   - [Sign-Changing Function Transformations](#sign-changing-function-transformations)
-2. [Design Notes](#design-notes)
-   - [BioModels Fetching Pipeline](#biomodels-fetching-pipeline)
-3. [Bug Fixes & Investigations](#bug-fixes--investigations)
+2. [Bug Fixes & Investigations](#bug-fixes--investigations)
    - [SymPy Sign Comparison Bug](#sympy-sign-comparison-bug)
    - [Validation Analysis: 0.0 Error Cases](#validation-analysis-00-error-cases)
 
@@ -22,7 +18,7 @@ This document consolidates development plans, design notes, and investigation re
 
 ## GMA→S-System Condensation
 
-**Status:** Planned
+**Status:** Planned (future work)
 
 ### Objective
 
@@ -66,127 +62,11 @@ def condense_gma_to_ssystem(gma_result, x_ref, exp_tol=1e-8) -> RecastResult
 
 ---
 
-## ODE Solver Integration
-
-**Status:** Partially Implemented (RoadRunner backend exists)
-
-### Goal
-
-Replace in-house RK4 with Tellurium + libRoadRunner while keeping Antimony as user-facing format.
-
-### Architecture
-
-```python
-class OdeSimulator:
-    def simulate(self, antimony: str, start: float, end: float, 
-                 n_points: int, integrator="cvode", ...) -> SimulationResult
-
-class RoadRunnerSimulator(OdeSimulator):
-    # Primary implementation using Tellurium
-
-class Rk4Simulator(OdeSimulator):
-    # Optional fallback for debugging
-```
-
-### Configuration
-
-```python
-# config.py additions
-DEFAULT_SOLVER = "roadrunner"
-DEFAULT_INTEGRATOR = "cvode"
-DEFAULT_REL_TOL = 1e-7
-DEFAULT_ABS_TOL = 1e-9
-DEFAULT_MAX_STEPS = 10000
-```
-
-### Key Implementation Notes
-
-1. **Model loading:** `te.loada(antimony)` handles Antimony→SBML→RoadRunner internally
-2. **Integrator config:** Set tolerances via `r.getIntegrator().setValue(...)`
-3. **Error handling:** Custom exceptions (ModelLoadError, SimulationError)
-4. **Batch processing:** Never crash whole run on single bad model
-
----
-
-## Sign-Changing Function Transformations
-
-**Status:** In Progress (Phase 1 Complete)
-
-### Goal
-
-Implement Savageau 1987 transformations `X = Z + c` for sign-changing functions.
-
-### Background
-
-For `cos(t)` which ranges [-1, 1]:
-- Transform: `Z_cos = cos(t) + 2` → range [1, 3] (always positive)
-- Similarly: `Z_sin = sin(t) + 2` → range [1, 3]
-
-### Coupled Derivatives
-
-```
-Z_sin = sin(t) + 2  →  Z_sin' = cos(t) = Z_cos - 2
-Z_cos = cos(t) + 2  →  Z_cos' = -sin(t) = 2 - Z_sin
-```
-
-### Implementation Phases
-
-**Phase 1: Detection (✅ Complete)**
-- `_requires_positivity_transform()` detects sin/cos → returns (True, 2.0)
-
-**Phase 2: Offset Transformation (In Progress)**
-- Replace `f(X)` with `(Z - offset)` in substitutions
-- Generate coupled ODEs for sin/cos pairs
-- Adjust initial conditions: `Z(0) = f(X(0)) + offset`
-
-**Phase 3: Difference Expression Handling (Planned)**
-- Handle expressions like `1 - X` that can be negative
-
----
-
-# Design Notes
-
-## BioModels Fetching Pipeline
-
-### Pipeline Overview
-
-1. **Discovery & Fetch:** Query BioModels for curated ODE models, download SBML
-2. **Convert to Antimony:** `antimony.loadSBMLString()` → `getAntimonyString()`
-3. **Structural Filters:** Reject models with events, delays, DAEs, sign-changing trig
-4. **Tag Candidates:** S-system candidate vs GMA candidate
-5. **Output:** CSV/JSON index with tags and blockers
-
-### Filter Criteria
-
-**KEEP (GMA):** rational/Hill/MM/Holling, mass-action, smooth algebraic rules
-
-**DROP EARLY:**
-- Events, delays, DAEs
-- Piecewise-heavy switching, min/max
-- Sign-changing transcendentals (sin, cos, tanh)
-
-**S-SYSTEM CANDIDATE only if:**
-- Each state has ≤1 production channel AND ≤1 loss channel
-- Every kinetic law is a single monomial
-
-### Key Helper Functions
-
-```python
-def rough_antimony_filters(ant: str) -> Dict[str, bool]:
-    """Detect events, delays, piecewise, transcendentals, explicit time"""
-
-def ssystem_candidate_heuristic(ant: str) -> bool:
-    """Each species in ≤2 reactions, all rates monomial-like"""
-
-def gma_candidate_heuristic(ant: str) -> bool:
-    """No events/delays - rationals OK"""
-```
-
----
-
 # Bug Fixes & Investigations
 
 ## SymPy Sign Comparison Bug
+
+**Status:** Fixed
 
 ### Problem
 
@@ -219,6 +99,8 @@ Or reuse existing `_get_coefficient_sign()` / `_analyze_ode_terms()` which alrea
 ---
 
 ## Validation Analysis: 0.0 Error Cases
+
+**Status:** Investigated (not a bug)
 
 ### Summary
 
