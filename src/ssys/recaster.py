@@ -1220,6 +1220,51 @@ def find_composite_functions(expr: sp.Expr) -> Set[sp.Expr]:
     return functions
 
 
+def find_sqrt_of_sums(expr: sp.Expr) -> Set[sp.Expr]:
+    """
+    Find all sqrt(sum) patterns in an expression.
+    
+    These are Pow(base, exp) where:
+    - exp is 0.5 or 1/2 (square root)
+    - base is an Add (sum of terms)
+    
+    Such expressions are NOT monomials and need to be lifted to auxiliary variables.
+    Returns set of sqrt(sum) expressions that need auxiliary variables.
+    """
+    sqrt_sums = set()
+    
+    def visit(e):
+        if isinstance(e, sp.Pow):
+            base, exp = e.args
+            # Check if this is a square root (exp = 0.5 or 1/2)
+            is_sqrt = False
+            if exp.is_number:
+                try:
+                    exp_val = float(exp)
+                    is_sqrt = abs(exp_val - 0.5) < 1e-10
+                except (TypeError, ValueError):
+                    pass
+            elif exp == sp.Rational(1, 2):
+                is_sqrt = True
+            
+            # Check if base is a sum (Add)
+            if is_sqrt and base.is_Add:
+                sqrt_sums.add(e)
+            
+            # Recurse into base
+            visit(base)
+        elif isinstance(e, sp.Function):
+            # Recurse into function arguments
+            for arg in e.args:
+                visit(arg)
+        elif isinstance(e, (sp.Add, sp.Mul)):
+            for arg in e.args:
+                visit(arg)
+    
+    visit(expr)
+    return sqrt_sums
+
+
 def create_auxiliary_for_denominator(
     denom: sp.Expr,
     var_odes: Dict[sp.Symbol, sp.Expr],
@@ -1694,6 +1739,10 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
     5. Replace f(X) with (Z - offset) in all ODEs
     6. Set Z(0) = f(X(0)) + offset
     
+    Also lifts sqrt(sum) patterns: sqrt(a + b + ...) into auxiliary Z.
+    These are NOT monomials and need lifting for proper S-system form.
+    Z' = f'/(2*Z) via chain rule for sqrt.
+    
     This implements the Savageau 1987 transformation for sign-changing functions.
     
     Returns:
@@ -1701,12 +1750,15 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
     """
     # Find all unique composite functions across all ODEs
     all_functions = set()
+    all_sqrt_sums = set()
     for var, ode in sym.odes.items():
         funcs = find_composite_functions(ode)
         all_functions.update(funcs)
+        sqrt_sums = find_sqrt_of_sums(ode)
+        all_sqrt_sums.update(sqrt_sums)
     
-    if not all_functions:
-        # No composite functions to lift
+    if not all_functions and not all_sqrt_sums:
+        # No composite functions or sqrt(sum) to lift
         return sym, {}
     
     # Group functions by type and argument for coupled handling (sin/cos pairs)
@@ -1763,6 +1815,14 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
         func_to_offset[func] = 0.0  # No offset for exp, log, etc.
         aux_counter += 1
     
+    # Handle sqrt(sum) expressions - these are NOT monomials
+    # Create auxiliary Z = sqrt(base) with Z' = (d base/dt) / (2*Z)
+    sqrt_to_aux: Dict[sp.Expr, sp.Symbol] = {}
+    for sqrt_expr in sorted(all_sqrt_sums, key=str):
+        Z = sp.symbols(f"Z_{aux_counter}", positive=True)
+        sqrt_to_aux[sqrt_expr] = Z
+        aux_counter += 1
+    
     # CRITICAL: DO NOT substitute auxiliaries in original ODEs yet
     # We need the original functions present for the chain rule to work correctly
     # Keep original ODEs unchanged for now
@@ -1799,6 +1859,35 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
     # Collect all variables that have ODEs at this point:
     # - Original variables (from sym.vars)
     # - Newly created sin/cos auxiliaries (keys in new_aux_odes)
+    all_vars_with_odes = list(sym.vars) + list(new_aux_odes.keys())
+    
+    # Handle sqrt(sum) expressions: Z' = (d base/dt) / (2*Z)
+    # This uses the chain rule: d/dt sqrt(f) = f' / (2*sqrt(f)) = f' / (2*Z)
+    sqrt_aux_odes: Dict[sp.Symbol, sp.Expr] = {}
+    for sqrt_expr, Z in sqrt_to_aux.items():
+        base = sqrt_expr.args[0]  # The base of sqrt(base)
+        
+        # Compute d(base)/dt using chain rule
+        base_prime = sp.Integer(0)
+        for var in sym.vars:
+            if var in base.free_symbols:
+                partial = sp.diff(base, var)
+                base_prime += partial * new_odes[var]
+        
+        # Handle time dependence
+        time_sym = sp.Symbol('time')
+        if time_sym in base.free_symbols:
+            partial_t = sp.diff(base, time_sym)
+            base_prime += partial_t  # d(time)/dt = 1
+        
+        # Z' = base' / (2*Z)
+        Z_ode = base_prime / (2 * Z)
+        sqrt_aux_odes[Z] = sp.simplify(Z_ode)
+    
+    # Add sqrt auxiliary ODEs to new_aux_odes
+    new_aux_odes.update(sqrt_aux_odes)
+    
+    # Update all_vars_with_odes to include sqrt auxiliaries
     all_vars_with_odes = list(sym.vars) + list(new_aux_odes.keys())
     
     # Handle other functions with standard chain rule
@@ -1906,6 +1995,10 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
                 subs_map[func] = Z
         new_ode = new_ode.subs(subs_map)
         
+        # Also substitute sqrt(sum) expressions
+        for sqrt_expr, Z in sqrt_to_aux.items():
+            new_ode = new_ode.subs(sqrt_expr, Z)
+        
         new_odes[var] = sp.simplify(new_ode)
     
     # Combine original and auxiliary ODEs
@@ -1938,8 +2031,30 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
             Z_init = 1.0 + offset  # Fallback if evaluation fails
         new_initials[Z] = Z_init
     
-    # Create new variable list: keep original vars, add Z auxiliaries
-    new_vars = list(sym.vars) + list(func_to_aux.values())
+    # Compute initial conditions for sqrt auxiliaries
+    for sqrt_expr, Z in sqrt_to_aux.items():
+        # Evaluate sqrt at t=0
+        sqrt_at_0 = sqrt_expr
+        # First substitute time=0
+        time_sym = sp.Symbol('time')
+        sqrt_at_0 = sqrt_at_0.subs(time_sym, 0)
+        # Then substitute state variables
+        for var in sym.vars:
+            if var in sqrt_at_0.free_symbols:
+                sqrt_at_0 = sqrt_at_0.subs(var, sym.initials.get(var, 1.0))
+        # Then substitute parameters
+        for param_sym in sqrt_at_0.free_symbols:
+            param_name = param_sym.name
+            if param_name in sym.params:
+                sqrt_at_0 = sqrt_at_0.subs(param_sym, sym.params[param_name])
+        try:
+            Z_init = float(sqrt_at_0)
+        except:
+            Z_init = 1.0  # Fallback if evaluation fails
+        new_initials[Z] = Z_init
+    
+    # Create new variable list: keep original vars, add Z auxiliaries (including sqrt)
+    new_vars = list(sym.vars) + list(func_to_aux.values()) + list(sqrt_to_aux.values())
     
     # Create auxiliary definitions with offsets: Z -> f(X) + offset
     aux_to_func_with_offset = {}
@@ -1951,6 +2066,10 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
         else:
             # Z = f(X) (no offset)
             aux_to_func_with_offset[Z] = func
+    
+    # Add sqrt(sum) auxiliary definitions
+    for sqrt_expr, Z in sqrt_to_aux.items():
+        aux_to_func_with_offset[Z] = sqrt_expr
     
     # FOURTH PASS: Recursively lift any NEW composite functions introduced by inverse mappings
     # This handles cases where inverse mappings create expressions like exp(-Z_2)
