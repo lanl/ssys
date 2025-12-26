@@ -35,7 +35,7 @@ def read_manifest(path: str) -> list[str]:
 
 
 def recast_file(ant_path: str, out_dir: str, mode: str = "simplified", 
-                validate: bool = False) -> tuple[str, str, str, Optional[str]]:
+                validate: bool = False, solver: str = "roadrunner") -> tuple[str, str, str, Optional[str]]:
     """
     Recast a single Antimony file to S-system form.
 
@@ -44,6 +44,7 @@ def recast_file(ant_path: str, out_dir: str, mode: str = "simplified",
         out_dir: Output directory for recast file
         mode: Output mode ('simplified' or 'canonical')
         validate: Whether to run validation tests
+        solver: ODE solver for validation ('roadrunner' or 'rk4')
 
     Returns:
         Tuple of (model_name, input_path, output_path, validation_json_path)
@@ -80,7 +81,8 @@ def recast_file(ant_path: str, out_dir: str, mode: str = "simplified",
         validation_json_path = os.path.join(out_dir, f"{name}_validation.json")
         try:
             validate_recast_pair(ant_path, out_path, mode=mode, 
-                               output_json=validation_json_path)
+                               output_json=validation_json_path,
+                               solver=solver)
         except Exception as e:
             print(f"Warning: Validation failed for {name}: {e}", file=sys.stderr)
             validation_json_path = None
@@ -202,7 +204,7 @@ def main():
 
     print(f"Processing {len(ant_files)} model(s)...")
     cases = [recast_file(ant, args.outdir, mode=args.mode, 
-                        validate=args.validate)
+                        validate=args.validate, solver=args.solver)
              for ant in ant_files]
     
     if args.validate:

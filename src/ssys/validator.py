@@ -117,7 +117,8 @@ class RecastValidator:
                  original_file: str,
                  recast_file: str,
                  factor_map: Optional[Dict[sp.Symbol, List[sp.Symbol]]] = None,
-                 mode: str = "simplified"):
+                 mode: str = "simplified",
+                 solver: str = "roadrunner"):
         """
         Initialize validator.
         
@@ -126,10 +127,12 @@ class RecastValidator:
             recast_file: Path to recast Antimony file
             factor_map: Mapping from original to auxiliary variables (X -> [X1, X2, ...])
             mode: Recast mode ('simplified' or 'canonical')
+            solver: ODE solver for trajectory validation ('roadrunner' or 'rk4')
         """
         self.original_file = original_file
         self.recast_file = recast_file
         self.mode = mode
+        self.solver = solver
         
         # Read recast file to extract mapping comments
         recast_text = open(recast_file).read()
@@ -1391,11 +1394,33 @@ class RecastValidator:
     def _simulate_model(self, model_ir, odes, vars_ordered, t_end, n_points, 
                         param_values, time_symbol, model_name, y0_override=None):
         """
-        Simulate a model using available solvers.
+        Simulate a model using the specified solver (no fallbacks).
         
-        Solver priority: roadrunner → scipy LSODA → rk4
+        Uses self.solver which can be 'roadrunner' or 'rk4'.
+        No silent fallbacks - if the specified solver fails, we report the error.
         """
-        # Try roadrunner first
+        if self.solver == "roadrunner":
+            return self._simulate_with_roadrunner(
+                model_ir, odes, vars_ordered, t_end, n_points, 
+                param_values, time_symbol, model_name, y0_override
+            )
+        elif self.solver == "rk4":
+            return self._simulate_with_rk4(
+                model_ir, odes, vars_ordered, t_end, n_points,
+                param_values, time_symbol, model_name, y0_override
+            )
+        else:
+            return {
+                'success': False,
+                't': np.array([]),
+                'y': np.array([]),
+                'message': f"Unknown solver: {self.solver}"
+            }
+    
+    def _simulate_with_roadrunner(self, model_ir, odes, vars_ordered, t_end, 
+                                   n_points, param_values, time_symbol, 
+                                   model_name, y0_override=None):
+        """Simulate using RoadRunner (CVODE)."""
         try:
             from .ode_backends.roadrunner_backend import simulate_with_roadrunner
             
@@ -1414,7 +1439,6 @@ class RecastValidator:
                         j = state_names.index(var_name)
                         y_reordered[:, i] = result['y'][:, j]
                     else:
-                        # Variable not in simulation - may be auxiliary computed separately
                         y_reordered[:, i] = 0.0
                 
                 return {
@@ -1423,45 +1447,47 @@ class RecastValidator:
                     'y': y_reordered,
                     'message': ''
                 }
-        except Exception as e:
-            pass  # Fall through to scipy
-        
-        # Try scipy LSODA
-        try:
-            # Build ODE function for scipy
-            ode_funcs = []
-            for var in vars_ordered:
-                ode_expr = odes[var]
-                func = lambdify(
-                    list(vars_ordered) + list(sorted(param_values.keys(), key=str)),
-                    ode_expr,
-                    modules='numpy'
-                )
-                ode_funcs.append(func)
-            
-            param_vals = [param_values[str(p)] for p in sorted(param_values.keys())]
-            
-            def ode_rhs(t, y):
-                args = list(y) + param_vals
-                return np.array([f(*args) for f in ode_funcs])
-            
-            # Get initial conditions
-            if y0_override:
-                y0 = np.array([y0_override.get(str(var), model_ir.initial.get(str(var), 1.0)) 
-                               for var in vars_ordered])
             else:
-                y0 = np.array([model_ir.initial.get(str(var), 1.0) for var in vars_ordered])
+                return {
+                    'success': False,
+                    't': np.array([]),
+                    'y': np.array([]),
+                    'message': f"RoadRunner simulation failed: {result.get('message', 'Unknown error')}"
+                }
+        except Exception as e:
+            return {
+                'success': False,
+                't': np.array([]),
+                'y': np.array([]),
+                'message': f"RoadRunner error: {str(e)}"
+            }
+    
+    def _simulate_with_rk4(self, model_ir, odes, vars_ordered, t_end, n_points,
+                           param_values, time_symbol, model_name, y0_override=None):
+        """Simulate using RK4 solver."""
+        try:
+            from .ode_backends.rk4_backend import simulate_with_rk4
             
-            t_span = (0.0, t_end)
-            t_eval = np.linspace(0.0, t_end, n_points)
+            result = simulate_with_rk4(
+                model_ir, 0.0, t_end, n_points, y0_override=y0_override
+            )
             
-            sol = solve_ivp(ode_rhs, t_span, y0, method='LSODA', t_eval=t_eval)
-            
-            if sol.success:
+            if result['success']:
+                state_names = result['state_names']
+                y_reordered = np.zeros((len(result['t']), len(vars_ordered)))
+                
+                for i, var in enumerate(vars_ordered):
+                    var_name = str(var)
+                    if var_name in state_names:
+                        j = state_names.index(var_name)
+                        y_reordered[:, i] = result['y'][:, j]
+                    else:
+                        y_reordered[:, i] = 0.0
+                
                 return {
                     'success': True,
-                    't': sol.t,
-                    'y': sol.y.T,  # Transpose to (n_points, n_vars)
+                    't': result['t'],
+                    'y': y_reordered,
                     'message': ''
                 }
             else:
@@ -1469,15 +1495,14 @@ class RecastValidator:
                     'success': False,
                     't': np.array([]),
                     'y': np.array([]),
-                    'message': f"scipy LSODA failed: {sol.message}"
+                    'message': f"RK4 simulation failed: {result.get('message', 'Unknown error')}"
                 }
-                
         except Exception as e:
             return {
                 'success': False,
                 't': np.array([]),
                 'y': np.array([]),
-                'message': f"All solvers failed. Last error: {str(e)}"
+                'message': f"RK4 error: {str(e)}"
             }
     
     def _compute_recast_initial_conditions(self, recast_vars, orig_vars, param_values):
@@ -1648,7 +1673,8 @@ def validate_recast_pair(original_file: str,
                          recast_file: str,
                          factor_map: Optional[Dict] = None,
                          mode: str = "simplified",
-                         output_json: Optional[str] = None) -> ValidationReport:
+                         output_json: Optional[str] = None,
+                         solver: str = "roadrunner") -> ValidationReport:
     """
     Convenience function to validate a recast.
     
@@ -1658,11 +1684,12 @@ def validate_recast_pair(original_file: str,
         factor_map: Optional factor map
         mode: Recast mode
         output_json: Optional path to save JSON report
+        solver: ODE solver for trajectory validation ('roadrunner' or 'rk4')
         
     Returns:
         ValidationReport
     """
-    validator = RecastValidator(original_file, recast_file, factor_map, mode)
+    validator = RecastValidator(original_file, recast_file, factor_map, mode, solver)
     report = validator.validate()
     
     if output_json:
