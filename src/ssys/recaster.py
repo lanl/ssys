@@ -1768,6 +1768,21 @@ def lift_composite_functions(sym: SymSystem) -> Tuple[SymSystem, Dict[sp.Symbol,
                     
                     func_prime += term
         
+        # Handle explicit time dependence: d(time)/dt = 1
+        time_sym = sp.Symbol('time')
+        if time_sym in func.free_symbols:
+            partial_t = sp.diff(func, time_sym)
+            # Substitute auxiliaries in the time derivative term
+            subs_map = {}
+            for other_func, other_Z in func_to_aux.items():
+                offset = func_to_offset[other_func]
+                if offset > 0:
+                    subs_map[other_func] = other_Z - offset
+                else:
+                    subs_map[other_func] = other_Z
+            partial_t = partial_t.subs(subs_map)
+            func_prime += partial_t
+
         # Store the computed ODE
         Z_ode = func_prime
         
