@@ -56,7 +56,7 @@ model Dreisigmeyer2008_LacOperon_Lactose
   // Nominal parameter values (from Table I; lactose case) 
 
   // Growth dilution
-  const gamma = 0.02;          // min^-1 (chosen within 0.0116–0.0231 min^-1 range)
+  const growth_rate = 0.02;    // min^-1 (chosen within 0.0116–0.0231 min^-1 range)
 
   // Permease transport
   const alpha = 600.0;         // min^-1  (permease import turnover number)
@@ -86,17 +86,17 @@ model Dreisigmeyer2008_LacOperon_Lactose
   // Internal lactose l
   l' =  alpha * z * (l_ext - phi*l) / (K_i + l + l_ext)
         - beta * z * l / ((1 + a/K_m_a) * (K_m_l + l))
-        - gamma * l;
+        - growth_rate * l;
 
   // Allolactose a
   a' =  nu * beta * z * l / ((1 + a/K_m_a) * (K_m_l + l))
         - delta * z * a / ((1 + l/K_m_l) * (K_m_a + a))
-        - gamma * a;
+        - growth_rate * a;
 
   // β-galactosidase z
-  z' =  c * gamma
-        + eps * gamma * a^n_Hill / (K_z^n_Hill + a^n_Hill)
-        - gamma * z;
+  z' =  c * growth_rate
+        + eps * growth_rate * a^n_Hill / (K_z^n_Hill + a^n_Hill)
+        - growth_rate * z;
 
   // -----------------------------
   // Initial conditions
