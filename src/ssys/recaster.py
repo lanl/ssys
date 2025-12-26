@@ -517,6 +517,7 @@ class SymSystem:
     odes: Dict[sp.Symbol, sp.Expr]
     initials: Dict[sp.Symbol, float]
     initial_exprs: Dict[sp.Symbol, str] = field(default_factory=dict)  # Symbolic IC expressions
+    assignment_rules: Dict[str, str] = field(default_factory=dict)  # Assignment rules from original model
 
 def build_sym_system(ir: ModelIR) -> SymSystem:
     var_syms: Dict[str, sp.Symbol] = {nm: sp.symbols(nm, positive=True) for nm in sorted(ir.species)}
@@ -527,9 +528,25 @@ def build_sym_system(ir: ModelIR) -> SymSystem:
         param_syms[nm] = sp.symbols(nm, positive=True)
     
     # Parse assignment rules into symbolic expressions
+    # Handle nested rules by expanding iteratively until stable
     assignment_exprs: Dict[str, sp.Expr] = {}
     for name, expr_str in ir.assignment_rules.items():
         assignment_exprs[name] = sp.sympify(expr_str, locals={**var_syms, **param_syms})
+    
+    # Expand nested assignment rules (rule A may reference rule B)
+    max_iterations = 20
+    for _ in range(max_iterations):
+        changed = False
+        for name, expr in list(assignment_exprs.items()):
+            new_expr = expr
+            for other_name, other_expr in assignment_exprs.items():
+                if other_name != name:
+                    new_expr = new_expr.subs(sp.Symbol(other_name), other_expr)
+            if new_expr != assignment_exprs[name]:
+                assignment_exprs[name] = new_expr
+                changed = True
+        if not changed:
+            break
     
     odes: Dict[sp.Symbol, sp.Expr] = {var_syms[nm]: sp.Integer(0) for nm in var_syms}
     for rxn in ir.reactions:
@@ -571,11 +588,12 @@ def build_sym_system(ir: ModelIR) -> SymSystem:
             initial_exprs[param_syms[name]] = expr_str
     
     return SymSystem(
-        vars=list(odes.keys()), 
-        params={k: float(v) for k, v in ir.params.items()}, 
-        odes=odes, 
+        vars=list(odes.keys()),
+        params={k: float(v) for k, v in ir.params.items()},
+        odes=odes,
         initials=initials,
-        initial_exprs=initial_exprs
+        initial_exprs=initial_exprs,
+        assignment_rules=dict(ir.assignment_rules)  # Pass through from ModelIR
     )
 
 from dataclasses import dataclass
@@ -630,6 +648,7 @@ class RecastResult:
     auxiliary_defs: Dict[sp.Symbol, sp.Expr] = field(default_factory=dict)  # Y_1 -> K_2 + X_1
     canonical_refusal_reason: Optional[str] = None  # Why canonical S-system was refused
     initial_exprs: Dict[sp.Symbol, str] = field(default_factory=dict)  # Symbolic IC expressions
+    assignment_rules: Dict[str, str] = field(default_factory=dict)  # Assignment rules from original model
 
 def classify_system(sym: SymSystem) -> SystemClass:
     """
