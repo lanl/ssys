@@ -1574,14 +1574,14 @@ class RecastValidator:
     def validate(self,
                  run_symbolic: bool = True,
                  run_numerical: bool = True,
-                 run_trajectory: bool = False) -> ValidationReport:
+                 run_trajectory: bool = True) -> ValidationReport:
         """
         Run full validation suite.
         
         Args:
             run_symbolic: Run symbolic equivalence test
             run_numerical: Run numerical pointwise test
-            run_trajectory: Run trajectory comparison test
+            run_trajectory: Run trajectory comparison test (required for pass)
             
         Returns:
             ValidationReport with all test results

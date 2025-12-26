@@ -62,7 +62,7 @@ model Samoilov2005_FutileCycle
   //   total enzymes E1_tot = E1 + C1 = 20
   //                     E2_tot = E2 + C2 = 50
 
-  X       = 0;
+  X       = 0.01;  // Perturbed from 0 to avoid numerical stiffness
   X_star  = 2000;
   E1      = 20;
   C1      = 0;
