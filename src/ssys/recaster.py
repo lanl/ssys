@@ -2985,10 +2985,14 @@ def ssystem_to_antimony(result, model_name: str = "recast", mode: str = "simplif
             - 'simplified': Basic format with comments
             - 'canonical': Enhanced format with species declarations, observables, and detailed comments
     """
-    # CRITICAL: Antimony identifiers cannot start with numbers
-    # Prefix with 'm_' if name starts with digit
-    if model_name and model_name[0].isdigit():
-        model_name = f"m_{model_name}"
+    # CRITICAL: Antimony identifiers cannot start with numbers or contain hyphens
+    # Prefix with 'm_' if name starts with digit, replace hyphens with underscores
+    if model_name:
+        # Replace hyphens with underscores (hyphen is subtraction in Antimony)
+        model_name = model_name.replace('-', '_')
+        # Prefix with 'm_' if name starts with digit
+        if model_name[0].isdigit():
+            model_name = f"m_{model_name}"
     
     # Check if recasting failed
     if result.status == RecastStatus.FAILED:

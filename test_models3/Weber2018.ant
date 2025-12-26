@@ -58,7 +58,7 @@ model WeberRaymondMunsky2018_Model2_LambdaA
   const k_r_2   = 9;      // transcription rate in state S_2
   const k_r_3   = 2;      // transcription rate in state S_3
   const beta    = 1;      // input coupling strength
-  const gamma   = 0.8;    // mRNA degradation rate
+  const gam     = 0.8;    // mRNA degradation rate (renamed from gamma, reserved)
 
   // Smooth approximation parameters
   const k_steep = 5.0;    // steepness of sigmoid transitions
@@ -94,7 +94,7 @@ model WeberRaymondMunsky2018_Model2_LambdaA
 
   // Mean mRNA
   R'  =  k_r_2*S_2 + k_r_3*S_3
-        - gamma*R;
+        - gam*R;
 
   // Initial conditions
   S_1 = 1;
