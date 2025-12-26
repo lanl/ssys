@@ -1012,6 +1012,25 @@ class RecastValidator:
             param_symbols = [self.canonical_symbols[name] for name in sorted(param_values.keys())]
             param_vals_ordered = [param_values[str(sym)] for sym in param_symbols]
             
+            # Check if 'time' symbol appears in any ODE (time-dependent models)
+            # Collect all free symbols from ODEs
+            all_ode_symbols = set()
+            for ode in self.orig_odes.values():
+                all_ode_symbols.update(ode.free_symbols)
+            for ode in self.recast_odes.values():
+                all_ode_symbols.update(ode.free_symbols)
+            
+            # Check for time symbol (could be 'time' or 't')
+            time_symbol = None
+            for sym in all_ode_symbols:
+                if str(sym).lower() == 'time' or str(sym) == 't':
+                    time_symbol = sym
+                    break
+            
+            # If time symbol found, ensure it's in canonical symbols
+            if time_symbol is not None and str(time_symbol) not in self.canonical_symbols:
+                self.canonical_symbols[str(time_symbol)] = time_symbol
+            
             # Build Φ as a vector
             Phi_vector = Matrix([self.mapping[v] for v in orig_vars_ordered])
             Z_vector = Matrix(recast_vars_ordered)
@@ -1020,9 +1039,12 @@ class RecastValidator:
             J_Phi = Phi_vector.jacobian(Z_vector)
             
             # Lambdify each element of Jacobian with both state vars and params
+            # ALSO include time symbol if present (for time-dependent models)
             n_orig = len(orig_vars_ordered)
             n_recast = len(recast_vars_ordered)
             all_symbols = list(recast_vars_ordered) + param_symbols
+            if time_symbol is not None:
+                all_symbols = all_symbols + [time_symbol]
             J_Phi_funcs = []
             for i in range(n_orig):
                 row_funcs = []
@@ -1121,7 +1143,12 @@ class RecastValidator:
                     Z_sample[idx] = aux_val
                 
                 # Combine state variables and parameters for evaluation
+                # Also include sampled time value if time-dependent
                 all_vals = tuple(Z_sample) + tuple(param_vals_ordered)
+                if time_symbol is not None:
+                    # Sample time in [0.1, 100] range (log-uniform)
+                    t_sample = np.exp(np.random.uniform(np.log(0.1), np.log(100.0)))
+                    all_vals = all_vals + (t_sample,)
                 
                 # Evaluate J_Φ(Z) element by element - returns a matrix
                 J_at_Z = np.zeros((n_orig, n_recast))

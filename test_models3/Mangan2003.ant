@@ -64,10 +64,11 @@ model ManganAlon2003_CoherentFFL_AND
        - a_2 * Z;
 
   // Initial conditions
-  // Not fixed in the paper; natural choice is zero expression
-  // before an ON step of X.
-  Y = 0;
-  Z = 0;
+  // Not fixed in the paper; natural choice is near-zero expression
+  // before an ON step of X. Using 0.01 (well below K thresholds of 0.5)
+  // to avoid numerical issues with negative exponents in recast.
+  Y = 0.01;
+  Z = 0.01;
 
 end
 // @SIM T_START=0 T_END=20 N_STEPS=400

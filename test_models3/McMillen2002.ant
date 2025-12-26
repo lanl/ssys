@@ -58,32 +58,29 @@ model McMillen2002_RelaxationOscillator
   const D_a    = 120;    // AI exchange with extracellular medium
   const Q      = 0.6;    // effective coupling / extracellular volume factor
 
-  // Auxiliary: promoter Hill functions
-  // f(x) : PRE promoter activated by x (CII)
-  // g(a) : lux promoter activated by AI
-  f(x) := (1 + alpha*x^4) / (1 + x^4);
-  g(a) := (1 + beta*a^2) / (1 + a^2);
-
   // Effective extracellular AI level for a synchronized population
   a_e := Q * a;
 
   //----------------------------
   // ODEs (dimensionless time τ)
   //----------------------------
+  // Note: Hill functions f(x) and g(a) are inlined directly
+  // f(x) = (1 + alpha*x^4) / (1 + x^4)  (PRE promoter activated by CII)
+  // g(a) = (1 + beta*a^2) / (1 + a^2)   (lux promoter activated by AI)
 
   // CII (x)
-  x' = m_x * f(x)              // production from PRE
-       - gamma_xy * x * y     // proteolysis by FtsH
-       - gamma_x * x          // dilution/degradation
-       + mu_x * g(a);         // AI-activated production
+  x' = m_x * (1 + alpha*x^4) / (1 + x^4)    // production from PRE
+       - gamma_xy * x * y                   // proteolysis by FtsH
+       - gamma_x * x                        // dilution/degradation
+       + mu_x * (1 + beta*a^2) / (1 + a^2); // AI-activated production
 
   // FtsH (y)
-  y' = m_y * f(x)             // production from PRE
-       - gamma_y * y;         // dilution/degradation
+  y' = m_y * (1 + alpha*x^4) / (1 + x^4)    // production from PRE
+       - gamma_y * y;                        // dilution/degradation
 
   // LuxI (l)
-  l' = mu_l * f(x)            // production from PRE
-       - gamma_l * l;         // dilution/degradation
+  l' = mu_l * (1 + alpha*x^4) / (1 + x^4)   // production from PRE
+       - gamma_l * l;                        // dilution/degradation
 
   // Intracellular AI (a)
   // Exchange with extracellular AI ~ D_a * (a_e - a)
