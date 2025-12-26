@@ -89,7 +89,8 @@ def recast_file(ant_path: str, out_dir: str, mode: str = "simplified",
 
 
 def build_notebook(cases: list[tuple[str, str, str, Optional[str]]], 
-                    out_dir: str, mode: str = "simplified") -> str:
+                    out_dir: str, mode: str = "simplified",
+                    solver: str = "roadrunner") -> str:
     """
     Build a Jupyter notebook that reports on all recast models.
 
@@ -97,6 +98,7 @@ def build_notebook(cases: list[tuple[str, str, str, Optional[str]]],
         cases: List of (name, input_path, output_path, validation_path)
         out_dir: Output directory for notebook
         mode: Output mode ('simplified' or 'canonical')
+        solver: ODE solver to use ('roadrunner' or 'rk4')
 
     Returns:
         Path to generated notebook
@@ -121,12 +123,12 @@ from ssys.notebook_helpers import load_and_report
     nb.cells.append(new_code_cell(helpers))
 
     # Configuration cell - user-adjustable simulation parameters
-    config_cell = '''# ============================================================
+    config_cell = f'''# ============================================================
 # SIMULATION SETTINGS (edit these values to adjust simulations)
 # ============================================================
 T_END = 20.0      # End time for simulations
 N_STEPS = 400     # Number of time steps
-SOLVER = "roadrunner"  # ODE solver: "roadrunner" or "rk4"
+SOLVER = "{solver}"  # ODE solver: "roadrunner" or "rk4"
 '''
     nb.cells.append(new_code_cell(config_cell))
 
@@ -176,7 +178,13 @@ def main():
     parser.add_argument(
         "--validate",
         action="store_true",
-        help="Run mathematical correctness validation on each recast (includes symbolic and numerical tests)",
+        help="Run validation on each recast (symbolic and numerical tests)",
+    )
+    parser.add_argument(
+        "--solver",
+        choices=["roadrunner", "rk4"],
+        default="roadrunner",
+        help="ODE solver: 'roadrunner' (CVODE, default) or 'rk4'",
     )
     parser.add_argument(
         "--version",
@@ -212,7 +220,8 @@ def main():
                     pass  # Skip malformed/unreadable files
         print(f"✓ Validated {validated}/{len(cases)} models")
 
-    nb_path = build_notebook(cases, args.outdir, mode=args.mode)
+    nb_path = build_notebook(cases, args.outdir, mode=args.mode, 
+                             solver=args.solver)
     print(f"✓ Recast complete. Notebook written: {nb_path}")
 
 
