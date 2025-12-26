@@ -111,13 +111,10 @@ def parse_antimony(text: str) -> ModelIR:
         is_complete = (
             trimmed.endswith(';') or
             trimmed.lower().startswith('model ') or
-            trimmed.lower() == 'end' or
-            # Special declarations without semicolons
-            trimmed.lower().startswith('species ') or
-            trimmed.lower().startswith('compartment ') or
-            trimmed.lower().startswith('const ') or
-            # Assignment rules (X := ...) may or may not have semicolons
-            (':=' in trimmed and trimmed.endswith(')'))
+            trimmed.lower() == 'end'
+            # Note: species/compartment/const declarations without semicolons
+            # are common but they don't span multiple lines, so the next line
+            # will start a new statement anyway
         )
         
         if is_complete or trimmed.endswith(';'):
