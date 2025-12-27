@@ -161,6 +161,10 @@ class RecastValidator:
         # Merge auxiliary definitions into factor_map for use in validation
         self.factor_map.update(self.auxiliary_defs)
         
+        # Extract assignment rules from recast IR (needed for numerical validation)
+        # These are expressions like J_1 := c_1 * (v_1 * p_open + v_2) * (Ca_ER - Ca)
+        self.assignment_rules = dict(self.recast_ir.assignment_rules)
+        
         # Build mapping function Φ: Z -> X
         self._build_mapping()
         
@@ -174,6 +178,16 @@ class RecastValidator:
         # Canonicalize all symbols to fix symbol identity bug (K_S_orig vs K_S_recast)
         # This ensures that K_S - K_S simplifies to 0 in symbolic validation
         self._canonicalize_symbols()
+        
+        # Expand assignment rules for numerical validation (keep original for symbolic)
+        # Assignment rules like J_1 := f(X, params) are symbolic in the ODEs
+        # We expand them into a separate dict for lambdify to work correctly
+        self.recast_odes_expanded = self._expand_assignment_rules_in_odes(self.recast_odes, self.recast_ir)
+        
+        # Also expand original ODEs - they may also use assignment rules
+        # Use assignment rules from ORIGINAL model
+        self.orig_assignment_rules = dict(self.orig_ir.assignment_rules)
+        self.orig_odes_expanded = self._expand_assignment_rules_in_odes(self.orig_odes, self.orig_ir)
     
     def _extract_mapping_from_comments(self, recast_text: str) -> Dict:
         """
@@ -494,6 +508,79 @@ class RecastValidator:
         
         # Build list of all recast state variables
         self.recast_state_vars = list(self.recast_odes.keys())
+    
+    def _expand_assignment_rules_in_odes(self, odes, model_ir):
+        """
+        Substitute assignment rules into ODEs for numerical validation.
+        
+        Assignment rules like J_1 := f(X, params) are kept symbolic in the ODEs
+        for compact output, but must be expanded for lambdify to work correctly
+        during numerical validation.
+        
+        Also expands assignment rules iteratively to handle nested rules like:
+          Ca_ER := f(Ca)
+          J_1 := g(Ca_ER, Ca)  # J_1 depends on Ca_ER which depends on Ca
+        
+        Args:
+            odes: Dict of ODEs to expand
+            model_ir: IR containing assignment_rules and params
+        """
+        assignment_rules = dict(model_ir.assignment_rules)
+        if not assignment_rules:
+            return odes  # No expansion needed, return original
+        
+        # Get state variables from ODEs
+        state_vars = list(odes.keys())
+        
+        # Parse assignment rules to sympy expressions
+        parsed_rules = {}
+        for rule_name, rule_expr_str in assignment_rules.items():
+            try:
+                # Build local dict for sympify
+                local_dict = {}
+                for var in state_vars:
+                    local_dict[str(var)] = var
+                for param_name in model_ir.params:
+                    local_dict[param_name] = sp.Symbol(param_name, positive=True)
+                # Also add other rule names as symbols (for nested rules)
+                for other_rule in assignment_rules:
+                    if other_rule not in local_dict:
+                        local_dict[other_rule] = sp.Symbol(other_rule, positive=True)
+                
+                parsed_rules[rule_name] = sp.sympify(rule_expr_str, locals=local_dict)
+            except Exception as e:
+                # Skip rules that fail to parse
+                continue
+        
+        # Iteratively expand nested rules (max 10 iterations)
+        for _ in range(10):
+            changed = False
+            for rule_name, rule_expr in list(parsed_rules.items()):
+                new_expr = rule_expr
+                for other_name, other_expr in parsed_rules.items():
+                    if other_name != rule_name:
+                        # Substitute by matching symbol name
+                        for sym in new_expr.free_symbols:
+                            if str(sym) == other_name:
+                                new_expr = new_expr.subs(sym, other_expr)
+                if new_expr != parsed_rules[rule_name]:
+                    parsed_rules[rule_name] = new_expr
+                    changed = True
+            if not changed:
+                break
+        
+        # Now substitute expanded rules into ODEs (return new dict, don't modify original)
+        expanded_odes = {}
+        for var, ode in odes.items():
+            new_ode = ode
+            for rule_name, rule_expr in parsed_rules.items():
+                # Find matching symbol by name in the ODE
+                for sym in new_ode.free_symbols:
+                    if str(sym) == rule_name:
+                        new_ode = new_ode.subs(sym, rule_expr)
+            expanded_odes[var] = sp.simplify(new_ode)
+        
+        return expanded_odes
     
     def _canonicalize_symbols(self):
         """
@@ -819,10 +906,10 @@ class RecastValidator:
                                modules='jax')
                 f_orig_funcs.append(func)
             
-            # Build f_recast functions
+            # Build f_recast functions (use expanded ODEs with assignment rules substituted)
             f_recast_funcs = []
             for recast_var in recast_vars_ordered:
-                ode_expr = self.recast_odes[recast_var]
+                ode_expr = self.recast_odes_expanded[recast_var]
                 func = lambdify(recast_vars_ordered + [sp.Symbol(p) for p in param_names],
                                ode_expr,
                                modules='jax')
@@ -1056,18 +1143,18 @@ class RecastValidator:
                     row_funcs.append(elem_func)
                 J_Phi_funcs.append(row_funcs)
             
-            # Lambdify recast ODEs with params
+            # Lambdify recast ODEs with params (use expanded ODEs with assignment rules substituted)
             f_recast_funcs = []
             for var in recast_vars_ordered:
                 f_recast_funcs.append(lambdify(all_symbols,
-                                               self.recast_odes[var],
+                                               self.recast_odes_expanded[var],
                                                modules='numpy'))
             
-            # Lambdify original ODEs with mapping substituted
+            # Lambdify original ODEs with mapping substituted (use expanded ODEs)
             f_orig_at_Phi_funcs = []
             for var in orig_vars_ordered:
-                # Substitute mapping into original ODE
-                ode_at_phi = self.orig_odes[var].subs(self.mapping)
+                # Substitute mapping into original ODE (use expanded to substitute assignment rules)
+                ode_at_phi = self.orig_odes_expanded[var].subs(self.mapping)
                 f_orig_at_Phi_funcs.append(lambdify(all_symbols,
                                                      ode_at_phi,
                                                      modules='numpy'))
@@ -1638,17 +1725,17 @@ class RecastValidator:
         # Determine overall pass/fail
         # STRICT: ALL three tests (symbolic, numerical, trajectory) must PASS
         # If any test fails, is not attempted, or times out, overall validation fails
-        
-        symbolic_pass = (report.symbolic_test is not None and 
+
+        symbolic_pass = (report.symbolic_test is not None and
                         report.symbolic_test.result == ValidationResult.PASS)
-        numerical_pass = (report.numerical_test is not None and 
+        numerical_pass = (report.numerical_test is not None and
                          report.numerical_test.result == ValidationResult.PASS)
-        trajectory_pass = (report.trajectory_test is not None and 
+        trajectory_pass = (report.trajectory_test is not None and
                           report.trajectory_test.result == ValidationResult.PASS)
-        
+
         # All three tests must pass for overall pass
         report.overall_pass = symbolic_pass and numerical_pass and trajectory_pass
-        
+
         # Generate summary
         if report.overall_pass:
             report.summary = "✓ Validation PASSED: Recast is mathematically equivalent"
@@ -1656,7 +1743,7 @@ class RecastValidator:
             # Check if any test actually failed (vs. not attempted)
             tests = [report.symbolic_test, report.numerical_test, report.trajectory_test]
             any_fail = any(t is not None and t.result == ValidationResult.FAIL for t in tests)
-            
+
             if any_fail:
                 report.summary = "✗ Validation FAILED: Recast differs from original"
             else:

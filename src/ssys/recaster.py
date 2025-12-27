@@ -1555,9 +1555,10 @@ def lift_rational_functions(sym: SymSystem, composite_aux_defs: Optional[Dict[sp
             params=sym.params,
             odes=combined_odes,
             initials=new_initials,
-            initial_exprs=sym.initial_exprs  # Propagate symbolic IC expressions
+            initial_exprs=sym.initial_exprs,  # Propagate symbolic IC expressions
+            assignment_rules=sym.assignment_rules  # Preserve original assignment rules
         )
-    
+
     # Return final system and ALL accumulated auxiliary definitions
     return sym, all_aux_defs
 
@@ -3097,24 +3098,69 @@ def _analyze_ode_terms(terms: List[sp.Expr], state_vars: Optional[Set[sp.Symbol]
         try:
             coeff, exps = term_to_coeff_exps(t, state_vars)
             # Determine sign of coefficient
-            # Handle symbolic coefficients containing 'time' or other symbols
-            try:
-                is_positive = bool(sp.sign(coeff) >= 0)
-            except TypeError:
-                # Coefficient contains symbolic variables (like 'time') that prevent
-                # evaluation. For expressions like 1/(time+1)^2, assume positive since
-                # squared terms and even powers are always positive for real values.
-                # This is a reasonable assumption for physical ODEs.
-                is_positive = True
+            # Handle symbolic coefficients by extracting the numeric part
+            is_positive = _is_coefficient_positive(coeff)
             
             if is_positive:
                 growth_terms.append((coeff, exps))
             else:
-                decay_terms.append((sp.Abs(coeff), exps))
+                # Use -coeff instead of sp.Abs(coeff) to handle symbolic coefficients
+                # sp.Abs() doesn't evaluate for symbolic expressions like -J_2 → Abs(J_2)
+                # but -(-J_2) → J_2 works correctly
+                decay_terms.append((-coeff, exps))
         except:
             continue
-    
+
     return growth_terms, decay_terms
+
+
+def _is_coefficient_positive(coeff: sp.Expr) -> bool:
+    """
+    Determine if a coefficient is positive or negative.
+    
+    For purely numeric coefficients, just check the sign.
+    For symbolic coefficients like -V_1, extract the leading numeric factor.
+    
+    Returns True if positive, False if negative.
+    """
+    # Pure number case
+    if coeff.is_Number:
+        try:
+            return float(coeff) >= 0
+        except (TypeError, ValueError):
+            return True
+    
+    # Try sp.sign() first (works for simple cases)
+    try:
+        sign_result = sp.sign(coeff)
+        if sign_result.is_Number:
+            return float(sign_result) >= 0
+    except (TypeError, ValueError):
+        pass
+    
+    # For Mul expressions like -1*V_1 or -V_1, check for leading negative
+    if coeff.is_Mul:
+        # as_coeff_Mul() returns (numeric_coeff, rest)
+        # e.g., -V_1 → (-1, V_1), 2*V_1 → (2, V_1)
+        numeric, _ = coeff.as_coeff_Mul()
+        if numeric.is_Number:
+            try:
+                return float(numeric) >= 0
+            except (TypeError, ValueError):
+                pass
+    
+    # For expressions like -V_1 which sympy represents as Mul(-1, V_1)
+    # Check if first arg is -1
+    if hasattr(coeff, 'args') and coeff.args:
+        first_arg = coeff.args[0]
+        if first_arg.is_Number:
+            try:
+                return float(first_arg) >= 0
+            except (TypeError, ValueError):
+                pass
+    
+    # Default: assume positive (reasonable for physical systems)
+    return True
 
 
 def _requires_gma(sym: SymSystem) -> bool:
@@ -3384,7 +3430,8 @@ def _gma_recast(sym: SymSystem, original_vars: Set[sp.Symbol]) -> RecastResult:
         factor_map=factor_map,
         gma_equations=gma_equations,
         params=sym.params,
-        initial_exprs=sym.initial_exprs  # Propagate symbolic IC expressions
+        initial_exprs=sym.initial_exprs,  # Propagate symbolic IC expressions
+        assignment_rules=sym.assignment_rules  # Preserve original assignment rules
     )
 
 
@@ -3485,7 +3532,8 @@ def _direct_ssystem_recast(sym: 'SymSystem', original_vars: Set[sp.Symbol], mode
         variables=new_variables,
         factor_map=factor_map,
         params=sym.params,
-        initial_exprs=sym.initial_exprs  # Propagate symbolic IC expressions
+        initial_exprs=sym.initial_exprs,  # Propagate symbolic IC expressions
+        assignment_rules=sym.assignment_rules  # Preserve original assignment rules
     )
 
 
@@ -3601,24 +3649,20 @@ def _pool_ssystem_recast(sym: 'SymSystem', mode: str = "simplified") -> 'RecastR
 
             # Assign growth/decay by sign of coeff (works for symbolic and numeric)
             # Handle symbolic coefficients containing 'time' or other symbols
-            try:
-                is_positive = bool(sp.sign(coeff) >= 0)
-            except TypeError:
-                # Coefficient contains symbolic variables that prevent evaluation
-                # Assume positive (reasonable for physical ODEs)
-                is_positive = True
-            
+            is_positive = _is_coefficient_positive(coeff)
+
             if is_positive:
                 new_equations.append(SSysEquation(
                     var=Vj,
-                    growth=(sp.Abs(coeff), exps),
+                    growth=(coeff, exps),  # Use coeff directly (already positive)
                     decay=(sp.Integer(0), {})
                 ))
             else:
+                # Use -coeff instead of sp.Abs(coeff) to handle symbolic coefficients
                 new_equations.append(SSysEquation(
                     var=Vj,
                     growth=(sp.Integer(0), {}),
-                    decay=(sp.Abs(coeff), exps)
+                    decay=(-coeff, exps)
                 ))
 
         # 4) mapping X = ∏_j V_j and initial consistency at t=0
