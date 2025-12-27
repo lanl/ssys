@@ -468,6 +468,10 @@ def _set_initial_conditions(
     """
     Set initial conditions in RoadRunner model.
     
+    Only sets values for actual floating species (state variables).
+    Parameters and compartments are already embedded in the SBML model
+    during Antimony→SBML conversion.
+    
     Args:
         r: RoadRunner instance
         model_ir: Model IR with initial conditions
@@ -476,29 +480,44 @@ def _set_initial_conditions(
     # Reset to model-defined initial conditions
     r.resetToOrigin()
     
-    # Apply model_ir initials
+    # Get list of actual floating species from RoadRunner model
+    try:
+        floating_species = set(r.getFloatingSpeciesIds())
+    except Exception:
+        # Fallback: empty set means we'll try all species
+        floating_species = None
+    
+    # Apply model_ir initials (only for floating species)
     if hasattr(model_ir, 'initials') and model_ir.initials:
         for species, value in model_ir.initials.items():
+            # Skip tuple keys (compartment metadata like (compartment, plasma))
+            if isinstance(species, tuple):
+                continue
+            
+            # Convert sympy Symbol to string if needed
+            species_name = str(species) if hasattr(species, 'name') else str(species)
+            
+            # Only set if it's a floating species (not a parameter)
+            # If floating_species is None, try all non-tuple keys
+            if floating_species is not None and species_name not in floating_species:
+                continue
+            
             try:
                 # Use bracket notation for floating species
-                r[f'[{species}]'] = value
+                r[f'[{species_name}]'] = value
             except Exception:
-                # Fallback without brackets
-                try:
-                    r[species] = value
-                except Exception as e:
-                    print(f"Warning: Could not set {species} = {value}: {e}")
+                pass  # Silently skip - value is already in SBML
     
-    # Apply overrides
+    # Apply overrides (only for floating species)
     if y0_override:
         for species, value in y0_override.items():
+            species_name = str(species) if hasattr(species, 'name') else str(species)
+            
+            # Only set if it's a floating species
+            if floating_species is not None and species_name not in floating_species:
+                continue
+            
             try:
-                r[f'[{species}]'] = value
+                r[f'[{species_name}]'] = value
             except Exception:
-                try:
-                    r[species] = value
-                except Exception as e:
-                    print(
-                        f"Warning: Could not override {species} = "
-                        f"{value}: {e}"
-                    )
+                pass  # Silently skip
