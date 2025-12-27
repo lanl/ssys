@@ -114,21 +114,29 @@ Antimony text → RoadRunner (reference Antimony parser) → SBML → libSBML �
 
 #### Phase 4: Testing
 
-- [ ] **4.1** Test against test_models3 (baseline guard)
+**Primary Test Suites (verified recastable - MUST ALL PASS):**
+
+- [ ] **4.1** Test against test_models3 (18 models - baseline guard)
   - MUST still pass 18/18
-  - If any regression, STOP and debug
+  - If any regression, STOP and debug immediately
+  - Run: `python recast_models.py test_models3 --solver roadrunner`
 
-- [ ] **4.2** Test against test_models1 (the failing suite)
-  - Should now work with reference parser
-  - Document any remaining failures (model issues, not parser)
+- [ ] **4.2** Test against test_models1 (29 models - the failing suite)
+  - All models verified recastable with correct output
+  - Should now work with reference Antimony parser
+  - Run: `python recast_models.py test_models1 --solver roadrunner`
+  - Target: 29/29 validated
 
-- [ ] **4.3** Test against test_models2
-  - Run full validation suite
-  - Document results
+**Secondary (NOT part of acceptance criteria):**
 
-- [ ] **4.4** Test biomodels scripts still work
+- [ ] **4.3** (OPTIONAL) Test against test_models2
+  - **NOTE:** This directory contains literature examples that have NOT been systematically verified as recastable
+  - Run if time permits, but failures here do NOT block the refactor
+  - Document any successes for future reference
+
+- [ ] **4.4** Verify biomodels scripts still work
   - They use `parse_sbml()` directly, should be unaffected
-  - Verify `python biomodels/3_recast_batch.py --limit 5` works
+  - Quick sanity check: `python biomodels/3_recast_batch.py --limit 5`
 
 #### Phase 5: Cleanup (After Tests Pass)
 
@@ -147,7 +155,7 @@ Antimony text → RoadRunner (reference Antimony parser) → SBML → libSBML �
   - Update installation instructions if needed
 
 - [ ] **5.4** Final validation run
-  - All test directories: test_models1, test_models2, test_models3
+  - Primary test suites: test_models3 (18/18), test_models1 (29/29)
   - Run pytest unit tests
   - Verify notebook generation still works
 
