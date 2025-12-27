@@ -505,9 +505,9 @@ def _extract_sim_metadata(text: str) -> Tuple[Optional[float], Optional[float], 
 
 def parse_antimony_via_sbml(antimony_text: str) -> 'SymSystem':
     """
-    Parse Antimony text using RoadRunner's reference parser (SBML-first approach).
+    Parse Antimony text using the Antimony library (SBML-first approach).
     
-    Pipeline: Antimony text → RoadRunner → SBML string → libSBML → SymSystem
+    Pipeline: Antimony text → antimony lib → SBML string → libSBML → SymSystem
     
     This replaces the fragile hand-rolled parse_antimony() + build_sym_system()
     with the reference Antimony parser, ensuring all valid Antimony syntax is handled.
@@ -519,27 +519,45 @@ def parse_antimony_via_sbml(antimony_text: str) -> 'SymSystem':
         SymSystem ready for recasting
     
     Raises:
-        ImportError: If roadrunner is not installed
+        ImportError: If antimony is not installed
         ValueError: If Antimony cannot be parsed
     """
     try:
-        import roadrunner
+        import antimony
     except ImportError:
         raise ImportError(
-            "libroadrunner is required for Antimony parsing. "
-            "Install with: pip install libroadrunner"
+            "antimony is required for SBML-first parsing. "
+            "Install with: pip install antimony"
         )
     
     # Extract @SIM metadata BEFORE conversion (comments are lost in SBML)
     t_start, t_end, n_steps = _extract_sim_metadata(antimony_text)
     
-    # Use RoadRunner to parse Antimony and convert to SBML
+    # Use antimony library to parse Antimony and convert to SBML
     try:
-        rr = roadrunner.RoadRunner()
-        rr.loadAntimonyString(antimony_text)
-        sbml_string = rr.getSBML()
+        # Clear any previous models
+        antimony.clearPreviousLoads()
+        
+        # Load the Antimony string
+        result = antimony.loadAntimonyString(antimony_text)
+        if result == -1:
+            error_msg = antimony.getLastError()
+            raise ValueError(f"Antimony parsing error: {error_msg}")
+        
+        # Get the module name (first/main module)
+        module_name = antimony.getMainModuleName()
+        if not module_name:
+            raise ValueError("No module found in Antimony text")
+        
+        # Convert to SBML
+        sbml_string = antimony.getSBMLString(module_name)
+        if not sbml_string:
+            error_msg = antimony.getLastError()
+            raise ValueError(f"SBML conversion failed: {error_msg}")
     except Exception as e:
-        raise ValueError(f"RoadRunner failed to parse Antimony: {e}")
+        if "Antimony parsing error" in str(e) or "SBML conversion" in str(e):
+            raise
+        raise ValueError(f"Antimony library failed: {e}")
     
     # Parse SBML string using existing infrastructure
     sym = parse_sbml_from_string(sbml_string)
