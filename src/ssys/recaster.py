@@ -3941,22 +3941,10 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
         else:
             degradation = "0"
 
-        # Write ODE - transform pure constant terms to two-term form
-        # For canonical S-system form, t' = 1 should become t' = 2 - 1
+        # Write ODE - output directly for GMA format (no transformation)
+        # Pure constants like T' = 1 should be output as-is
         if degradation == "0":
-            # Check if production is a pure constant (no variables)
-            # This happens when all production terms have empty exponent dicts
-            is_pure_constant = eq.production and all(len(e) == 0 for c, e in eq.production)
-            
-            if is_pure_constant:
-                # Transform C to (C+1) - 1 for two-term canonical form
-                # Sum up all constant coefficients
-                total_const = sum(float(c) if not isinstance(c, sp.Expr) else float(sp.simplify(c)) 
-                                  for c, e in eq.production)
-                # Output as (C+1) - 1
-                lines.append(f"{eq.var.name}' = {total_const + 1:g} - 1;")
-            else:
-                lines.append(f"{eq.var.name}' = {production};")
+            lines.append(f"{eq.var.name}' = {production};")
         else:
             lines.append(f"{eq.var.name}' = {production} - ({degradation});")
     
