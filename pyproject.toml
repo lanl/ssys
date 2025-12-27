@@ -39,6 +39,10 @@ dependencies = [
     "scipy>=1.10",
     "matplotlib>=3.7",
     "nbformat>=5.9",
+    # SBML-first architecture: these are now required for parsing
+    "libroadrunner>=2.5",
+    "antimony>=2.13",
+    "python-libsbml>=5.20",
 ]
 
 [project.optional-dependencies]
@@ -47,18 +51,8 @@ dev = [
     "pytest-cov>=4.1",
     "ruff>=0.1",
     "mypy>=1.7",
-]
-notebook = [
     "jupyter>=1.0",
     "ipython>=8.12",
-]
-sbml = [
-    "python-libsbml>=5.20",
-]
-simulation = [
-    "libroadrunner>=2.5",
-    "antimony>=2.13",
-    "python-libsbml>=5.20",
 ]
 
 [project.urls]
