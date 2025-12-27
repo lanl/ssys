@@ -37,29 +37,25 @@
 
 model S1993_mixed_terms()
   // Variables
-  var species X1 in compartment  // Original variable
-  var species X2 in compartment  // Second variable (from 2D system)
-  
-  compartment = 1
+  compartment cell = 1;var species X1 in cell; var species X2 in cell
 
   // Parameters (example values)
-  a11 := 1.0    // Coefficient of negative term X₁²
-  a12 := 0.5    // Coefficient of negative term X₁X₂  
-  a21 := 2.0    // Coefficient of positive term X₂^g₁
-  a22 := 1.5    // Coefficient of positive term X₁^g₂·X₂^g₃
-  g1 := 0.5     // Exponent
-  g2 := 0.3     // Exponent
-  g3 := 0.7     // Exponent
+  a11 := 1.0;
+  a12 := 0.5;
+  a21 := 2.0;
+  a22 := 1.5;
+  g1 := 0.5;
+  g2 := 0.3;
+  g3 := 0.7;
   
   // Original ODE with mixed terms (multiple positive, multiple negative)
   // dX₁/dt = a₂₁·X₂^g₁ + a₂₂·X₁^g₂·X₂^g₃ - a₁₁·X₁² - a₁₂·X₁·X₂
-  X1' = a21 * X2^g1 + a22 * X1^g2 * X2^g3 - a11 * X1^2 - a12 * X1 * X2
+  X1' = a21 * X2^g1 + a22 * X1^g2 * X2^g3 - a11 * X1^2 - a12 * X1 * X2;
   
   // Second equation (conservation or independent dynamics)
-  X2' = -X2 + 1  // Example: X2 approaches 1
+  X2' = -X2 + 1
   
   // Initial conditions
-  X1 = 0.5
-  X2 = 0.8
+  X1 = 0.5; X2 = 0.8;
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0; T_END=20; N_STEPS =400

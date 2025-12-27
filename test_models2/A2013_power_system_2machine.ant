@@ -39,17 +39,11 @@
 
 model A2013_power_system_2machine()
   // Variables (original trigonometric form, shifted coordinates)
-  var species delta1 in compartment  // δ₁ = θ₁ - θ₁ˢ (relative angle 1)
-  var species omega1 in compartment  // ω₁ = dθ₁/dt (angular velocity 1)
-  var species delta2 in compartment  // δ₂ = θ₂ - θ₂ˢ (relative angle 2)
-  var species omega2 in compartment  // ω₂ = dθ₂/dt (angular velocity 2)
-  
-  compartment = 1
+  compartment cell = 1;var species delta1 in cell; var species omega1 in cell; var species delta2 in cell; var species omega2 in cell
 
   // Parameters (from paper)
   // Stable equilibrium shifted to origin
-  theta1s := 0.2  // θ₁ˢ (stable equilibrium angle 1)
-  theta2s := 0.1  // θ₂ˢ (stable equilibrium angle 2)
+  theta1s := 0.2; theta2s := 0.1
   
   // Original trigonometric equations (in shifted coordinates)
   
@@ -66,9 +60,5 @@ model A2013_power_system_2machine()
   omega2' = -sin(delta2 + theta2s - delta1 - theta1s) + 0.1 * cos(delta2 + theta2s - delta1 - theta1s) - 1.8 * sin(delta2 + theta2s) + 0.1 * cos(delta2 + theta2s) + 0.5
   
   // Initial conditions (at shifted equilibrium = origin)
-  delta1 = 0.0
-  omega1 = 0.0
-  delta2 = 0.0
-  omega2 = 0.0
-end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+  delta1 = 0.0; omega1 = 0.0; delta2 = 0.0; omega2 = 0.0; end
+// @SIM T_START=0; T_END=20; N_STEPS =400

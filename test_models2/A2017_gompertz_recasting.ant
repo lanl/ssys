@@ -39,13 +39,10 @@
 
 model A2017_gompertz_recasting()
   // Variables
-  var species y in compartment  // Growing population/biomass
-  
-  compartment = 1
+  compartment cell = 1;var species y in cell
 
   // Parameters
-  k := 1.0     // Growth rate constant
-  c := 0.0     // Carrying capacity parameter (ln(y_max))
+  k := 1.0; c := 0.0
                // c=0 means y → 1 as t → ∞ (normalized)
   
   // Original Gompertz growth model
@@ -54,6 +51,5 @@ model A2017_gompertz_recasting()
   y' = k * y * (c - ln(y))
   
   // Initial condition
-  y = 0.01    // Small initial population
-end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+  y = 0.01; end
+// @SIM T_START=0; T_END=20; N_STEPS =400

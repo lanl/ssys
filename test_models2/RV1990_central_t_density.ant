@@ -33,27 +33,16 @@
 model RV1990_central_t_density()
   // ORIGINAL ODE (not S-system form due to sum in denominator)
   // t is treated as a state variable marching along with time
-  var species t in compartment
-  var species f in compartment   // f(t) = t-density
-  var species F in compartment   // F(t) = cumulative (integral of f)
-  
-  compartment = 1
+  compartment cell = 1;var species t in cell; var species f_var in cell; var species F in cell
 
-  // Parameters
-  v := 8       // degrees of freedom
+  // Parameters; v := 8
   
   // ORIGINAL ODEs
   // f'(t) = -(v+1) · t / (v + t²) · f(t)
-  // Note: (v + t²) is a SUM - not S-system compatible
-  t' = 1
-  f' = -(v + 1) * t / (v + t^2) * f
-  F' = f
+  // Note: (v + t²) is a SUM - not S-system compatible; t' = 1 f_var' = -(v + 1) * t / (v + t^2) * f; F' = f
   
   // Initial conditions at t = 0
   // f(0) = Gamma((v+1)/2) / (sqrt(v*pi) * Gamma(v/2))
-  // For v = 8: f(0) ≈ 0.3866990209613933
-  t = 0
-  f = 0.3866990209613933  // t-density at t=0 for v=8
-  F = 0.5                 // F(0) = 0.5 by symmetry
+  // For v = 8: f(0) ≈ 0.3866990209613933; t = 0; f_var = 0.3866990209613933; F = 0.5;
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0; T_END=20; N_STEPS =400

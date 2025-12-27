@@ -30,25 +30,14 @@
 
 model HBF1998_semiconductor_exciton()
   // State variables
-  var species x1 in compartment  // electron-hole pair concentration
-  var species x2 in compartment  // exciton concentration
-  
-  compartment = 1
+  compartment cell = 1;var species x1 in cell; var species x2 in cell
 
-  // Parameters
-  g := 1.0      // photogeneration rate
-  c := 0.5      // stimulated production rate
-  k := 1.0      // radiative decay rate
-  q := 0.5      // saturation parameter
-  m := 2        // high-order kinetics exponent
+  // Parameters; g := 1.0; c := 0.5 k := 1.0; q := 0.5 m := 2
   
   // ORIGINAL ODEs (Eq. 29)
-  // High-order kinetics model with saturable decay
-  x1' = g - c * x1^2 * x2
-  x2' = c * x1^2 * x2 - k * x2 / (1 + q * x2)^m
+  // High-order kinetics model with saturable decay; x1' = g - c * x1^2 * x2; x2' = c * x1^2 * x2 - k * x2 / (1 + q * x2)^m
   
   // Initial conditions
-  x1 = 1.0
-  x2 = 0.5
+  x1 = 1.0; x2 = 0.5;
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0; T_END=20; N_STEPS =400

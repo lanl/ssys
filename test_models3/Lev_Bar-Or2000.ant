@@ -117,14 +117,10 @@ model LevBarOr2000_p53_Mdm2
   // ------------------------
 
   // p53 protein
-  p53' = source_p53
-         - p53 * Mdm2 * degradation
-         - d_p53 * p53;
+  p53' = source_p53 - p53 * Mdm2 * degradation - d_p53 * p53;
 
   // Mdm2 protein (Hill function inlined: I^n / (K_m^n + I^n))
-  Mdm2' = p_1
-          + p_2max * I^n / (K_m^n + I^n)
-          - d_Mdm2 * Mdm2;
+  Mdm2' = p_1 + p_2max * I^n / (K_m^n + I^n) - d_Mdm2 * Mdm2;
 
   // Intermediary I (delayed p53-dependent Mdm2 induction)
   I' = activity * p53 - k_delay * I;
@@ -141,9 +137,9 @@ model LevBarOr2000_p53_Mdm2
 
   p53       = 5.3;
   Mdm2      = 0.047;
-  signal    = signal_0;      // = 1.0
+  signal    = signal_0;
   I         = 0.0;
-  threshold = k_deg * signal_0;  // = 1.93
+  threshold = k_deg * signal_0;
 
 end
 // @SIM T_START=0 T_END=200 N_STEPS=400

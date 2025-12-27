@@ -36,18 +36,18 @@ model Rosenfeld2002_NegativeAutoregulation_2D
   compartment cell = 1;
 
   // State variables
-  species m in cell;    // mRNA
-  species x in cell;    // protein (autorepressor)
+  species m in cell;
+  species x in cell;
 
   // Core parameters
-  const k   = 1.0;                  // dissociation constant for autorepression
-  const a_p = 0.6931471805599453;   // protein loss rate (≈ ln 2)
-  const a_m = 3.4657359027997265;   // mRNA loss rate (= 5 * a_p, fast mRNA)
-  const b_2 = 69.31471805599453;    // effective 1D production (100 * a_p)
+  const k   = 1.0;
+  const a_p = 0.6931471805599453;
+  const a_m = 3.4657359027997265;
+  const b_2 = 69.31471805599453;
 
   // Derived parameters for 2D model
-  const b_p = 1.0;                  // translation rate
-  const b_m = 240.22650695910073;   // transcription rate, = b2 * a_m
+  const b_p = 1.0;
+  const b_m = 240.22650695910073;
 
   // ODEs
   // mRNA: transcription repressed by x, first-order decay

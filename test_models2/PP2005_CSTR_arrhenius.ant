@@ -31,32 +31,17 @@
 
 model PP2005_CSTR_arrhenius()
   // Variables (in physical coordinates, pre-transformation)
-  var species C_A in compartment  // Concentration of A [kgmol/m³]
-  var species T in compartment    // Temperature [°C]
-  
-  compartment = 1
+  compartment cell = 1;var species C_A in cell; var species T in cell
 
   // Parameters from Table 1 (p. 17)
-  F_V = 1.0           // F/V [hr⁻¹]
-  k0 = 34930800       // Pre-exponential factor [hr⁻¹] (= 9703 * 3600)
-  Delta_H = -5960     // Heat of reaction (exothermic) [kcal/kgmol]
-  Delta_E = 11843     // Activation energy [kcal/kgmol]
-  R = 1.987           // Gas constant [kcal/(kgmol·K)] - assuming ideal gas
-  rho_cp = 500        // ρ·cp [kcal/(m³·°C)]
-  T_f = 25            // Feed temperature [°C]
-  C_Af = 10           // Feed concentration [kgmol/m³]
-  UA_V = 150          // UA/V [kcal/(m³·°C·hr)]
-  T_j = 25            // Jacket temperature [°C]
+  F_V = 1.0; k0 = 34930800; Delta_H = -5960; Delta_E = 11843; R = 1.987; rho_cp = 500; T_f = 25; C_Af = 10; UA_V = 150; T_j = 25
   
   // Arrhenius rate constant (T is in Celsius, convert to Kelvin)
   k := k0 * exp(-Delta_E / (R * (T + 273.15)))
   
-  // Original non-polynomial ODEs
-  C_A' = F_V * (C_Af - C_A) - k * C_A
-  T' = F_V * (T_f - T) + (-Delta_H / rho_cp) * k * C_A - (UA_V / rho_cp) * (T - T_j)
+  // Original non-polynomial ODEs; C_A' = F_V * (C_Af - C_A) - k * C_A; T' = F_V * (T_f - T) + (-Delta_H / rho_cp) * k * C_A - (UA_V / rho_cp) * (T - T_j)
   
   // Initial conditions (at equilibrium from paper: CA0=8.5636, T0=311.171K = 38.02°C)
-  C_A = 8.5636
-  T = 38.02
+  C_A = 8.5636; T = 38.02;
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0; T_END=20; N_STEPS =400

@@ -36,41 +36,35 @@
 
 model HBF1998_three_wave()
   // State variables - wave amplitudes
-  var species x1 in compartment  // mode 1 amplitude
-  var species x2 in compartment  // mode 2 amplitude
-  var species x3 in compartment  // mode 3 amplitude
-  
-  compartment = 1
+  compartment cell = 1;var species x1 in cell; var species x2 in cell; var species x3 in cell
 
   // Parameters
   // Dissipation rates (negative for damping)
-  omega1 := -0.1
-  omega2 := -0.1  
-  omega3 := -0.1
+  omega1 := -0.1;
+  omega2 := -0.1;
+  omega3 := -0.1;
   
   // Mode competition matrix (symmetric for conservative case)
-  N11 := 0.5
-  N12 := 0.3
-  N13 := 0.2
-  N21 := 0.3
-  N22 := 0.4
-  N23 := 0.3
-  N31 := 0.2
-  N32 := 0.3
-  N33 := 0.5
+  N11 := 0.5;
+  N12 := 0.3;
+  N13 := 0.2;
+  N21 := 0.3;
+  N22 := 0.4;
+  N23 := 0.3;
+  N31 := 0.2;
+  N32 := 0.3;
+  N33 := 0.5;
   
   // Resonance coupling
-  gamma_rate := 0.5
+  gamma_rate := 0.5;
   
   // ORIGINAL ODEs (Eq. 55)
   // Three-wave interaction with mode competition and resonance
-  x1' = x1 * (omega1 + N11*x1^2 + N12*x2^2 + N13*x3^2 + gamma_rate*x2*x3/x1)
-  x2' = x2 * (omega2 + N21*x1^2 + N22*x2^2 + N23*x3^2)
-  x3' = x3 * (omega3 + N31*x1^2 + N32*x2^2 + N33*x3^2)
+  x1' = x1 * (omega1 + N11*x1^2 + N12*x2^2 + N13*x3^2 + gamma_rate*x2*x3/x1);
+  x2' = x2 * (omega2 + N21*x1^2 + N22*x2^2 + N23*x3^2);
+  x3' = x3 * (omega3 + N31*x1^2 + N32*x2^2 + N33*x3^2);
   
   // Initial conditions
-  x1 = 1.0
-  x2 = 0.8
-  x3 = 0.6
+  x1 = 1.0; x2 = 0.8; x3 = 0.6;
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0; T_END=20; N_STEPS =400

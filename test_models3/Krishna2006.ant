@@ -45,9 +45,9 @@ model Krishna2006_NFkB_3Variable_Core
   compartment cell = 1;
 
   // State variables (dimensionless)
-  species Nn in cell;   // nuclear NF-κB
-  species Im in cell;   // IκB mRNA
-  species I  in cell;   // cytoplasmic IκB
+  species Nn in cell;
+  species Im in cell;
+  species I  in cell;
 
   // Parameters (dimensionless)
   const A     = 0.007;
@@ -59,15 +59,13 @@ model Krishna2006_NFkB_3Variable_Core
   // ODEs
 
   // Nuclear NF-κB
-  Nn' = A * (1 - Nn)/(eps + I)
-        - B * I * Nn/(delta + Nn);
+  Nn' = A * (1 - Nn)/(eps + I) - B * I * Nn/(delta + Nn);
 
   // IκB mRNA
   Im' = Nn^2 - Im;
 
   // Cytoplasmic IκB
-  I'  = Im
-        - C * (1 - Nn) * I/(eps + I);
+  I'  = Im - C * (1 - Nn) * I/(eps + I);
 
   // Initial conditions (chosen)
   Nn = 0;

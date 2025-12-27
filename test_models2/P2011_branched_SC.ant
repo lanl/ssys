@@ -26,45 +26,22 @@
 
 model P2011_branched_SC()
   // State variables
-  var species X1 in compartment
-  var species X2 in compartment
-  var species X3 in compartment
-  var species X4 in compartment
-  
-  compartment = 1
+  compartment cell = 1;var species X1 in cell; var species X2 in cell; var species X3 in cell; var species X4 in cell
 
   // External (fixed) variable
   X5 = 1.0
   
   // Enzyme activity modulation parameters (k_r = 1 at basal level)
-  k1 = 1.0
-  k2 = 1.0
-  k3 = 1.0
-  k4 = 1.0
-  k5 = 1.0
-  k6 = 1.0
+  k1 = 1.0; k2 = 1.0; k3 = 1.0; k4 = 1.0; k5 = 1.0; k6 = 1.0
   
   // SC kinetics (Eq. 2)
   // Note: X3^(-1) term models inhibition (inverse Hill-type)
   
-  // Reaction rates with SC form
-  v1 := 20 * k1 * X5 / (X5 + 1)
-  v2 := 40 * k2 * X1 / (X1 + 1) * (1/X3) / (1/X3 + 1)
-  v3 := 7.5 * k3 * X2^2.5 / (X2^2.5 + 0.25)
-  v4 := 12 * k4 * X3 / (X3 + 1)
-  v5 := 16 * k5 * X1 / (X1 + 1) * X2 / (X2 + 1)
-  v6 := 8 * k6 * X4 / (X4 + 1)
+  // Reaction rates with SC form; v1 := 20 * k1 * X5 / (X5 + 1); v2 := 40 * k2 * X1 / (X1 + 1) * (1/X3) / (1/X3 + 1) v3 := 7.5 * k3 * X2^2.5 / (X2^2.5 + 0.25); v4 := 12 * k4 * X3 / (X3 + 1) v5 := 16 * k5 * X1 / (X1 + 1) * X2 / (X2 + 1); v6 := 8 * k6 * X4 / (X4 + 1)
   
-  // ODEs
-  X1' = v1 - v2
-  X2' = v2 - v3 - v5
-  X3' = v3 - v4
-  X4' = v5 - v6
+  // ODEs; X1' = v1 - v2; X2' = v2 - v3 - v5; X3' = v3 - v4; X4' = v5 - v6
   
   // Initial conditions (basal steady state)
-  X1 = 1.0
-  X2 = 1.0
-  X3 = 1.0
-  X4 = 1.0
+  X1 = 1.0; X2 = 1.0; X3 = 1.0; X4 = 1.0;
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0; T_END=20; N_STEPS =400

@@ -29,21 +29,16 @@
 
 model HBF1998_morse_oscillator()
   // State variables
-  var species x in compartment  // position
-  var species y in compartment  // velocity
-  
-  compartment = 1
+  compartment cell = 1;var species x in cell; var species y in cell
 
   // Parameters (Morse potential)
-  d := 1.0      // dissociation energy parameter
+  d := 1.0
   
   // ORIGINAL ODEs (Eq. 17)
   // Morse potential: V(x) = d·(1 - e^(-x))²
-  x' = y
-  y' = -2 * d * exp(-x) * (1 - exp(-x))
+  x' = y; y' = -2 * d * exp(-x) * (1 - exp(-x))
   
   // Initial conditions (bound oscillation)
-  x = 0.5
-  y = 0.5
+  x = 0.5; y = 0.5;
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0; T_END=20; N_STEPS =400

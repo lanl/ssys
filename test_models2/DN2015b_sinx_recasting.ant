@@ -33,15 +33,12 @@
 
 model DN2015b_sinx_recasting()
   // Variables
-  var species x1 in compartment  // Original angle variable
-  
-  compartment = 1
+  compartment cell = 1;var species x1 in cell
 
   // Original trigonometric ODE
   // dx₁/dt = sin(x₁)
   x1' = sin(x1)
   
   // Initial condition
-  x1 = 0.1    // Small positive angle
-end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+  x1 = 0.1; end
+// @SIM T_START=0; T_END=20; N_STEPS =400

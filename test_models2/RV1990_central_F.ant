@@ -33,27 +33,16 @@
 
 model RV1990_central_F()
   // ORIGINAL ODE (not S-system form due to sum in denominator)
-  var species t in compartment  // t (argument)
-  var species g in compartment  // g(v1, v2, 0; t) = F density
-  var species G in compartment  // G(v1, v2, 0; t) = cumulative distribution function
-  
-  compartment = 1
+  compartment cell = 1;var species t in cell; var species g_var in cell; var species G in cell
 
-  // Parameters
-  v1 := 11      // numerator degrees of freedom
-  v2 := 200     // denominator degrees of freedom
+  // Parameters; v1 := 11; v2 := 200
   
   // ORIGINAL ODEs
   // g'(t) = ((v1/2)-1)/t · g - (v1(v1+v2)/2)/(v2 + v1·t) · g
-  // Note: (v2 + v1·t) is a SUM - not S-system compatible
-  t' = 1
-  g' = (v1 / 2 - 1) / t * g - (v1 * (v1 + v2) / 2) / (v2 + v1 * t) * g
-  G' = g
+  // Note: (v2 + v1·t) is a SUM - not S-system compatible; t' = 1 g_var' = (v1 / 2 - 1) / t * g - (v1 * (v1 + v2) / 2) / (v2 + v1 * t) * g; G' = g
   
   // Initial conditions at t = 1
   // For F(11, 200): f(1) and F(1) from tables
-  t = 1.0
-  g = 0.95     // approximate F(11,200) density at t=1
-  G = 0.55     // approximate F(11,200) cdf at t=1
+  t = 1.0; g_var = 0.95; G = 0.55;
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0; T_END=20; N_STEPS =400

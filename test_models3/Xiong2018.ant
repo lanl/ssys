@@ -36,34 +36,30 @@ model Xiong2018_ThreeVariable_ContactKilling_Inhibitor
   compartment env = 1;
 
   // State variables (species)
-  species n_1 in env;   // strain 1 (fast-growing, killed by 2)
-  species n_2 in env;   // strain 2 (slow-growing killer)
-  species A   in env;   // long-range inhibitor
+  species n_1 in env;
+  species n_2 in env;
+  species A   in env;
 
   // Parameters (rescaled, from SI)
-  const gamma_1 = 4.5;    // gamma_1 : growth rate of strain 1
-  const delta   = 0.01;   // delta   : death rate (both strains)
-  const kappa   = 0.03;   // kappa   : contact killing of 1 by 2
+  const gamma_1 = 4.5;
+  const delta   = 0.01;
+  const kappa   = 0.03;
 
-  const gamma_A = 0.04;   // gamma_A : inhibitor production per n_1
-  const delta_A = 0.02;   // delta_A : inhibitor decay
+  const gamma_A = 0.04;
+  const delta_A = 0.02;
 
   // ODEs (spatially uniform three-variable model)
 
   // Strain 1: logistic growth with inhibition by A,
   // natural death, and contact-dependent killing by strain 2.
-  n_1' = (gamma_1/(1 + A)) * n_1 * (1 - n_1 - n_2)
-         - delta * n_1
-         - kappa * n_1 * n_2;
+  n_1' = (gamma_1/(1 + A)) * n_1 * (1 - n_1 - n_2) - delta * n_1 - kappa * n_1 * n_2;
 
   // Strain 2: logistic growth with same carrying capacity and death rate.
   // (No direct effect of A in the base three-variable model.)
-  n_2' = n_2 * (1 - n_1 - n_2)
-         - delta * n_2;
+  n_2' = n_2 * (1 - n_1 - n_2) - delta * n_2;
 
   // Inhibitor A: produced by strain 1, decays linearly.
-  A'   = gamma_A * n_1
-         - delta_A * A;
+  A'   = gamma_A * n_1 - delta_A * A;
 
   // Initial conditions
   // Paper uses random spatial ICs; here we choose homogeneous values

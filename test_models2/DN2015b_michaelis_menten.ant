@@ -30,19 +30,15 @@
 
 model DN2015b_michaelis_menten()
   // Variables
-  var species x1 in compartment  // Substrate concentration
-  
-  compartment = 1
+  compartment cell = 1;var species x1 in cell
 
   // Michaelis-Menten parameters
-  A := 1.0     // Vmax
-  B := 0.5     // Km (Michaelis constant)
+  A := 1.0; B := 0.5
   
   // Original Michaelis-Menten kinetics
   // dx₁/dt = -A·x₁ / (B + x₁)
   x1' = -A * x1 / (B + x1)
   
   // Initial condition
-  x1 = 1.0
-end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+  x1 = 1.0; end
+// @SIM T_START=0; T_END=20; N_STEPS =400

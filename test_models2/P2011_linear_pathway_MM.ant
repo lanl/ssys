@@ -30,30 +30,26 @@
 
 model P2011_linear_pathway_MM()
   // State variables (original)
-  var species X1 in compartment  // First intermediate metabolite
-  var species X2 in compartment  // Second metabolite (inhibitor of reaction 1)
-  
-  compartment = 1
+  compartment cell = 1;var species X1 in cell; var species X2 in cell
 
   // External (fixed) variable
-  X3 := 1.0      // Source metabolite concentration
+  X3 := 1.0;
   
   // Kinetic parameters
-  V1 := 10.0     // Vmax for reaction 1
-  V2 := 5.0      // Vmax for reaction 2
-  V3 := 5.0      // Vmax for reaction 3
-  K1 := 0.5      // Km for reaction 1
-  K2 := 0.5      // Km for reaction 2
-  K3 := 0.5      // Km for reaction 3
-  Ki := 1.0      // Inhibition constant (competitive inhibition by X2)
+  V1 := 10.0;
+  V2 := 5.0;
+  V3 := 5.0;
+  K1 := 0.5;
+  K2 := 0.5;
+  K3 := 0.5;
+  Ki := 1.0;
   
   // Original Michaelis-Menten model (Eq. 20)
   // Competitive inhibition: apparent Km = K1·(1 + Ki/X2)
-  X1' = V1 * X3 / (K1 * (1 + Ki / X2) + X3) - V2 * X1 / (K2 + X1)
-  X2' = V2 * X1 / (K2 + X1) - V3 * X2^2 / (K3^2 + X2^2)
+  X1' = V1 * X3 / (K1 * (1 + Ki / X2) + X3) - V2 * X1 / (K2 + X1);
+  X2' = V2 * X1 / (K2 + X1) - V3 * X2^2 / (K3^2 + X2^2);
   
   // Initial conditions
-  X1 = 1.0
-  X2 = 1.0
+  X1 = 1.0; X2 = 1.0;
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0; T_END=20; N_STEPS =400

@@ -32,19 +32,15 @@
 
 model PP2005_exponential_exact()
   // Variables
-  var species x in compartment  // Original state
-  
-  compartment = 1
+  compartment cell = 1;var species x in cell
 
   // Parameters
-  c := 1.0     // Coefficient
-  alpha := 1.0 // Exponential rate
+  c := 1.0; alpha := 1.0
   
   // Original nonpolynomial ODE
   // dx/dt = c·e^(-αx)
   x' = c * exp(-alpha * x)
   
   // Initial condition
-  x = 0.0     // Start at x(0) = 0, so p(0) = c·e^0 = c = 1
-end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+  x = 0.0; end
+// @SIM T_START=0; T_END=20; N_STEPS =400

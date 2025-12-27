@@ -32,77 +32,30 @@
 
 model I1988_metabolic_pathway()
   // Metabolic intermediates (original 9 variables)
-  var species X1 in compartment
-  var species X2 in compartment
-  var species X3 in compartment
-  var species X4 in compartment
-  var species X5 in compartment
-  var species X6 in compartment
-  var species X7 in compartment
-  var species X8 in compartment
-  var species X9 in compartment
-  
-  compartment = 1
+  compartment cell = 1;var species X1 in cell; var species X2 in cell; var species X3 in cell; var species X4 in cell; var species X5 in cell; var species X6 in cell; var species X7 in cell; var species X8 in cell; var species X9 in cell
 
   // Parameters
-  Xc = 1.0      // External substrate concentration
-  Kc = 1.0      // External substrate binding constant
-  K1 = 0.1      // Inhibition constant for end-product
+  Xc = 1.0; Kc = 1.0; K1 = 0.1
   
   // Michaelis-Menten parameters
-  Vm0 = 10.0    // Vmax for input reaction
-  Vm1 = 5.0     // Vmax for reactions 1-9
-  Vm2 = 5.0
-  Vm3 = 5.0
-  Vm4 = 5.0
-  Vm5 = 5.0
-  Vm6 = 5.0
-  Vm7 = 5.0
-  Vm8 = 5.0
-  Vm9 = 5.0
-  
-  K_1 = 0.5     // Km values
-  K_2 = 0.5
-  K_3 = 0.5
-  K_4 = 0.5
-  K_5 = 0.5
-  K_6 = 0.5
-  K_7 = 0.5
-  K_8 = 0.5
-  K_9 = 0.5
+  Vm0 = 10.0; Vm1 = 5.0; Vm2 = 5.0; Vm3 = 5.0; Vm4 = 5.0; Vm5 = 5.0; Vm6 = 5.0; Vm7 = 5.0; Vm8 = 5.0; Vm9 = 5.0; K_1 = 0.5; K_2 = 0.5; K_3 = 0.5; K_4 = 0.5; K_5 = 0.5; K_6 = 0.5; K_7 = 0.5; K_8 = 0.5; K_9 = 0.5
   
   // Reaction rates (Michaelis-Menten with end-product inhibition on V0)
-  V0 := Vm0 * Xc / Kc * K1 / (K1 + Xc / Kc * K1 + X9)
-  V1 := Vm1 * X1 / (X1 + K_1)
-  V2 := Vm2 * X2 / (X2 + K_2)
-  V3 := Vm3 * X3 / (X3 + K_3)
-  V4 := Vm4 * X4 / (X4 + K_4)
-  V5 := Vm5 * X5 / (X5 + K_5)
-  V6 := Vm6 * X6 / (X6 + K_6)
-  V7 := Vm7 * X7 / (X7 + K_7)
-  V8 := Vm8 * X8 / (X8 + K_8)
-  V9 := Vm9 * X9 / (X9 + K_9)
+  V0 := Vm0 * Xc / Kc * K1 / (K1 + Xc / Kc * K1 + X9);
+  V1 := Vm1 * X1 / (X1 + K_1);
+  V2 := Vm2 * X2 / (X2 + K_2);
+  V3 := Vm3 * X3 / (X3 + K_3);
+  V4 := Vm4 * X4 / (X4 + K_4);
+  V5 := Vm5 * X5 / (X5 + K_5);
+  V6 := Vm6 * X6 / (X6 + K_6);
+  V7 := Vm7 * X7 / (X7 + K_7);
+  V8 := Vm8 * X8 / (X8 + K_8);
+  V9 := Vm9 * X9 / (X9 + K_9);
   
   // Original ODEs (Eq. 8)
-  X1' = V0 - V1
-  X2' = V1 - V2
-  X3' = V2 - V3
-  X4' = V3 - V4
-  X5' = V4 - V5
-  X6' = V5 - V6
-  X7' = V6 - V7
-  X8' = V7 - V8
-  X9' = V8 - V9
+  X1' = V0 - V1; X2' = V1 - V2; X3' = V2 - V3; X4' = V3 - V4; X5' = V4 - V5; X6' = V5 - V6; X7' = V6 - V7; X8' = V7 - V8; X9' = V8 - V9
   
   // Initial conditions
-  X1 = 1.0
-  X2 = 1.0
-  X3 = 1.0
-  X4 = 1.0
-  X5 = 1.0
-  X6 = 1.0
-  X7 = 1.0
-  X8 = 1.0
-  X9 = 1.0
+  X1 = 1.0; X2 = 1.0; X3 = 1.0; X4 = 1.0; X5 = 1.0; X6 = 1.0; X7 = 1.0; X8 = 1.0; X9 = 1.0;
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0; T_END=20; N_STEPS =400

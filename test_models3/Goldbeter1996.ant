@@ -16,53 +16,49 @@ model Goldbeter1991_MinimalMitoticOscillator_Fig3
   compartment cell = 1;
 
   // State variables
-  species C in cell;   // cyclin (µM)
-  species M in cell;   // active cdc2 kinase fraction (0..1)
-  species X in cell;   // active cyclin protease fraction (0..1)
+  species C in cell;
+  species M in cell;
+  species X in cell;
 
   // ------------------------------------------------------------------
   // Oscillatory parameter set (Fig. 3-style)
   // ------------------------------------------------------------------
 
   // Cyclin synthesis and degradation
-  const v_i  = 0.025;   // µM/min
-  const V_d  = 0.25;    // µM/min   (max protease-dependent cyclin degradation)
-  const K_d  = 0.02;    // µM
-  const k_d  = 0.01;    // 1/min
+  const v_i  = 0.025;
+  const V_d  = 0.25;
+  const K_d  = 0.02;
+  const k_d  = 0.01;
 
   // cdc2 activation–inactivation cycle
-  const V_M1 = 3.0;     // 1/min
-  const K_c  = 0.5;     // µM
-  const K_1  = 0.005;   // dimensionless
-  const V_2  = 1.5;     // 1/min
-  const K_2  = 0.005;   // dimensionless
+  const V_M1 = 3.0;
+  const K_c  = 0.5;
+  const K_1  = 0.005;
+  const V_2  = 1.5;
+  const K_2  = 0.005;
 
   // Protease activation–inactivation cycle
-  const V_M3 = 1.0;     // 1/min
-  const K_3  = 0.005;   // dimensionless
-  const V_4  = 0.5;     // 1/min
-  const K_4  = 0.005;   // dimensionless
+  const V_M3 = 1.0;
+  const K_3  = 0.005;
+  const V_4  = 0.5;
+  const K_4  = 0.005;
 
   // Helper expressions
-  V_1 := V_M1 * C / (K_c + C);  // activation of M by cyclin
-  V_3 := V_M3 * M;              // activation of X by M
+  V_1 := V_M1 * C / (K_c + C);
+  V_3 := V_M3 * M;
 
   // ------------------------------------------------------------------
   // ODEs
   // ------------------------------------------------------------------
 
   // Cyclin
-  C' = v_i
-       - V_d * X * C / (K_d + C)
-       - k_d * C;
+  C' = v_i - V_d * X * C / (K_d + C) - k_d * C;
 
   // Active cdc2 kinase
-  M' = V_1 * (1 - M) / (K_1 + 1 - M)
-       - V_2 * M / (K_2 + M);
+  M' = V_1 * (1 - M) / (K_1 + 1 - M) - V_2 * M / (K_2 + M);
 
   // Active cyclin protease
-  X' = V_3 * (1 - X) / (K_3 + 1 - X)
-       - V_4 * X / (K_4 + X);
+  X' = V_3 * (1 - X) / (K_3 + 1 - X) - V_4 * X / (K_4 + X);
 
   // ------------------------------------------------------------------
   // Initial conditions

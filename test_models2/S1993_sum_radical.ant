@@ -31,15 +31,12 @@
 
 model S1993_sum_radical()
   // Variables
-  var species X1 in compartment  // Original variable with radical term
-  
-  compartment = 1
+  compartment cell = 1;var species X1 in cell
 
   // Original ODE with radical term
   // dX₁/dt = √X₁ - X₁²
   X1' = sqrt(X1) - X1^2
   
   // Initial condition
-  X1 = 0.5
-end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+  X1 = 0.5; end
+// @SIM T_START=0; T_END=20; N_STEPS =400

@@ -1,4 +1,4 @@
-model 27_spiral()
+model m_27_spiral()
 
   // Scalar ODE:
   //   dZ/dt = (Z - t)/(Z + t)

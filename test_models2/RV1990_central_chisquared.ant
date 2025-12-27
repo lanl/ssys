@@ -33,29 +33,17 @@
 
 model RV1990_central_chisquared()
   // ORIGINAL ODE - direct form
-  // This works for v >= 2, but has issue for v < 2
-  var species t in compartment  // t (argument)
-  var species f in compartment  // f_c(v; t) = chi-squared density
-  var species F in compartment  // F_c(v; t) = cumulative distribution function
-  
-  compartment = 1
+  // This works for v >= 2, but has issue for v < 2; compartment cell = 1;var species t in cell; var species f_var in cell; var species F in cell
 
-  // Parameters
-  v := 6       // degrees of freedom
+  // Parameters; v := 6
   
   // ORIGINAL ODEs
   // f'(t) = ((v/2) - 1)/t · f - (1/2) · f
-  // Note: For v < 2, the coefficient (v/2 - 1) < 0 which violates S-system constraints
-  t' = 1
-  f' = (v / 2 - 1) / t * f - 0.5 * f
-  F' = f
+  // Note: For v < 2, the coefficient (v/2 - 1) < 0 which violates S-system constraints; t' = 1 f_var' = (v / 2 - 1) / t * f - 0.5 * f; F' = f
   
   // Initial conditions at t = v (the mode for v >= 2)
   // At t = v = 6:
   //   f_c(6; 6) ≈ 0.112063448
-  //   F_c(6; 6) ≈ 0.5768
-  t = 6.0
-  f = 0.112063448113    // chi-squared density at t=6 for v=6
-  F = 0.576810023449    // F_c(6; 6) from tables
+  //   F_c(6; 6) ≈ 0.5768; t = 6.0; f_var = 0.112063448113; F = 0.576810023449;
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0; T_END=20; N_STEPS =400

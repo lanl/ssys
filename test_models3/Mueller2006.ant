@@ -38,41 +38,48 @@ model Mueller2006_RepLeaky_n3
   compartment cell = 1;
 
   // Species: free proteins and mRNAs
-  species x1 in cell;  // protein for gene 1
-  species x2 in cell;  // protein for gene 2
-  species x3 in cell;  // protein for gene 3
+  species x1 in cell;
+  species x2 in cell;
+  species x3 in cell;
 
-  species y1 in cell;  // mRNA for gene 1
-  species y2 in cell;  // mRNA for gene 2
-  species y3 in cell;  // mRNA for gene 3
+  species y1 in cell;
+  species y2 in cell;
+  species y3 in cell;
 
   // Core parameters (dimensionless)
-  const delta = 1.0e-3; // leakiness δ
-  const h     = 2;      // Hill coefficient
-  const alpha = 2.0;    // combined production parameter α
-  const beta  = 1.0;    // degradation ratio β
-  const gam   = 1.0;    // binding strength γ (renamed from gamma, reserved)
+  const delta = 1.0e-3;
+  const h     = 2;
+  const alpha = 2.0;
+  const beta  = 1.0;
+  const gam   = 1.0;
 
-  // Helper functions: Hill sigmoid s(x), transcription f(x), and M(x)
-  s(x) := x^h / (1 + x^h);
+  // Helper assignment rules
+  // s_i = x_i^h / (1 + x_i^h)
+  s1 := x1^h / (1 + x1^h);
+  s2 := x2^h / (1 + x2^h);
+  s3 := x3^h / (1 + x3^h);
 
-  // f(x) = (1 - δ)(1 - s(x)) + δ
-  f(x) := (1 - delta) * (1 - s(x)) + delta;
+  // f_i = (1 - delta) * (1 - s_i) + delta
+  f1 := (1 - delta) * (1 - s1) + delta;
+  f2 := (1 - delta) * (1 - s2) + delta;
+  f3 := (1 - delta) * (1 - s3) + delta;
 
-  // M(x) = 1 + γ * h * x^(h-1) / (1 + x^h)^2
-  M(x) := 1 + gam * h * x^(h - 1) / (1 + x^h)^2;
+  // M_i = 1 + gam * h * x_i^(h-1) / (1 + x_i^h)^2
+  M1 := 1 + gam * h * x1^(h - 1) / (1 + x1^h)^2;
+  M2 := 1 + gam * h * x2^(h - 1) / (1 + x2^h)^2;
+  M3 := 1 + gam * h * x3^(h - 1) / (1 + x3^h)^2;
 
   // ODEs for n = 3 (indices modulo 3: 1←3, 2←1, 3←2)
 
   // Proteins
-  x1' = beta * (y1 - x1) / M(x1);
-  x2' = beta * (y2 - x2) / M(x2);
-  x3' = beta * (y3 - x3) / M(x3);
+  x1' = beta * (y1 - x1) / M1;
+  x2' = beta * (y2 - x2) / M2;
+  x3' = beta * (y3 - x3) / M3;
 
   // mRNAs
-  y1' = alpha * f(x3) - y1;  // gene 1 repressed by protein 3
-  y2' = alpha * f(x1) - y2;  // gene 2 repressed by protein 1
-  y3' = alpha * f(x2) - y3;  // gene 3 repressed by protein 2
+  y1' = alpha * f3 - y1;  // gene 1 repressed by protein 3
+  y2' = alpha * f1 - y2;  // gene 2 repressed by protein 1
+  y3' = alpha * f2 - y3;  // gene 3 repressed by protein 2
 
   // Initial conditions (not specified in the paper; chosen as a simple test case)
   x1 = 0.1;

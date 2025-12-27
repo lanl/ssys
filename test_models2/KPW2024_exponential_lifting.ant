@@ -41,18 +41,15 @@
 
 model KPW2024_exponential_lifting()
   // Variables (original form - will be lifted by ssys recaster)
-  var species x in compartment  // Original state variable
-  
-  compartment = 1
+  compartment cell = 1;var species x in cell
 
   // Parameters
-  a := -1.0    // Decay rate (negative for stability)
+  a := -1.0
   
   // Original nonpolynomial ODE
   // dx/dt = a·x + e^(-x)
   x' = a * x + exp(-x)
   
   // Initial condition
-  x = 1.0     // Start at x(0) = 1
-end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+  x = 1.0; end
+// @SIM T_START=0; T_END=20; N_STEPS =400

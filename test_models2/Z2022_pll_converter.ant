@@ -49,30 +49,20 @@
 
 model Z2022_pll_converter()
   // Variables (original trigonometric form)
-  var species x1 in compartment  // θ_PLL - θ_sep (phase angle deviation)
-  var species x2 in compartment  // Δω_PLL (frequency deviation)
-  
-  compartment = 1
+  compartment cell = 1;var species x1 in cell; var species x2 in cell
 
   // PLL control parameters (from paper Section V-A)
-  kp_pll := 0.32    // Proportional gain
-  ki_pll := 0.37    // Integral gain (s⁻¹)
+  kp_pll := 0.32; ki_pll := 0.37
   
   // Grid parameters (SCR=5, X/R=7)
-  // These combine into the C coefficients
-  C1 := 1.0    // Damping: k_{p,PLL} |V_g| |K|
-  C2 := 1.2    // Synchronizing: k_{i,PLL} |V_g| |K|  
-  C3 := 0.3    // Power injection: k_{i,PLL} |Z| |I| sin(θ_Z + θ_C)
+  // These combine into the C coefficients; C1 := 1.0; C2 := 1.2 C3 := 0.3
   
   // Original trigonometric ODE (Eq. 7)
-  // dx₁/dt = x₂
-  x1' = x2
+  // dx₁/dt = x₂; x1' = x2
   
-  // dx₂/dt = -C₁ cos(x₁) x₂ - C₂ sin(x₁) + C₃
-  x2' = -C1 * cos(x1) * x2 - C2 * sin(x1) + C3
+  // dx₂/dt = -C₁ cos(x₁) x₂ - C₂ sin(x₁) + C₃; x2' = -C1 * cos(x1) * x2 - C2 * sin(x1) + C3
   
   // Initial conditions (near stable equilibrium)
-  x1 = 0.1    // Small phase deviation
-  x2 = 0.0    // Zero frequency deviation
+  x1 = 0.1; x2 = 0.0;
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0; T_END=20; N_STEPS =400

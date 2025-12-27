@@ -42,13 +42,10 @@
 
 model DN2015_planetary_motion()
   // Variables (positivity-preserving S-system form)
-  var species r in compartment    // radial distance from sun (always > 0)
-  var species chi in compartment  // shifted velocity: χ = dr/dt + 1 (always > 0 for bound orbits)
-  
-  compartment = 1
+  compartment cell = 1;var species r in cell; var species chi in cell
 
   // Parameters
-  r0 := 1.5  // Initial distance (elliptical orbit)
+  r0 := 1.5
   
   // S-system equations (positivity-preserving form)
   // dr/dt = χ - 1
@@ -58,7 +55,5 @@ model DN2015_planetary_motion()
   chi' = r0^2 * r^(-3) - r^(-2)
   
   // Initial conditions (both positive)
-  r = 1.5    // r(0) = r₀
-  chi = 1.0  // χ(0) = dr/dt(0) + 1 = 0 + 1 = 1 (perpendicular launch)
-end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+  r = 1.5; chi = 1.0; end
+// @SIM T_START=0; T_END=20; N_STEPS =400
