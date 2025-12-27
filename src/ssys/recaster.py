@@ -4051,7 +4051,17 @@ def _pool_ssystem_recast(sym: 'SymSystem', mode: str = "simplified") -> 'RecastR
 
         # 4) mapping X = ∏_j V_j and initial consistency at t=0
         factor_map[Xi] = list(V_list)
-        xi0 = float(new_initials.get(Xi, 1.0))
+        # Match by name to avoid symbol identity mismatch (SBML parser vs pool vars)
+        # Also check params as fallback (SBML parser may put species ICs in params)
+        xi0 = 1.0
+        for s, v in new_initials.items():
+            if hasattr(s, 'name') and s.name == Xi.name:
+                xi0 = float(v)
+                break
+        else:
+            # Fallback: SBML parser may put species IC in params dict
+            if Xi.name in sym.params:
+                xi0 = float(sym.params[Xi.name])
         
         # Set initial conditions for pool auxiliaries
         if V_list:
@@ -4576,11 +4586,16 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         lines.append("")
     
     # --- Parameters ---
-    if result.params:
+    # IMPORTANT: Filter out original variable names - they're species, not parameters
+    # The SBML parser may include "X = 10" as a parameter when X is really a species IC
+    original_var_names = {orig.name for orig in result.factor_map.keys()} if result.factor_map else set()
+    param_names_to_output = [n for n in sorted(result.params.keys()) if n not in original_var_names]
+    
+    if param_names_to_output:
         lines.append("// ========================================================================")
         lines.append("// PARAMETERS (copied from original)")
         lines.append("// ========================================================================")
-        for param_name in sorted(result.params.keys()):
+        for param_name in param_names_to_output:
             param_val = result.params[param_name]
             lines.append(f"{param_name} = {param_val:g};")
         lines.append("")
