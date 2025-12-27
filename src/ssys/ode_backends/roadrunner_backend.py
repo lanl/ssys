@@ -329,26 +329,44 @@ def _get_antimony_text(model_ir: ModelIR) -> str:
         text = re.sub(r'^(model\s+)(\d)', r'\1m_\2', text, flags=re.MULTILINE)
         
         # Fix 2: Multi-line equations - join continuation lines
-        # Handles: X3' = term1
-        #          + term2
-        #          - term3;
+        # Handles: X3' = term1   // comment
+        #          + term2       // comment  
+        #          - term3;      // comment
+        # CRITICAL: Strip inline comments before joining, otherwise comments
+        # corrupt the equation (e.g., "term1 // comment - term2" loses "- term2")
+        
+        def strip_inline_comment(s):
+            """Remove inline comment (// ...) from a line, preserving semicolon."""
+            # Find // that's not inside quotes
+            idx = s.find('//')
+            if idx >= 0:
+                # Check for semicolon after the //
+                has_semi = ';' in s[idx:]
+                code_part = s[:idx].rstrip()
+                if has_semi and not code_part.endswith(';'):
+                    code_part += ';'
+                return code_part
+            return s
+        
         lines = text.split('\n')
         fixed_lines = []
         i = 0
         while i < len(lines):
             line = lines[i]
             # Check if this is an ODE line without semicolon
-            if "'" in line and '=' in line and not line.rstrip().endswith(';'):
+            line_stripped = strip_inline_comment(line.rstrip())
+            if "'" in line and '=' in line and not line_stripped.endswith(';'):
                 # Collect continuation lines
-                combined = line.rstrip()
+                combined = line_stripped
                 i += 1
                 while i < len(lines):
                     next_line = lines[i].strip()
                     # Check if next line starts with operator
                     if next_line and next_line[0] in ['+', '-']:
-                        combined += ' ' + next_line
+                        next_stripped = strip_inline_comment(next_line)
+                        combined += ' ' + next_stripped
                         i += 1
-                        if next_line.rstrip().endswith(';'):
+                        if next_stripped.rstrip().endswith(';'):
                             break
                     else:
                         break
