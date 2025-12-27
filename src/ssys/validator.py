@@ -19,7 +19,8 @@ import sympy as sp
 from sympy import symbols, lambdify, simplify, Matrix, log
 
 from .recaster import (
-    parse_antimony, 
+    parse_antimony,
+    parse_antimony_via_sbml,
     build_sym_system, 
     classify_system,
     classify_result,
@@ -118,7 +119,8 @@ class RecastValidator:
                  recast_file: str,
                  factor_map: Optional[Dict[sp.Symbol, List[sp.Symbol]]] = None,
                  mode: str = "simplified",
-                 solver: str = "roadrunner"):
+                 solver: str = "roadrunner",
+                 parser: str = "legacy"):
         """
         Initialize validator.
         
@@ -128,22 +130,78 @@ class RecastValidator:
             factor_map: Mapping from original to auxiliary variables (X -> [X1, X2, ...])
             mode: Recast mode ('simplified' or 'canonical')
             solver: ODE solver for trajectory validation ('roadrunner' or 'rk4')
+            parser: Parser to use for Antimony files ('legacy' or 'sbml')
         """
         self.original_file = original_file
         self.recast_file = recast_file
         self.mode = mode
         self.solver = solver
+        self.parser = parser
         
         # Read recast file to extract mapping comments
         recast_text = open(recast_file).read()
         
-        # Parse both models
-        self.orig_ir = parse_antimony(open(original_file).read())
-        self.recast_ir = parse_antimony(recast_text)
+        # Read original file text
+        orig_text = open(original_file).read()
         
-        # Build symbolic systems
-        self.orig_system = build_sym_system(self.orig_ir)
-        self.recast_system = build_sym_system(self.recast_ir)
+        # Parse both models using the specified parser
+        if parser == "sbml":
+            # SBML-first parser (reference Antimony implementation)
+            self.orig_system = parse_antimony_via_sbml(orig_text)
+            self.recast_system = parse_antimony_via_sbml(recast_text)
+        else:
+            # Legacy parser
+            orig_ir = parse_antimony(orig_text)
+            self.orig_system = build_sym_system(orig_ir)
+            # Attach original Antimony text for RoadRunner simulation
+            # Note: roadrunner_backend checks for 'antimony_text' attribute
+            self.orig_system.antimony_text = orig_text
+            
+            recast_ir = parse_antimony(recast_text)
+            self.recast_system = build_sym_system(recast_ir)
+            self.recast_system.antimony_text = recast_text
+        
+        # Create aliases for backward compatibility with code using orig_ir/recast_ir
+        # SymSystem has the same key attributes: params, assignment_rules
+        # Add compatibility attributes for ModelIR interface
+        self.orig_ir = self.orig_system
+        self.recast_ir = self.recast_system
+        
+        # Add 'initial' alias for 'initials' (ModelIR uses 'initial', SymSystem uses 'initials')
+        if not hasattr(self.orig_ir, 'initial'):
+            # Convert initials dict to have string keys for ModelIR compatibility
+            self.orig_ir.initial = {str(k): v for k, v in self.orig_system.initials.items()}
+        if not hasattr(self.recast_ir, 'initial'):
+            self.recast_ir.initial = {str(k): v for k, v in self.recast_system.initials.items()}
+        
+        # Add @SIM metadata compatibility (SymSystem doesn't have these by default)
+        if not hasattr(self.orig_ir, 'sim_t_start'):
+            self.orig_ir.sim_t_start = None
+        if not hasattr(self.orig_ir, 'sim_t_end'):
+            self.orig_ir.sim_t_end = None
+        if not hasattr(self.orig_ir, 'sim_n_steps'):
+            self.orig_ir.sim_n_steps = None
+        
+        # Add 'species' alias for 'vars' (ModelIR uses 'species', SymSystem uses 'vars')
+        if not hasattr(self.orig_ir, 'species'):
+            self.orig_ir.species = [str(v) for v in self.orig_system.vars]
+        if not hasattr(self.recast_ir, 'species'):
+            self.recast_ir.species = [str(v) for v in self.recast_system.vars]
+        
+        # Add 'reactions' attribute (SymSystem uses ODEs directly, no reactions)
+        if not hasattr(self.orig_ir, 'reactions'):
+            self.orig_ir.reactions = []
+        if not hasattr(self.recast_ir, 'reactions'):
+            self.recast_ir.reactions = []
+        
+        # Add 'explicit_rates' alias for 'odes' (for roadrunner backend)
+        # Convert Python ** to Antimony ^ for exponentiation
+        if not hasattr(self.orig_ir, 'explicit_rates'):
+            self.orig_ir.explicit_rates = {str(k): str(v).replace('**', '^') 
+                                           for k, v in self.orig_system.odes.items()}
+        if not hasattr(self.recast_ir, 'explicit_rates'):
+            self.recast_ir.explicit_rates = {str(k): str(v).replace('**', '^') 
+                                             for k, v in self.recast_system.odes.items()}
         
         # Extract ODE dictionaries
         self.orig_odes = self.orig_system.odes
@@ -1898,7 +1956,8 @@ def validate_recast_pair(original_file: str,
                          factor_map: Optional[Dict] = None,
                          mode: str = "simplified",
                          output_json: Optional[str] = None,
-                         solver: str = "roadrunner") -> ValidationReport:
+                         solver: str = "roadrunner",
+                         parser: str = "legacy") -> ValidationReport:
     """
     Convenience function to validate a recast.
     
@@ -1909,11 +1968,12 @@ def validate_recast_pair(original_file: str,
         mode: Recast mode
         output_json: Optional path to save JSON report
         solver: ODE solver for trajectory validation ('roadrunner' or 'rk4')
+        parser: Parser for Antimony files ('legacy' or 'sbml')
         
     Returns:
         ValidationReport
     """
-    validator = RecastValidator(original_file, recast_file, factor_map, mode, solver)
+    validator = RecastValidator(original_file, recast_file, factor_map, mode, solver, parser)
     report = validator.validate()
     
     if output_json:

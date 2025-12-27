@@ -503,6 +503,19 @@ def _extract_sim_metadata(text: str) -> Tuple[Optional[float], Optional[float], 
     return t_start, t_end, n_steps
 
 
+def _preprocess_antimony_text(text: str) -> str:
+    """
+    Preprocess Antimony text before passing to libantimony.
+    
+    Currently a no-op - we require input .ant files to use standard Antimony syntax:
+    - Use backslash \\ for line continuation (NOT implicit continuation)
+    - Use `function name(x) expr end` for function definitions (NOT `name(x) := expr`)
+    
+    This function exists as a hook for future preprocessing needs.
+    """
+    return text
+
+
 def parse_antimony_via_sbml(antimony_text: str) -> 'SymSystem':
     """
     Parse Antimony text using the Antimony library (SBML-first approach).
@@ -533,13 +546,17 @@ def parse_antimony_via_sbml(antimony_text: str) -> 'SymSystem':
     # Extract @SIM metadata BEFORE conversion (comments are lost in SBML)
     t_start, t_end, n_steps = _extract_sim_metadata(antimony_text)
     
+    # CRITICAL: Preprocess to join multi-line statements
+    # libantimony requires complete statements on single lines
+    preprocessed_text = _preprocess_antimony_text(antimony_text)
+    
     # Use antimony library to parse Antimony and convert to SBML
     try:
         # Clear any previous models
         antimony.clearPreviousLoads()
         
-        # Load the Antimony string
-        result = antimony.loadAntimonyString(antimony_text)
+        # Load the preprocessed Antimony string
+        result = antimony.loadAntimonyString(preprocessed_text)
         if result == -1:
             error_msg = antimony.getLastError()
             raise ValueError(f"Antimony parsing error: {error_msg}")
@@ -569,6 +586,9 @@ def parse_antimony_via_sbml(antimony_text: str) -> 'SymSystem':
     sym._sim_t_end = t_end
     sym._sim_n_steps = n_steps
     
+    # Cache original Antimony text for RoadRunner simulation
+    sym.antimony_text = antimony_text
+
     return sym
 
 

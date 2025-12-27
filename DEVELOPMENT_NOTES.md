@@ -52,68 +52,99 @@ Antimony text → RoadRunner (reference Antimony parser) → SBML → libSBML �
 
 ### Implementation Checklist
 
-#### Phase 1: Dependencies & Environment
+#### Phase 1: Dependencies & Environment ✅ COMPLETE
 
-- [ ] **1.1** Update `pyproject.toml` - move simulation deps to core
+- [x] **1.1** Update `pyproject.toml` - move simulation deps to core
   - Move `libroadrunner>=2.5`, `antimony>=2.13`, `python-libsbml>=5.20` from `[simulation]` to main `dependencies`
   - Remove `[sbml]` optional group (redundant)
   - Remove `[simulation]` optional group (now core)
   - Keep `[notebook]` optional (jupyter for interactive use)
   - Keep `[dev]` for testing tools only
 
-- [ ] **1.2** Update `setup_env.sh`
+- [x] **1.2** Update `setup_env.sh`
   - Change `uv pip install -e ".[dev,notebook,simulation]"` to `uv pip install -e ".[dev]"`
   - Update comments to reflect simpler install
 
-- [ ] **1.3** Verify environment
+- [x] **1.3** Verify environment
   - Run `./setup_env.sh --force` to recreate environment
   - Confirm `import roadrunner, antimony, libsbml` all work
 
-#### Phase 2: New Parser Function
+#### Phase 2: New Parser Function ✅ COMPLETE
 
-- [ ] **2.1** Add `parse_antimony_via_sbml()` in `recaster.py`
-  ```python
-  def parse_antimony_via_sbml(antimony_text: str) -> SymSystem:
-      """
-      Parse Antimony text using RoadRunner's reference parser.
-      
-      Pipeline: Antimony → RoadRunner → SBML string → libSBML → SymSystem
-      
-      This replaces the fragile hand-rolled parse_antimony() + build_sym_system().
-      """
-      import roadrunner
-      rr = roadrunner.RoadRunner()
-      rr.loadAntimonyString(antimony_text)
-      sbml_string = rr.getSBML()
-      return parse_sbml_from_string(sbml_string)
-  ```
+- [x] **2.1** Add `parse_antimony_via_sbml()` in `recaster.py`
+  - Uses `antimony` library directly (not roadrunner) for Antimony→SBML
+  - Cleaner implementation than planned
 
-- [ ] **2.2** Add `parse_sbml_from_string()` in `recaster.py`
-  - Copy logic from existing `parse_sbml()` 
-  - Accept string instead of file path
-  - Use `libsbml.readSBMLFromString(sbml_string)` instead of `readSBML(path)`
+- [x] **2.2** Add `parse_sbml_from_string()` in `recaster.py`
+  - Shares implementation with `parse_sbml()` via `_parse_sbml_document()`
 
-- [ ] **2.3** Preserve @SIM metadata extraction
-  - The @SIM metadata (T_START, T_END, N_STEPS) is in Antimony comments
-  - RoadRunner/SBML won't preserve these
-  - Extract before conversion and attach to SymSystem
+- [x] **2.3** Preserve @SIM metadata extraction
+  - `_extract_sim_metadata()` function extracts from comments
+  - Attached to SymSystem as private attributes
 
-#### Phase 3: Update CLI & Entry Points
+#### Phase 3: Update CLI & Entry Points ✅ COMPLETE
 
-- [ ] **3.1** Update `cli.py:recast_file()` 
-  - Replace: `ir = parse_antimony(txt); sym = build_sym_system(ir)`
-  - With: `sym = parse_antimony_via_sbml(txt)`
-  - Extract @SIM metadata separately
+- [x] **3.1** Update `cli.py:recast_file()` 
+  - Added `parser` parameter: 'legacy' or 'sbml'
+  - `--parser sbml` flag in CLI
+  - @SIM metadata extracted and preserved
 
-- [ ] **3.2** Update `__init__.py` exports
-  - Add `parse_antimony_via_sbml` to `__all__`
-  - Keep `parse_antimony` temporarily for backwards compatibility (deprecate later)
+- [x] **3.2** Update `recast_models.py`
+  - Added `--parser {legacy,sbml}` argument (default: legacy)
+  - Passes parser choice to CLI command
 
-- [ ] **3.3** Update `notebook_helpers.py` if needed
-  - Check if it uses parse_antimony directly
-  - Update to use new function
+- [x] **3.3** Update `validator.py`
+  - Changed to use `parse_antimony_via_sbml()` for both original and recast files
+  - Added ModelIR compatibility shims (species, reactions, explicit_rates, initial)
+  - Converts `**` to `^` in explicit_rates for Antimony compatibility
 
-#### Phase 4: Testing
+#### Phase 4: Make Recaster Robust to SBML Forms (ACTIVE)
+
+**Problem Discovered:** The SBML parser produces **expanded/combined** expressions that differ from the legacy parser's unexpanded forms. This causes:
+- **Legacy parser + SBML validator:** 11/18 models validate (regression from 18/18)
+- **SBML parser + SBML validator:** 5/18 models validate
+
+**Root Cause Analysis:**
+1. Validator always uses SBML parser (regardless of CLI `--parser` flag)
+2. SBML parser expands fractions: `V/(K+S)` → `V*K/(K+S) + V*S/(K+S)` (two terms instead of one)
+3. Recaster's `expand_to_terms()` and `_analyze_ode_terms()` get different inputs
+
+**Plan (Option C): Make Recaster Handle Both Forms**
+
+- [ ] **4.1** Debug validator regression
+  - Identify which 7 models fail with `--parser legacy`
+  - Determine if failures are in validation or recasting
+  - May need validator to accept parser choice
+
+- [ ] **4.2** Debug SBML validation issues  
+  - For each failing model, trace symbolic/numerical/trajectory test
+  - Fix validation logic for expanded expressions
+  - Ensure all 18 test_models3 validate with SBML parser
+
+- [ ] **4.3** Debug SBML recasting issues
+  - Compare ODEs from legacy vs SBML parsers
+  - Fix `expand_to_terms()` for combined fractions
+  - May need to normalize (factor/simplify) SBML output
+
+- [ ] **4.4** Test all primary suites
+  - test_models3: 18/18 with `--parser sbml`
+  - test_models1: 29/29 with `--parser sbml`
+
+#### Phase 5: Testing
+
+#### Pre-requisite: Fix Antimony Syntax ✅ COMPLETE
+
+All 118 .ant files now parse with standard `antimony` library:
+- test_models1: 29 models ✓
+- test_models2: 69 models ✓  
+- test_models3: 18 models ✓
+- pathological_models: 2 models ✓
+
+Changes made:
+- Added explicit `compartment cell = 1; species X in cell;` declarations
+- Fixed semicolon placement (consistent statement endings)
+- Renamed `gamma` → `gamma_rate` (reserved Antimony name)
+- Fixed comment/code mixing in HBF1998, I1988, P2011, S1993 files
 
 **Primary Test Suites (verified recastable - MUST ALL PASS):**
 

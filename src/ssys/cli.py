@@ -110,9 +110,10 @@ def recast_file(ant_path: str, out_dir: str, mode: str = "simplified",
         from ssys.validator import validate_recast_pair
         validation_json_path = os.path.join(out_dir, f"{name}_validation.json")
         try:
-            validate_recast_pair(ant_path, out_path, mode=mode, 
+            validate_recast_pair(ant_path, out_path, mode=mode,
                                output_json=validation_json_path,
-                               solver=solver)
+                               solver=solver,
+                               parser=parser)
         except Exception as e:
             print(f"Warning: Validation failed for {name}: {e}", file=sys.stderr)
             validation_json_path = None
