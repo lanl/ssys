@@ -3901,19 +3901,39 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
     """
     Format GMA equations to Antimony with clear labeling.
     Preserves all production/degradation terms exactly.
+    
+    CRITICAL: Lifted auxiliary variables (Y_1, Y_2, etc.) are output as
+    ASSIGNMENT RULES, not species with ODEs. This prevents manifold drift
+    by ensuring algebraic constraints (e.g., Y_1 = a^2 + 1) are always exact.
     """
     lines: List[str] = []
     lines.append(f"model {model_name}()")
     lines.append("")
+    
+    # --- Identify lifted auxiliaries ---
+    # Lifted auxiliaries have definitions in auxiliary_defs and should be
+    # assignment rules (computed from state), not state variables with ODEs.
+    # EXCEPTION: Clock variables (T := time) are state variables because they
+    # need T' = 1 ODE to evolve with time.
+    lifted_aux_names: Set[str] = set()
+    if result.auxiliary_defs:
+        for aux, defn in result.auxiliary_defs.items():
+            aux_name = aux.name if hasattr(aux, 'name') else str(aux)
+            # Check if this is a clock variable (definition is just 'time')
+            is_clock = (defn == sp.Symbol('time') or str(defn) == 'time')
+            if not is_clock:
+                lifted_aux_names.add(aux_name)
     
     # --- Compartment declaration (for SBML compatibility) ---
     lines.append("compartment cell = 1;")
     lines.append("")
     
     # --- Species declarations in compartment ---
-    all_state_vars = sorted([eq.var for eq in result.gma_equations], key=lambda s: s.name)
-    if all_state_vars:
-        for v in all_state_vars:
+    # Only declare species for variables that are NOT lifted auxiliaries
+    all_gma_vars = sorted([eq.var for eq in result.gma_equations], key=lambda s: s.name)
+    state_vars = [v for v in all_gma_vars if v.name not in lifted_aux_names]
+    if state_vars:
+        for v in state_vars:
             lines.append(f"species {v.name} in cell;")
         lines.append("")
     
@@ -3932,23 +3952,35 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
     
     lines.append("")
     
-    # --- auxiliary variable definitions ---
+    # --- auxiliary variable definitions as ASSIGNMENT RULES ---
+    # CRITICAL: Lifted auxiliaries (Y_1, Y_2, etc.) must be assignment rules,
+    # NOT species with ODEs. This prevents manifold drift.
     # Filter out dummy_const (internal implementation detail, not meaningful for users)
-    filtered_aux_defs = {k: v for k, v in result.auxiliary_defs.items() 
-                         if k.name != "dummy_const"} if result.auxiliary_defs else {}
+    # Also filter out clock variable T (needs ODE T' = 1)
+    filtered_aux_defs = {}
+    if result.auxiliary_defs:
+        for k, v in result.auxiliary_defs.items():
+            if k.name == "dummy_const":
+                continue  # Internal implementation detail
+            # Check if this is a clock variable (definition is just 'time')
+            is_clock = (v == sp.Symbol('time') or str(v) == 'time')
+            if is_clock:
+                continue  # Clock variable needs ODE
+            filtered_aux_defs[k] = v
+    
     if filtered_aux_defs:
         lines.append("// ========================================================================")
-        lines.append("// AUXILIARY DEFINITIONS (for lifted variables)")
+        lines.append("// LIFTED DENOMINATORS (assignment rules to prevent drift)")
         lines.append("// ========================================================================")
         for aux, defn in sorted(filtered_aux_defs.items(), key=lambda kv: str(kv[0])):
-            lines.append(f"// {aux} := {defn}")
-        lines.append("// ========================================================================")
+            # Output as Antimony assignment rule syntax
+            defn_str = _sympy_to_antimony_syntax(str(defn))
+            lines.append(f"{aux} := {defn_str};")
         lines.append("")
     
-    # --- Assignment rules (time-dependent quantities) ---
-    # These are variables that depend only on time, not state variables
+    # --- Assignment rules from original model (time-dependent quantities) ---
     if result.assignment_rules:
-        lines.append("// Assignment rules (time-dependent quantities)")
+        lines.append("// Assignment rules (from original model)")
         for var_name in sorted(result.assignment_rules.keys()):
             expr = result.assignment_rules[var_name]
             lines.append(f"{var_name} := {expr};")
@@ -3972,12 +4004,20 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
         # Skip variables that are assignment rules (they use := not =)
         if result.assignment_rules and s.name in result.assignment_rules:
             continue
+        # Skip lifted auxiliaries (they're assignment rules, not species)
+        if s.name in lifted_aux_names:
+            continue
         lines.append(f"{s.name} = {float(v):g};")
     
     lines.append("")
     
     # GMA ODEs with multiple terms per side
+    # CRITICAL: Skip ODEs for lifted auxiliaries (they're assignment rules now)
     for eq in result.gma_equations:
+        # Skip lifted auxiliaries - they're assignment rules, not species with ODEs
+        if eq.var.name in lifted_aux_names:
+            continue
+        
         # Format production terms
         if eq.production:
             prod_strs = [product_to_antimony(c, e) for c, e in eq.production]
