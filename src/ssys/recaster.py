@@ -842,11 +842,34 @@ def _parse_sbml_document(doc, source: str = "<unknown>") -> 'SymSystem':
                     pass
     
     # ========================================================================
+    # STEP 6b: Handle InitialAssignments (parameter expressions for ICs)
+    # ========================================================================
+    # In SBML, InitialAssignments allow ICs to be set via formulas like I = I_b
+    # We need to evaluate these formulas to get numeric initial conditions
+    for i in range(model.getNumInitialAssignments()):
+        ia = model.getInitialAssignment(i)
+        var_id = ia.getSymbol()
+        formula_str = libsbml.formulaToString(ia.getMath())
+        
+        if var_id in species_info:
+            try:
+                # Evaluate the formula with known parameters
+                init_expr = sp.sympify(formula_str, locals=all_syms)
+                # Substitute parameter values using correct symbols from all_syms
+                for param_name, param_val in params.items():
+                    if param_name in all_syms:
+                        init_expr = init_expr.subs(all_syms[param_name], param_val)
+                # Update the species initial value
+                species_info[var_id]['init'] = float(init_expr)
+            except Exception:
+                pass  # Keep default if evaluation fails
+
+    # ========================================================================
     # STEP 7: Build SymSystem
     # ========================================================================
     # Variables (floating species with ODEs)
     vars_list = list(odes.keys())
-    
+
     # Initial conditions
     initials: Dict[sp.Symbol, float] = {}
     for sid, info in species_info.items():
