@@ -222,8 +222,8 @@ def main():
     parser.add_argument(
         "--parser",
         choices=["legacy", "sbml"],
-        default="legacy",
-        help="Antimony parser: 'legacy' (regex, default) or 'sbml' (RoadRunner reference parser)",
+        default="sbml",
+        help="Antimony parser: 'sbml' (RoadRunner reference parser, default) or 'legacy' (regex)",
     )
     parser.add_argument(
         "--version",

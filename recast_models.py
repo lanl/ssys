@@ -95,8 +95,8 @@ Model directories:
     parser.add_argument(
         "--parser",
         choices=["sbml", "legacy"],
-        default="legacy",
-        help="Antimony parser: 'legacy' (regex, default) or 'sbml' (reference parser)"
+        default="sbml",
+        help="Antimony parser: 'sbml' (reference parser, default) or 'legacy' (regex)"
     )
     args = parser.parse_args()
     
