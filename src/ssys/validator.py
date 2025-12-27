@@ -950,10 +950,22 @@ class RecastValidator:
             auxiliary_vars = []
             auxiliary_var_indices = []
             
+            # Also identify clock variables (T := time) - these should be sampled, not computed
+            clock_vars = set()
+            for aux_name, aux_def in self.auxiliary_defs.items():
+                # Check if auxiliary is a clock variable (definition is just 'time' or 't')
+                if hasattr(aux_def, 'free_symbols'):
+                    aux_def_syms = {str(s).lower() for s in aux_def.free_symbols}
+                    if aux_def_syms <= {'time', 't'}:
+                        clock_vars.add(str(aux_name))
+            
             for i, var in enumerate(recast_vars_ordered):
                 var_name = str(var)
                 if var_name in orig_var_names:
                     # This is an original variable - sample independently
+                    independent_vars.append((i, var))
+                elif var_name in clock_vars:
+                    # This is a clock variable (T := time) - sample as time
                     independent_vars.append((i, var))
                 elif var_name in {str(k) for k in self.auxiliary_defs.keys()}:
                     # This is a lifted auxiliary - compute from definition
@@ -1103,11 +1115,11 @@ class RecastValidator:
             param_vals_ordered = [param_values[str(sym)] for sym in param_symbols]
             
             # Check if 'time' symbol appears in any ODE (time-dependent models)
-            # Collect all free symbols from ODEs
+            # Collect all free symbols from EXPANDED ODEs (assignment rules may contain 'time')
             all_ode_symbols = set()
-            for ode in self.orig_odes.values():
+            for ode in self.orig_odes_expanded.values():
                 all_ode_symbols.update(ode.free_symbols)
-            for ode in self.recast_odes.values():
+            for ode in self.recast_odes_expanded.values():
                 all_ode_symbols.update(ode.free_symbols)
             
             # Check for time symbol (could be 'time' or 't')
@@ -1151,10 +1163,39 @@ class RecastValidator:
                                                modules='numpy'))
             
             # Lambdify original ODEs with mapping substituted (use expanded ODEs)
+            # Also substitute time → T for time-dependent models (original uses 'time', recast uses 'T')
+            clock_subs = {}
+            if time_symbol is not None:
+                # Find clock variable in recast (T := time)
+                clock_var = None
+                for aux_name, aux_def in self.auxiliary_defs.items():
+                    if hasattr(aux_def, 'free_symbols'):
+                        aux_def_syms = {str(s).lower() for s in aux_def.free_symbols}
+                        if aux_def_syms <= {'time', 't'}:
+                            # This is a clock variable - find it in recast_vars
+                            for rv in recast_vars_ordered:
+                                if str(rv) == str(aux_name):
+                                    clock_var = rv
+                                    break
+                            break
+                
+                # Find time symbol in ANY original ODE (not just the first)
+                if clock_var is not None:
+                    for var, ode in self.orig_odes_expanded.items():
+                        for sym in ode.free_symbols:
+                            if str(sym).lower() == 'time':
+                                clock_subs[sym] = clock_var
+                                break
+                        if clock_subs:
+                            break
+            
             f_orig_at_Phi_funcs = []
             for var in orig_vars_ordered:
                 # Substitute mapping into original ODE (use expanded to substitute assignment rules)
                 ode_at_phi = self.orig_odes_expanded[var].subs(self.mapping)
+                # Also substitute time → T for time-dependent models
+                if clock_subs:
+                    ode_at_phi = ode_at_phi.subs(clock_subs)
                 f_orig_at_Phi_funcs.append(lambdify(all_symbols,
                                                      ode_at_phi,
                                                      modules='numpy'))
@@ -1173,10 +1214,22 @@ class RecastValidator:
             auxiliary_vars = []
             auxiliary_var_indices = []
             
+            # Also identify clock variables (T := time) - these should be sampled, not computed
+            clock_vars = set()
+            for aux_name, aux_def in self.auxiliary_defs.items():
+                # Check if auxiliary is a clock variable (definition is just 'time' or 't')
+                if hasattr(aux_def, 'free_symbols'):
+                    aux_def_syms = {str(s).lower() for s in aux_def.free_symbols}
+                    if aux_def_syms <= {'time', 't'}:
+                        clock_vars.add(str(aux_name))
+            
             for i, var in enumerate(recast_vars_ordered):
                 var_name = str(var)
                 if var_name in orig_var_names:
                     # This is an original variable - sample independently
+                    independent_vars.append((i, var))
+                elif var_name in clock_vars:
+                    # This is a clock variable (T := time) - sample as time
                     independent_vars.append((i, var))
                 elif var_name in {str(k) for k in self.auxiliary_defs.keys()}:
                     # This is a lifted auxiliary - compute from definition
