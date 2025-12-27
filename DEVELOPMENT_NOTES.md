@@ -8,8 +8,9 @@ This document contains development plans and investigation records for the ssys 
 
 1. [Work Plans](#work-plans)
    - [SBML-First Parser Refactoring](#sbml-first-parser-refactoring) ← **ACTIVE**
-   - [GMA→S-System Condensation](#gma-to-s-system-condensation)
    - [Autonomous Lifting for Strict GMA/S-System](#autonomous-lifting-for-strict-gmas-system)
+   - [GMA→S-System Condensation](#gma-to-s-system-condensation)
+   - [Future Enhancements: BioModels Coverage](#future-enhancements-biomodels-coverage-analysis)
 2. [Bug Fixes & Investigations](#bug-fixes--investigations)
    - [SymPy Sign Comparison Bug](#sympy-sign-comparison-bug)
    - [Validation Analysis: 0.0 Error Cases](#validation-analysis-00-error-cases)
@@ -409,6 +410,103 @@ One production monomial, one degradation monomial per equation.
 def find_steady_state_gma(result: RecastResult, tol=1e-10) -> Dict[Symbol, float]
 def condense_gma_to_ssystem(gma_result, x_ref, exp_tol=1e-8) -> RecastResult
 ```
+
+---
+
+## Future Enhancements: BioModels Coverage Analysis
+
+**Status:** Planning (post-SBML-first refactor)  
+**Data Source:** `biomodels/results/filter_summary.txt` (1644 models analyzed)
+
+### Current Coverage
+
+Based on BioModels analysis, ssys can currently handle:
+
+| Feature | Models | Status |
+|---------|--------|--------|
+| exp() | 241 | ✅ Lifting implemented |
+| log/ln() | 129 | ✅ Lifting implemented |
+| sin/cos | 24 | ✅ Lifting implemented |
+| Already GMA | 82 | ✅ No recast needed |
+
+**Eligible models:** 1041 (63.3% of BioModels)
+
+### High-Priority Enhancement: Piecewise Functions
+
+**Impact:** 266 models (25% of eligible models)
+
+SBML `piecewise` is used extensively in biological models for:
+- Threshold functions (production starts above threshold)
+- Saturation approximations
+- Switch-like behavior
+
+**Investigation needed:**
+1. Categorize piecewise patterns in BioModels
+2. Identify "smooth-approximable" patterns vs. true discontinuities
+3. Design sigmoid approximation strategy
+
+**Potential approach:**
+```
+piecewise(0, X < K, V) → V * sigmoid(steep * (X - K))
+```
+
+Where `sigmoid(x) = 1/(1 + exp(-x))` is already liftable to GMA.
+
+**Key questions:**
+- What steepness parameter is appropriate?
+- How to handle multi-branch piecewise?
+- How to validate approximation quality?
+
+**Reference models to investigate:**
+- Run: `python biomodels/2_filter_models.py` and examine piecewise patterns
+- Look for common idioms in SBML kinetic laws
+
+### Medium-Priority: Additional Trig Functions
+
+**Impact:** 17 models ("unsupported_trig" in filter summary)
+
+Likely includes: `tan`, `sec`, `cot`, `sinh`, `cosh`, `tanh` (beyond our sin/cos handling)
+
+**Lifting strategy:**
+- `tan(x) = sin(x)/cos(x)` → use existing sin/cos lifting + rational function lifting
+- `sec(x) = 1/cos(x)` → same approach
+- Hyperbolic functions follow similar patterns
+
+**Effort:** Low (builds on existing infrastructure)
+
+### Low-Priority: SBML L3 Packages
+
+**Impact:** 93 models (excluded due to "sbml_l3_packages")
+
+SBML Level 3 packages include:
+- **FBC** (Flux Balance Constraints) - constraint-based modeling
+- **comp** (Hierarchical composition) - modular models
+- **qual** (Qualitative models) - discrete/Boolean logic
+
+**Assessment needed:**
+- Which packages are actually blocking?
+- Can we ignore certain packages and still extract ODEs?
+- Are these models even ODE-based?
+
+### Already Handled / Non-Issues
+
+| Category | Models | Notes |
+|----------|--------|-------|
+| No ODEs | 291 | Not applicable to recasting |
+| Discrete events | 214 | Cannot be represented in GMA |
+| SBML parse errors | 29 | SBML-first approach should help |
+| Delay functions | 5 | Not in scope (DDEs) |
+| Algebraic constraints | 2 | Not in scope (DAEs) |
+
+### Summary: Potential Coverage Expansion
+
+| Enhancement | Models Gained | Effort | Priority |
+|-------------|---------------|--------|----------|
+| Piecewise → smooth | ~266 | High | **HIGH** |
+| Additional trig | ~17 | Low | Medium |
+| L3 package subset | ~30? | Unknown | Low |
+
+**Recommendation:** Focus on piecewise approximation after SBML-first refactor is complete.
 
 ---
 
