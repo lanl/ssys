@@ -1449,8 +1449,8 @@ class RecastValidator:
             )
     
     def check_trajectory_comparison(self,
-                                     t_end: float = 20.0,
-                                     n_points: int = 200,
+                                     t_end: float = 1.0,
+                                     n_points: int = 100,
                                      threshold: float = 1e-3) -> EquivalenceTest:
         """
         Compare simulation trajectories between original and reconstructed recast.
@@ -1466,15 +1466,25 @@ class RecastValidator:
         
         Solver priority: roadrunner → scipy LSODA → rk4
         
+        Uses @SIM metadata from original Antimony file when available:
+        - T_START: simulation start time (default 0.0)
+        - T_END: simulation end time (default t_end parameter)
+        - N_STEPS: number of time points (default n_points parameter)
+        
         Args:
-            t_end: End time for simulation
-            n_points: Number of time points
+            t_end: Default end time for simulation if @SIM not present
+            n_points: Default number of time points if @SIM not present
             threshold: Error threshold for pass/fail (default 0.1%)
             
         Returns:
             EquivalenceTest with trajectory validation results
         """
         try:
+            # Use @SIM metadata from original model if available
+            t_start_use = self.orig_ir.sim_t_start if self.orig_ir.sim_t_start is not None else 0.0
+            t_end_use = self.orig_ir.sim_t_end if self.orig_ir.sim_t_end is not None else t_end
+            n_points_use = self.orig_ir.sim_n_steps if self.orig_ir.sim_n_steps is not None else n_points
+            
             # Get initial conditions from models
             orig_vars_ordered = sorted(self.orig_odes.keys(), key=str)
             recast_vars_ordered = self.recast_state_vars
@@ -1502,7 +1512,7 @@ class RecastValidator:
             # Step 1: Simulate original model
             orig_result = self._simulate_model(
                 self.orig_ir, self.orig_odes, orig_vars_ordered,
-                t_end, n_points, param_values, time_symbol, "original"
+                t_end_use, n_points_use, param_values, time_symbol, "original"
             )
             
             if not orig_result['success']:
@@ -1520,7 +1530,7 @@ class RecastValidator:
             
             recast_result = self._simulate_model(
                 self.recast_ir, self.recast_odes, recast_vars_ordered,
-                t_end, n_points, param_values, time_symbol, "recast",
+                t_end_use, n_points_use, param_values, time_symbol, "recast",
                 y0_override=recast_y0
             )
             

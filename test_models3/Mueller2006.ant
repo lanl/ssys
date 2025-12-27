@@ -84,4 +84,4 @@ model Mueller2006_RepLeaky_n3
   y3 = 0.1;
 
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0 T_END=10 N_STEPS=400

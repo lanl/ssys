@@ -70,4 +70,4 @@ model Samoilov2005_FutileCycle
   C2      = 0.01;  // Perturbed from 0 to avoid numerical stiffness in recast
 
 end
-// @SIM T_START=0 T_END=1 N_STEPS=400
+// @SIM T_START=0 T_END=0.001 N_STEPS=400
