@@ -36,4 +36,4 @@ model 28_torus_SSystem_exact()
   Z_3_obs := X3;
   r_obs   := X4;
 
-end
+end// @SIM T_START=0 T_END=20 N_STEPS=400

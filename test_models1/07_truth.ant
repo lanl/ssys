@@ -23,3 +23,4 @@ model SIR_SSystem_exact()
   I = 1
   R = 0
 end
+// @SIM T_START=0 T_END=20 N_STEPS=400

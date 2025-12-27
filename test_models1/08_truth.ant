@@ -20,4 +20,4 @@ model Bertalanffy_SSystem_exact()
   var mmax;
   mmax := (p/q)^(1/(1 - a));   // = 42.875 with numbers above
 
-end
+end// @SIM T_START=0 T_END=20 N_STEPS=400

@@ -29,4 +29,4 @@ model BriggsHaldane_SSystem_exact()
   P  = 0.0;
   Y  = Etot - ES;   // = 1.0
 
-end
+end// @SIM T_START=0 T_END=20 N_STEPS=400

@@ -11,4 +11,4 @@ model exp_decay_SSystem_exact()
 
   // Initial condition
   S = 10
-end
+end// @SIM T_START=0 T_END=20 N_STEPS=400

@@ -39,4 +39,4 @@ model 27_spiral_SSystem_exact()
   t_obs := X2 - p;
   Z_obs := X1 - p;
 
-end
+end// @SIM T_START=0 T_END=20 N_STEPS=400
