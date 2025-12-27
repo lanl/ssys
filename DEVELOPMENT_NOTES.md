@@ -100,35 +100,47 @@ Antimony text → RoadRunner (reference Antimony parser) → SBML → libSBML �
 
 #### Phase 4: Make Recaster Robust to SBML Forms (ACTIVE)
 
-**Problem Discovered:** The SBML parser produces **expanded/combined** expressions that differ from the legacy parser's unexpanded forms. This causes:
-- **Legacy parser + SBML validator:** 11/18 models validate (regression from 18/18)
-- **SBML parser + SBML validator:** 5/18 models validate
+**Commits Made:**
+1. `518db1b` - Add parser parameter to validator for SBML debugging
+2. `8b7e9fe` - Fix SBML parser: Handle InitialAssignments for parameter-dependent ICs
 
-**Root Cause Analysis:**
-1. Validator always uses SBML parser (regardless of CLI `--parser` flag)
-2. SBML parser expands fractions: `V/(K+S)` → `V*K/(K+S) + V*S/(K+S)` (two terms instead of one)
-3. Recaster's `expand_to_terms()` and `_analyze_ode_terms()` get different inputs
+**Current Status (2024-12-27):**
+- **Legacy parser:** 18/18 ✓
+- **SBML parser:** 3/18 (Bergman1989, Mangan2003, Selkov1968)
 
-**Plan (Option C): Make Recaster Handle Both Forms**
+**Fixes Applied:**
 
-- [ ] **4.1** Debug validator regression
-  - Identify which 7 models fail with `--parser legacy`
-  - Determine if failures are in validation or recasting
-  - May need validator to accept parser choice
+- [x] **4.1** Add parser parameter to validator
+  - Validator now accepts `parser` parameter to use same parser for original and recast
+  - CLI passes `--parser` flag to validator
+  - Legacy parser: 18/18 validated ✓
 
-- [ ] **4.2** Debug SBML validation issues  
-  - For each failing model, trace symbolic/numerical/trajectory test
-  - Fix validation logic for expanded expressions
-  - Ensure all 18 test_models3 validate with SBML parser
+- [x] **4.2** Fix SBML InitialAssignments
+  - SBML `InitialAssignment` elements allow ICs like `I = I_b`
+  - Added STEP 6b in `_parse_sbml_document()` to evaluate these
+  - Uses correct symbol objects from `all_syms` for substitution
+  - Test: Bergman1989 now has I(0)=10 (from I_b=10) instead of I(0)=0
 
-- [ ] **4.3** Debug SBML recasting issues
-  - Compare ODEs from legacy vs SBML parsers
-  - Fix `expand_to_terms()` for combined fractions
-  - May need to normalize (factor/simplify) SBML output
+**Remaining Failures (15 models):**
 
-- [ ] **4.4** Test all primary suites
-  - test_models3: 18/18 with `--parser sbml`
-  - test_models1: 29/29 with `--parser sbml`
+| Failure Type | Count | Models |
+|--------------|-------|--------|
+| RoadRunner simulation fails | 11 | Dreisigmeyer, Gardner, Goldbeter, Kholodenko, Krishna, Lev_Bar-Or, Lipniacki, Mueller, Ozbudak, Rosenfeld, Xiong |
+| Trajectory diverges | 4 | De_Young, Fink, Lander, Weber |
+
+**Investigation in Progress:**
+
+- [ ] **4.3** Investigate RoadRunner simulation failures
+  - 11 models: Recast output can't be simulated by RoadRunner
+  - Need to compare recast Antimony output from both parsers
+  - Likely: output format issues or missing declarations
+
+- [ ] **4.4** Investigate trajectory divergences
+  - 4 models: Symbolic/numerical pass but trajectory diverges
+  - Need to compare ODE structures between parsers
+  - Likely: Different recast auxiliary structures
+
+**Key Insight:** Batch recasting (biomodels/3_recast_batch.py) uses SBML directly without normalization and works. The issue is NOT that SBML ODEs need normalization - it's something specific to the Antimony→SBML→SymSystem pipeline in `parse_antimony_via_sbml()`.
 
 #### Phase 5: Testing
 

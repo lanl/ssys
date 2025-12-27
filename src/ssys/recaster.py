@@ -842,6 +842,21 @@ def _parse_sbml_document(doc, source: str = "<unknown>") -> 'SymSystem':
                     pass
     
     # ========================================================================
+    # STEP 6a: Handle assignment rules (V_1 := expression)
+    # ========================================================================
+    # Assignment rules define algebraic relationships, not ODEs
+    # They are used for quantities that can be computed from other quantities
+    assignment_rules: Dict[str, str] = {}
+    for i in range(model.getNumRules()):
+        rule = model.getRule(i)
+        
+        if rule.getTypeCode() == libsbml.SBML_ASSIGNMENT_RULE:
+            var_id = rule.getVariable()
+            formula_str = libsbml.formulaToString(rule.getMath())
+            # Store as string for SymSystem (will be parsed later if needed)
+            assignment_rules[var_id] = formula_str
+    
+    # ========================================================================
     # STEP 6b: Handle InitialAssignments (parameter expressions for ICs)
     # ========================================================================
     # In SBML, InitialAssignments allow ICs to be set via formulas like I = I_b
@@ -888,7 +903,8 @@ def _parse_sbml_document(doc, source: str = "<unknown>") -> 'SymSystem':
         vars=vars_list,
         params=params,
         odes=simplified_odes,
-        initials=initials
+        initials=initials,
+        assignment_rules=assignment_rules
     )
 
 
@@ -4360,6 +4376,14 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast",
         lines.append("// ========================================================================")
         lines.append("")
     
+    # --- Parameters (copied from original model) ---
+    if result.params:
+        lines.append("// Parameters (from original model)")
+        for param_name in sorted(result.params.keys()):
+            param_val = result.params[param_name]
+            lines.append(f"{param_name} = {param_val:g};")
+        lines.append("")
+
     # --- Assignment rules from original model (time-dependent quantities) ---
     if result.assignment_rules:
         lines.append("// Assignment rules (from original model)")
@@ -4367,7 +4391,7 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast",
             expr = result.assignment_rules[var_name]
             lines.append(f"{var_name} := {expr};")
         lines.append("")
-    
+
     # Initial assignments - handle both Symbol and tuple keys
     # Skip variables that are assignment rules (they don't have ICs)
     def _init_sort_key(kv):
