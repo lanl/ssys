@@ -7,7 +7,9 @@ This document contains development plans and investigation records for the ssys 
 ## Table of Contents
 
 1. [Work Plans](#work-plans)
+   - [SBML-First Parser Refactoring](#sbml-first-parser-refactoring) ← **ACTIVE**
    - [GMA→S-System Condensation](#gma-to-s-system-condensation)
+   - [Autonomous Lifting for Strict GMA/S-System](#autonomous-lifting-for-strict-gmas-system)
 2. [Bug Fixes & Investigations](#bug-fixes--investigations)
    - [SymPy Sign Comparison Bug](#sympy-sign-comparison-bug)
    - [Validation Analysis: 0.0 Error Cases](#validation-analysis-00-error-cases)
@@ -15,6 +17,195 @@ This document contains development plans and investigation records for the ssys 
 ---
 
 # Work Plans
+
+## SBML-First Parser Refactoring
+
+**Status:** ACTIVE  
+**Branch:** `fix/antimony-parser`  
+**Created:** 2024-12-27
+
+### Problem Statement
+
+The hand-rolled Antimony parser (`parse_antimony()`) is fragile and fails on valid Antimony syntax:
+
+- **test_models3**: 18/18 passing (uses semicolons at line endings)
+- **test_models1**: FAILING (uses `J_1: -> X_1; rate` format where semicolon is in middle)
+
+The line-continuation logic assumes statements end with `;`, but reaction lines like:
+```antimony
+J_1: -> X_1; a - c*X_2
+```
+have semicolons in the MIDDLE (separating stoichiometry from rate law), not at the end.
+
+**Root Cause:** We built our own parser instead of using the reference implementation.
+
+### Solution: SBML-First Architecture
+
+Replace the fragile hand-rolled parser with a pipeline using established tools:
+
+```
+Antimony text → RoadRunner (reference Antimony parser) → SBML → libSBML → SymSystem
+```
+
+**Key insight:** `parse_sbml()` already exists and works! The biomodels scripts use it directly.
+
+### Implementation Checklist
+
+#### Phase 1: Dependencies & Environment
+
+- [ ] **1.1** Update `pyproject.toml` - move simulation deps to core
+  - Move `libroadrunner>=2.5`, `antimony>=2.13`, `python-libsbml>=5.20` from `[simulation]` to main `dependencies`
+  - Remove `[sbml]` optional group (redundant)
+  - Remove `[simulation]` optional group (now core)
+  - Keep `[notebook]` optional (jupyter for interactive use)
+  - Keep `[dev]` for testing tools only
+
+- [ ] **1.2** Update `setup_env.sh`
+  - Change `uv pip install -e ".[dev,notebook,simulation]"` to `uv pip install -e ".[dev]"`
+  - Update comments to reflect simpler install
+
+- [ ] **1.3** Verify environment
+  - Run `./setup_env.sh --force` to recreate environment
+  - Confirm `import roadrunner, antimony, libsbml` all work
+
+#### Phase 2: New Parser Function
+
+- [ ] **2.1** Add `parse_antimony_via_sbml()` in `recaster.py`
+  ```python
+  def parse_antimony_via_sbml(antimony_text: str) -> SymSystem:
+      """
+      Parse Antimony text using RoadRunner's reference parser.
+      
+      Pipeline: Antimony → RoadRunner → SBML string → libSBML → SymSystem
+      
+      This replaces the fragile hand-rolled parse_antimony() + build_sym_system().
+      """
+      import roadrunner
+      rr = roadrunner.RoadRunner()
+      rr.loadAntimonyString(antimony_text)
+      sbml_string = rr.getSBML()
+      return parse_sbml_from_string(sbml_string)
+  ```
+
+- [ ] **2.2** Add `parse_sbml_from_string()` in `recaster.py`
+  - Copy logic from existing `parse_sbml()` 
+  - Accept string instead of file path
+  - Use `libsbml.readSBMLFromString(sbml_string)` instead of `readSBML(path)`
+
+- [ ] **2.3** Preserve @SIM metadata extraction
+  - The @SIM metadata (T_START, T_END, N_STEPS) is in Antimony comments
+  - RoadRunner/SBML won't preserve these
+  - Extract before conversion and attach to SymSystem
+
+#### Phase 3: Update CLI & Entry Points
+
+- [ ] **3.1** Update `cli.py:recast_file()` 
+  - Replace: `ir = parse_antimony(txt); sym = build_sym_system(ir)`
+  - With: `sym = parse_antimony_via_sbml(txt)`
+  - Extract @SIM metadata separately
+
+- [ ] **3.2** Update `__init__.py` exports
+  - Add `parse_antimony_via_sbml` to `__all__`
+  - Keep `parse_antimony` temporarily for backwards compatibility (deprecate later)
+
+- [ ] **3.3** Update `notebook_helpers.py` if needed
+  - Check if it uses parse_antimony directly
+  - Update to use new function
+
+#### Phase 4: Testing
+
+- [ ] **4.1** Test against test_models3 (baseline guard)
+  - MUST still pass 18/18
+  - If any regression, STOP and debug
+
+- [ ] **4.2** Test against test_models1 (the failing suite)
+  - Should now work with reference parser
+  - Document any remaining failures (model issues, not parser)
+
+- [ ] **4.3** Test against test_models2
+  - Run full validation suite
+  - Document results
+
+- [ ] **4.4** Test biomodels scripts still work
+  - They use `parse_sbml()` directly, should be unaffected
+  - Verify `python biomodels/3_recast_batch.py --limit 5` works
+
+#### Phase 5: Cleanup (After Tests Pass)
+
+- [ ] **5.1** Remove deprecated code from `recaster.py`
+  - Delete `parse_antimony()` (~300 lines)
+  - Delete `build_sym_system()` (~100 lines)
+  - Delete `ModelIR` dataclass (~30 lines)
+  - Delete helper functions only used by above
+
+- [ ] **5.2** Update docstrings and comments
+  - Document the SBML-first architecture
+  - Update module docstring
+
+- [ ] **5.3** Update README.md
+  - Note dependency on libroadrunner
+  - Update installation instructions if needed
+
+- [ ] **5.4** Final validation run
+  - All test directories: test_models1, test_models2, test_models3
+  - Run pytest unit tests
+  - Verify notebook generation still works
+
+### Rollback Procedure
+
+If something goes wrong:
+```bash
+git checkout main -- src/ssys/recaster.py src/ssys/cli.py pyproject.toml
+```
+
+The old parser code can be restored instantly from git history.
+
+### Benefits
+
+1. **No more parser bugs** - Using reference Antimony parser
+2. **All Antimony syntax supported** - Not just what we implemented
+3. **~400 lines of code deleted** - Less maintenance burden
+4. **Canonicalized SBML** - Clear semantics for reactions, rules, etc.
+5. **Consistent with biomodels workflow** - Same pipeline
+
+### Risks & Mitigations
+
+| Risk | Mitigation |
+|------|------------|
+| RoadRunner not installed | Error with clear message pointing to install |
+| SBML conversion loses info | Extract @SIM metadata before conversion |
+| Performance regression | Unlikely; RoadRunner is fast |
+| Unit tests break | Fix tests to use new API |
+
+### Dependencies After Refactor
+
+**Core (required):**
+```toml
+dependencies = [
+    "sympy>=1.12",
+    "numpy>=1.24,<2",
+    "scipy>=1.10",
+    "matplotlib>=3.7",
+    "nbformat>=5.9",
+    "libroadrunner>=2.5",
+    "antimony>=2.13",
+    "python-libsbml>=5.20",
+]
+```
+
+**Dev (testing only):**
+```toml
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.1",
+    "mypy>=1.7",
+    "jupyter>=1.0",
+]
+```
+
+---
 
 ## Autonomous Lifting for Strict GMA/S-System
 
