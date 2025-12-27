@@ -458,6 +458,133 @@ def parse_antimony(text: str) -> ModelIR:
     return ir
 
 
+def _extract_sim_metadata(text: str) -> Tuple[Optional[float], Optional[float], Optional[int]]:
+    """
+    Extract @SIM metadata from Antimony comments.
+    
+    Format: // @SIM T_START=0 T_END=100 N_STEPS=500
+    
+    Args:
+        text: Antimony text to scan for @SIM metadata
+    
+    Returns:
+        Tuple of (t_start, t_end, n_steps), any of which may be None if not found
+    """
+    t_start = None
+    t_end = None
+    n_steps = None
+    
+    sim_marker_pattern = re.compile(r'@SIM\b')
+    key_value_pattern = re.compile(r'(\w+)\s*=\s*([0-9.eE+-]+)')
+    
+    for line in text.splitlines():
+        if '//' in line:
+            comment_part = line.split('//', 1)[1]
+            if sim_marker_pattern.search(comment_part):
+                for match in key_value_pattern.finditer(comment_part):
+                    key = match.group(1).upper()
+                    value = match.group(2)
+                    if key == 'T_START':
+                        try:
+                            t_start = float(value)
+                        except ValueError:
+                            pass
+                    elif key == 'T_END':
+                        try:
+                            t_end = float(value)
+                        except ValueError:
+                            pass
+                    elif key == 'N_STEPS':
+                        try:
+                            n_steps = int(float(value))
+                        except ValueError:
+                            pass
+    
+    return t_start, t_end, n_steps
+
+
+def parse_antimony_via_sbml(antimony_text: str) -> 'SymSystem':
+    """
+    Parse Antimony text using RoadRunner's reference parser (SBML-first approach).
+    
+    Pipeline: Antimony text → RoadRunner → SBML string → libSBML → SymSystem
+    
+    This replaces the fragile hand-rolled parse_antimony() + build_sym_system()
+    with the reference Antimony parser, ensuring all valid Antimony syntax is handled.
+    
+    Args:
+        antimony_text: Antimony model text
+    
+    Returns:
+        SymSystem ready for recasting
+    
+    Raises:
+        ImportError: If roadrunner is not installed
+        ValueError: If Antimony cannot be parsed
+    """
+    try:
+        import roadrunner
+    except ImportError:
+        raise ImportError(
+            "libroadrunner is required for Antimony parsing. "
+            "Install with: pip install libroadrunner"
+        )
+    
+    # Extract @SIM metadata BEFORE conversion (comments are lost in SBML)
+    t_start, t_end, n_steps = _extract_sim_metadata(antimony_text)
+    
+    # Use RoadRunner to parse Antimony and convert to SBML
+    try:
+        rr = roadrunner.RoadRunner()
+        rr.loadAntimonyString(antimony_text)
+        sbml_string = rr.getSBML()
+    except Exception as e:
+        raise ValueError(f"RoadRunner failed to parse Antimony: {e}")
+    
+    # Parse SBML string using existing infrastructure
+    sym = parse_sbml_from_string(sbml_string)
+    
+    # Attach simulation metadata if found
+    # Note: SymSystem doesn't have these fields, so we store as a workaround
+    # The CLI will need to extract these from the original text
+    sym._sim_t_start = t_start
+    sym._sim_t_end = t_end
+    sym._sim_n_steps = n_steps
+    
+    return sym
+
+
+def parse_sbml_from_string(sbml_string: str) -> 'SymSystem':
+    """
+    Parse an SBML string and return a SymSystem for recasting.
+    
+    This is the string-input variant of parse_sbml(), used by parse_antimony_via_sbml().
+    
+    Args:
+        sbml_string: SBML model as string
+    
+    Returns:
+        SymSystem ready for recasting
+    
+    Raises:
+        ImportError: If python-libsbml is not installed
+        ValueError: If SBML cannot be parsed or has no model
+    """
+    try:
+        import libsbml
+    except ImportError:
+        raise ImportError(
+            "python-libsbml is required for SBML parsing. "
+            "Install with: pip install python-libsbml"
+        )
+    
+    # Read SBML from string
+    doc = libsbml.readSBMLFromString(sbml_string)
+    
+    # Delegate to shared implementation
+    return _parse_sbml_document(doc, source="<string>")
+
+
 def parse_sbml(sbml_path: str) -> 'SymSystem':
     """
     Parse an SBML file and return a SymSystem for recasting.
@@ -492,6 +619,23 @@ def parse_sbml(sbml_path: str) -> 'SymSystem':
     # Read SBML file
     doc = libsbml.readSBML(sbml_path)
     
+    # Delegate to shared implementation
+    return _parse_sbml_document(doc, source=sbml_path)
+
+
+def _parse_sbml_document(doc, source: str = "<unknown>") -> 'SymSystem':
+    """
+    Shared implementation for parsing an SBML document.
+    
+    Args:
+        doc: libsbml.SBMLDocument object
+        source: Description of source for error messages
+    
+    Returns:
+        SymSystem ready for recasting
+    """
+    import libsbml
+    
     # Check for errors
     if doc.getNumErrors() > 0:
         errors = []
@@ -500,11 +644,11 @@ def parse_sbml(sbml_path: str) -> 'SymSystem':
             if err.getSeverity() >= libsbml.LIBSBML_SEV_ERROR:
                 errors.append(err.getMessage())
         if errors:
-            raise ValueError(f"SBML parsing errors: {'; '.join(errors)}")
+            raise ValueError(f"SBML parsing errors in {source}: {'; '.join(errors)}")
     
     model = doc.getModel()
     if model is None:
-        raise ValueError(f"No model found in SBML file: {sbml_path}")
+        raise ValueError(f"No model found in SBML source: {source}")
     
     # ========================================================================
     # STEP 1: Extract species information
@@ -616,7 +760,7 @@ def parse_sbml(sbml_path: str) -> 'SymSystem':
         # Parse rate expression
         try:
             rate_expr = sp.sympify(formula_str, locals=all_syms)
-        except Exception as e:
+        except Exception:
             # Skip reactions with unparseable rate laws
             continue
         
