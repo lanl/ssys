@@ -4055,7 +4055,8 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast",
     return _sympy_to_antimony_syntax("\n".join(lines))
 
 
-def ssystem_to_antimony(result, model_name: str = "recast", mode: str = "simplified") -> str:
+def ssystem_to_antimony(result, model_name: str = "recast", mode: str = "simplified",
+                        lifted_mode: str = "ode") -> str:
     """
     Format canonical S-system or GMA to Antimony based on result status.
     
@@ -4065,6 +4066,9 @@ def ssystem_to_antimony(result, model_name: str = "recast", mode: str = "simplif
         mode: Output mode ('simplified' or 'canonical')
             - 'simplified': Basic format with comments
             - 'canonical': Enhanced format with species declarations, observables, and detailed comments
+        lifted_mode: How to output lifted auxiliary variables (Y_1, Y_2, etc.)
+            - 'ode': Output as species with ODEs (default, may drift)
+            - 'assignment': Output as assignment rules (algebraically exact)
     """
     # CRITICAL: Antimony identifiers cannot start with numbers or contain hyphens
     # Prefix with 'm_' if name starts with digit, replace hyphens with underscores
@@ -4081,7 +4085,7 @@ def ssystem_to_antimony(result, model_name: str = "recast", mode: str = "simplif
     
     # Check if this is GMA format
     if result.status == RecastStatus.GMA:
-        return gma_to_antimony(result, model_name)
+        return gma_to_antimony(result, model_name, lifted_mode=lifted_mode)
     
     # Route to appropriate formatter based on mode
     if mode == "canonical":
