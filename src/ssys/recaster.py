@@ -7,8 +7,144 @@ import sympy as sp
 
 arrow_pat = re.compile(r"<->|->")
 prime_rule_pat = re.compile(r"^\s*\$?([A-Za-z_]\w*)\s*'\s*=\s*(.+)$")
+# Pattern to detect function definitions: name(param1, param2, ...) := expression
+# Examples: s(x) := x^h / (1 + x^h)
+#           f(x) := (1 - delta) * (1 - s(x)) + delta
+#           M(x) := 1 + gam * h * x^(h - 1) / (1 + x^h)^2
+func_def_pat = re.compile(r"^([A-Za-z_]\w*)\s*\(([^)]*)\)\s*:=\s*(.+)$")
+# Pattern to detect function calls in expressions: name(arg1, arg2, ...)
+func_call_pat = re.compile(r"([A-Za-z_]\w*)\s*\(([^()]*)\)")
 
 EPS_INIT = 1e-9
+
+
+def _expand_function_calls(expr_str: str, function_templates: Dict[str, Tuple[List[str], str]], max_depth: int = 10) -> str:
+    """
+    Recursively expand function calls in an expression using function templates.
+    
+    Args:
+        expr_str: Expression string potentially containing function calls
+        function_templates: Dict mapping function name to (params_list, body_expr)
+        max_depth: Maximum recursion depth to prevent infinite loops
+    
+    Returns:
+        Expression string with all function calls expanded
+    
+    Examples:
+        Given templates:
+            s(x) := x^h / (1 + x^h)
+            f(x) := (1 - delta) * (1 - s(x)) + delta
+            M(x) := 1 + gam * h * x^(h - 1) / (1 + x^h)^2
+        
+        _expand_function_calls("M(x1)", templates)
+        → "1 + gam * h * x1^(h - 1) / (1 + x1^h)^2"
+        
+        _expand_function_calls("f(x3)", templates)  
+        → "(1 - delta) * (1 - x3^h / (1 + x3^h)) + delta"
+    """
+    if max_depth <= 0:
+        return expr_str  # Prevent infinite recursion
+    
+    if not function_templates:
+        return expr_str
+    
+    result = expr_str
+    changed = True
+    
+    while changed and max_depth > 0:
+        changed = False
+        max_depth -= 1
+        
+        # Find all function calls in the expression
+        # We need to handle nested parentheses carefully
+        # Use an iterative approach: find innermost function calls first
+        
+        for match in list(func_call_pat.finditer(result)):
+            func_name = match.group(1)
+            args_str = match.group(2).strip()
+            
+            # Check if this is a known function template
+            if func_name not in function_templates:
+                continue  # Skip built-in functions like sin, cos, exp, etc.
+            
+            params, body = function_templates[func_name]
+            
+            # Parse arguments (split by comma, handling nested parentheses)
+            args = _parse_function_args(args_str)
+            
+            # Check argument count matches parameter count
+            if len(args) != len(params):
+                continue  # Skip if argument count doesn't match
+            
+            # Perform substitution: replace each param with corresponding arg
+            expanded = body
+            for param, arg in zip(params, args):
+                # Use word boundary replacement to avoid partial matches
+                # e.g., replacing 'x' shouldn't affect 'x1' or 'exp'
+                expanded = _substitute_param(expanded, param, arg)
+            
+            # Wrap in parentheses to preserve operator precedence
+            expanded = f"({expanded})"
+            
+            # Replace the function call with the expanded body
+            result = result[:match.start()] + expanded + result[match.end():]
+            changed = True
+            break  # Start over after each substitution to handle nested calls
+    
+    return result
+
+
+def _parse_function_args(args_str: str) -> List[str]:
+    """
+    Parse comma-separated function arguments, respecting nested parentheses.
+    
+    Example: "x1, (a + b), f(y, z)" → ["x1", "(a + b)", "f(y, z)"]
+    """
+    if not args_str.strip():
+        return []
+    
+    args = []
+    current_arg = ""
+    paren_depth = 0
+    
+    for char in args_str:
+        if char == '(':
+            paren_depth += 1
+            current_arg += char
+        elif char == ')':
+            paren_depth -= 1
+            current_arg += char
+        elif char == ',' and paren_depth == 0:
+            args.append(current_arg.strip())
+            current_arg = ""
+        else:
+            current_arg += char
+    
+    # Don't forget the last argument
+    if current_arg.strip():
+        args.append(current_arg.strip())
+    
+    return args
+
+
+def _substitute_param(body: str, param: str, arg: str) -> str:
+    """
+    Substitute a parameter with its argument in a function body.
+    Uses word boundary matching to avoid partial substitutions.
+    
+    Example: _substitute_param("x^h / (1 + x^h)", "x", "x1")
+             → "x1^h / (1 + x1^h)"
+    
+    This correctly handles:
+    - "x" → "x1" (simple variable)
+    - "x^h" → "x1^h" (variable with exponent)
+    - Does NOT change "exp" when replacing "x"
+    """
+    # Build a regex pattern that matches the parameter as a whole word
+    # Word boundaries include: start/end of string, operators, parentheses, spaces
+    # Use negative lookbehind and lookahead for alphanumerics and underscore
+    pattern = r'(?<![A-Za-z_\d])' + re.escape(param) + r'(?![A-Za-z_\d])'
+    return re.sub(pattern, arg, body)
 
 def tokenize_species_side(side: str) -> List[Tuple[int, str]]:
     parts = [p.strip() for p in side.split('+') if p.strip()]
@@ -78,6 +214,9 @@ class ModelIR:
     sim_t_start: Optional[float] = None  # Simulation start time
     sim_t_end: Optional[float] = None  # Simulation end time
     sim_n_steps: Optional[int] = None  # Number of simulation steps
+    # Function templates: name -> (param_list, expression_body)
+    # e.g., "M" -> (["x"], "1 + gam * h * x^(h-1) / (1 + x^h)^2")
+    function_templates: Dict[str, Tuple[List[str], str]] = field(default_factory=dict)
 
 def _antimony_to_sympy_syntax(expr_str: str) -> str:
     """Convert Antimony exponentiation syntax (^) to Python/SymPy syntax (**)."""
@@ -289,6 +428,18 @@ def parse_antimony(text: str) -> ModelIR:
                 continue
 
             # Assignment rules: name := expression
+            # FIRST check if this is a function definition: name(params) := expr
+            func_match = func_def_pat.match(stmt)
+            if func_match:
+                func_name = func_match.group(1)
+                params_str = func_match.group(2).strip()
+                body = func_match.group(3).strip()
+                # Parse parameter list
+                params = [p.strip() for p in params_str.split(',') if p.strip()]
+                # Store as function template
+                ir.function_templates[func_name] = (params, body)
+                continue
+            
             if ":=" in stmt:
                 left, right = stmt.split(":=", 1)
                 left = left.strip()
@@ -602,6 +753,18 @@ def build_sym_system(ir: ModelIR) -> SymSystem:
             continue
         param_syms[nm] = sp.symbols(nm, positive=True)
     
+    # CRITICAL: Expand function template calls BEFORE sympifying
+    # This handles Antimony function definitions like:
+    #   M(x) := 1 + gam*h*x^(h-1)/(1+x^h)^2
+    #   x1' = beta*(y1-x1)/M(x1)  →  x1' = beta*(y1-x1)/(1 + gam*h*x1^(h-1)/(1+x1^h)^2)
+    expanded_explicit_rates: Dict[str, str] = {}
+    for nm, expr_str in ir.explicit_rates.items():
+        expanded_explicit_rates[nm] = _expand_function_calls(expr_str, ir.function_templates)
+    
+    expanded_assignment_rules: Dict[str, str] = {}
+    for nm, expr_str in ir.assignment_rules.items():
+        expanded_assignment_rules[nm] = _expand_function_calls(expr_str, ir.function_templates)
+    
     # Parse assignment rules into symbolic expressions
     # Handle nested rules by expanding iteratively until stable
     assignment_exprs: Dict[str, sp.Expr] = {}
@@ -639,7 +802,7 @@ def build_sym_system(ir: ModelIR) -> SymSystem:
             if nm in ir.boundary:
                 continue
             odes[var_syms[nm]] += sp.Integer(net) * rate
-    for nm, expr in ir.explicit_rates.items():
+    for nm, expr in expanded_explicit_rates.items():
         if nm not in var_syms:
             continue
         rate = sp.sympify(expr, locals={**var_syms, **param_syms})
