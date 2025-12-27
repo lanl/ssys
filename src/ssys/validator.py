@@ -158,6 +158,11 @@ class RecastValidator:
         # Extract auxiliary definitions from comments
         self.auxiliary_defs = self._extract_auxiliary_definitions(recast_text)
         
+        # CRITICAL FIX: Also extract auxiliary definitions from ACTUAL assignment rules
+        # (not just comment definitions). This handles lifted_mode='assignment' output
+        # where Y_1 := a^2 + 1 is an actual Antimony statement, not a comment.
+        self._merge_assignment_rules_as_auxiliaries()
+        
         # Merge auxiliary definitions into factor_map for use in validation
         self.factor_map.update(self.auxiliary_defs)
         
@@ -255,6 +260,73 @@ class RecastValidator:
                             mapping[orig_sym] = sp.Symbol(expr_str)
         
         return mapping
+    
+    def _merge_assignment_rules_as_auxiliaries(self):
+        """
+        Merge actual Antimony assignment rules into auxiliary_defs.
+        
+        When using lifted_mode='assignment', lifted auxiliaries are output as actual
+        Antimony assignment rules (e.g., `Y_1 := a^2 + 1;`) rather than comment definitions.
+        These rules are already parsed into recast_ir.assignment_rules, but we need to
+        also add them to auxiliary_defs for the symbolic validation to substitute them.
+        
+        IMPORTANT: Only merge rules that look like lifted auxiliaries (Y_1, Y_2, etc.)
+        and don't correspond to original model assignment rules.
+        """
+        import re
+        
+        # Get original assignment rule names to avoid treating them as auxiliaries
+        orig_rule_names = set(self.orig_ir.assignment_rules.keys())
+        
+        # Get recast assignment rules
+        recast_rules = self.recast_ir.assignment_rules
+        
+        # Get state variables (we don't want to treat state vars as auxiliaries)
+        state_vars = set(str(v) for v in self.recast_odes.keys())
+        
+        # Pattern for lifted auxiliary names: Y_N or similar
+        lifted_aux_pattern = re.compile(r'^[YZ]_\d+$')
+        
+        for rule_name, rule_expr_str in recast_rules.items():
+            # Skip if this is an original assignment rule
+            if rule_name in orig_rule_names:
+                continue
+            
+            # Skip if this is a state variable
+            if rule_name in state_vars:
+                continue
+            
+            # Only process rules that look like lifted auxiliaries
+            # OR any rule that's not in original (could be lifted denominator)
+            if lifted_aux_pattern.match(rule_name) or rule_name not in orig_rule_names:
+                # Parse the rule expression to sympy
+                try:
+                    # Build local dict for sympify (include state vars and params)
+                    local_dict = {}
+                    for var in self.recast_odes.keys():
+                        local_dict[str(var)] = sp.Symbol(str(var), positive=True)
+                    for param_name in self.recast_ir.params:
+                        local_dict[param_name] = sp.Symbol(param_name, positive=True)
+                    
+                    # Also extract identifiers from the rule itself
+                    identifiers = re.findall(r'[a-zA-Z_][a-zA-Z0-9_]*', rule_expr_str)
+                    sympy_functions = {'exp', 'log', 'sin', 'cos', 'tan', 'sqrt', 
+                                     'sinh', 'cosh', 'tanh', 'asin', 'acos', 'atan'}
+                    for name in identifiers:
+                        if name not in local_dict and name not in sympy_functions:
+                            local_dict[name] = sp.Symbol(name, positive=True)
+                    
+                    # Parse expression
+                    aux_sym = sp.Symbol(rule_name, positive=True)
+                    aux_expr = sp.sympify(rule_expr_str, locals=local_dict)
+                    
+                    # Add to auxiliary_defs if not already there
+                    if aux_sym not in self.auxiliary_defs:
+                        self.auxiliary_defs[aux_sym] = aux_expr
+                        
+                except Exception as e:
+                    # Skip rules that fail to parse
+                    pass
     
     def _extract_refusal_reason(self, recast_text: str) -> Optional[str]:
         """
