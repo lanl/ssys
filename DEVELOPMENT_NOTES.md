@@ -18,7 +18,7 @@ This document contains development plans and investigation records for the ssys 
 
 ## Autonomous Lifting for Strict GMA/S-System
 
-**Status:** In Progress
+**Status:** COMPLETED (Clock Approach)
 
 ### Objective
 
@@ -36,9 +36,38 @@ This is **not strict GMA** because:
 2. Assignment rules depending on `time` make the system nonautonomous
 3. The RHS still contains transcendental functions (cos, tanh, sqrt)
 
-### Solution: Autonomous Lifting
+### Solution Implemented: Clock Approach
 
-Replace each time-dependent function with a state variable whose ODE generates that function.
+For time-dependent models, we use a **clock state variable** approach:
+
+1. **Add clock state**: T' = 1, T(0) = 0
+2. **Substitute time → T** in all ODEs and assignment rules
+3. **Keep assignment rules as-is** (not expanded to ODEs)
+
+This produces output classified as **"GMA with time-varying coefficients"**:
+- ODE RHS has power-law structure in state variables
+- Coefficients are functions of clock state T via assignment rules
+- System is autonomous (no explicit `time` in ODEs)
+
+**Example (Weber2018):**
+```
+Input: S_1' = -k_12*S_1 + k_21*S_2 where k_23 := f(time)
+Output:
+  T' = 1;  // Clock
+  S_1' = -k_12*S_1 + k_21*S_2;  // Same structure
+  k_23 := f(T);  // Assignment rule uses clock T
+```
+
+**Classification hierarchy:**
+1. `CANONICAL_SSYSTEM` - exactly 2 terms per equation, constant coefficients
+2. `SSYSTEM` - 1-2 terms per equation, constant coefficients
+3. `GMA` - multiple monomials, constant coefficients
+4. `GMA_TIME_VARYING` - power-law structure, time-varying coefficients via assignment rules
+5. `GENERAL` - non-power-law terms
+
+### Alternative: Pure GMA Lifting (Deferred)
+
+The original approach of lifting time-functions to ODEs:
 
 ### Phase 1: Pattern-Based Lifting
 

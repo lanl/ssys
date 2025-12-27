@@ -18,12 +18,14 @@ from ssys.recaster import (
     SymSystem,
     RecastResult,
     SSysEquation,
+    SystemClass,
     parse_antimony,
     parse_sbml,
     build_sym_system,
     recast_to_ssystem,
     ssystem_to_antimony,
     canonicalize_aux_names,
+    classify_result,
 )
 
 __version__ = "0.4.0"
@@ -33,10 +35,12 @@ __all__ = [
     "SymSystem",
     "RecastResult",
     "SSysEquation",
+    "SystemClass",
     "parse_antimony",
     "parse_sbml",
     "build_sym_system",
     "recast_to_ssystem",
     "ssystem_to_antimony",
     "canonicalize_aux_names",
+    "classify_result",
 ]

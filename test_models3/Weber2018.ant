@@ -36,15 +36,6 @@
 
 model WeberRaymondMunsky2018_Model2_LambdaA
 
-  // Compartment
-  compartment cell = 1;
-
-  // Species (state variables)
-  species S_1 in cell;   // promoter state 1
-  species S_2 in cell;   // promoter state 2
-  species S_3 in cell;   // promoter state 3
-  species R   in cell;   // mean mRNA count
-
   // Constants and parameters
   // Note: 'pi' is a built-in constant in Antimony, no need to define it
 
@@ -80,21 +71,11 @@ model WeberRaymondMunsky2018_Model2_LambdaA
   k_23_raw := k_23_0 + beta*Y_1;
   k_23 := 0.5 * (k_23_raw + sqrt(k_23_raw^2 + eps_k^2));
 
-  // ODEs
-
-  // Promoter state probabilities
+  // ODEs (Promoter state probabilities and mean mRNA)
   S_1' = -k_12*S_1 + k_21*S_2;
-
-  S_2' =  k_12*S_1
-        - (k_21 + k_23)*S_2
-        + k_32*S_3;
-
-  S_3' =  k_23*S_2
-        - k_32*S_3;
-
-  // Mean mRNA
-  R'  =  k_r_2*S_2 + k_r_3*S_3
-        - gam*R;
+  S_2' =  k_12*S_1 - (k_21 + k_23)*S_2 + k_32*S_3;
+  S_3' =  k_23*S_2 - k_32*S_3;
+  R'   =  k_r_2*S_2 + k_r_3*S_3 - gam*R;
 
   // Initial conditions
   S_1 = 1;

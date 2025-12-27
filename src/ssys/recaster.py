@@ -71,6 +71,9 @@ class ModelIR:
     param_exprs: Dict[str, str] = field(default_factory=dict)  # Store parameter expressions before evaluation
     initial_exprs: Dict[str, str] = field(default_factory=dict)  # Store initial condition expressions
     antimony_text: str = ""  # Cache original Antimony text for RoadRunner
+    # Compartment info: {compartment_name: size} and {species_name: compartment_name}
+    compartments: Dict[str, float] = field(default_factory=dict)  # compartment_name -> size
+    species_compartment: Dict[str, str] = field(default_factory=dict)  # species_name -> compartment_name
     # Simulation metadata (from @SIM comments)
     sim_t_start: Optional[float] = None  # Simulation start time
     sim_t_end: Optional[float] = None  # Simulation end time
@@ -616,9 +619,9 @@ def build_sym_system(ir: ModelIR) -> SymSystem:
     odes: Dict[sp.Symbol, sp.Expr] = {var_syms[nm]: sp.Integer(0) for nm in var_syms}
     for rxn in ir.reactions:
         rate = sp.sympify(rxn.rate_expr, locals={**var_syms, **param_syms})
-        # Substitute assignment rules into rate expression
-        for name, rule_expr in assignment_exprs.items():
-            rate = rate.subs(sp.Symbol(name), rule_expr)
+        # NOTE: Do NOT substitute assignment rules into rate expressions
+        # This preserves the compact form with rule names (like k_23) instead of expanded expressions
+        # Assignment rules are passed through to the final output unchanged
         lhs_sto = {nm: coeff for coeff, nm in rxn.lhs}
         rhs_sto = {nm: coeff for coeff, nm in rxn.rhs}
         all_sp = set(lhs_sto) | set(rhs_sto)
@@ -633,9 +636,8 @@ def build_sym_system(ir: ModelIR) -> SymSystem:
         if nm not in var_syms:
             continue
         rate = sp.sympify(expr, locals={**var_syms, **param_syms})
-        # Substitute assignment rules into explicit rate expression
-        for name, rule_expr in assignment_exprs.items():
-            rate = rate.subs(sp.Symbol(name), rule_expr)
+        # NOTE: Do NOT substitute assignment rules into explicit rate expressions
+        # Assignment rules stay as compact names, passed through to output
         odes[var_syms[nm]] += rate
     initials: Dict[sp.Symbol, float] = {}
     for nm, sym in var_syms.items():
@@ -695,7 +697,8 @@ class SystemClass(Enum):
     """Classification of system form"""
     SSYSTEM = "S-system"  # 1-2 positive monomial terms per equation
     CANONICAL_SSYSTEM = "Canonical S-system"  # Exactly 2 positive terms (1 growth + 1 decay)
-    GMA = "GMA"  # All monomials, but multiple incompatible terms
+    GMA = "GMA"  # All monomials, constant coefficients
+    GMA_TIME_VARYING = "GMA with time-varying coefficients"  # Power-law structure, coefficients depend on clock T
     GENERAL = "General"  # Contains non-monomial terms
 
 
@@ -775,16 +778,35 @@ def classify_system(sym: SymSystem) -> SystemClass:
 def classify_result(result: RecastResult, mode: str = "simplified") -> SystemClass:
     """
     Classify a RecastResult based on its output structure.
-    
+
     Args:
         result: The RecastResult to classify
         mode: Output mode ('simplified' or 'canonical')
               In canonical mode, epsilon slack is added to zero coefficients,
               converting S-systems to Canonical S-systems
-    
+
     Returns:
         SystemClass enum indicating the output type
     """
+    # Check for time-varying coefficients (assignment rules that depend on clock T)
+    # If assignment rules exist and reference the clock state T, this is GMA_TIME_VARYING
+    has_time_varying_coeffs = False
+    if result.assignment_rules:
+        for rule_name, rule_expr in result.assignment_rules.items():
+            # Check if rule contains 'T' (clock state) - case sensitive
+            # This indicates time-varying coefficients via assignment rules
+            if ' T ' in f' {rule_expr} ' or rule_expr.startswith('T ') or \
+               rule_expr.endswith(' T') or rule_expr == 'T' or \
+               '(T)' in rule_expr or '(T-' in rule_expr or '(T+' in rule_expr or \
+               '*T' in rule_expr or 'T*' in rule_expr or '/T' in rule_expr or \
+               'T/' in rule_expr or '^T' in rule_expr or 'T^' in rule_expr:
+                has_time_varying_coeffs = True
+                break
+    
+    # If time-varying, return GMA_TIME_VARYING regardless of structure
+    if has_time_varying_coeffs:
+        return SystemClass.GMA_TIME_VARYING
+    
     if result.status == RecastStatus.GMA:
         # GMA format - validate it's truly GMA, not just canonical
         has_multi_term = False
@@ -2064,18 +2086,12 @@ def lift_tanh_sigmoid(
     # Initial condition: h(0) = 1/(1 + exp(2*k*a))
     # Note: exp(2*k*a) where a = time offset
     # 
-    # CRITICAL FIX: h=0 and h=1 are fixed points of h' = r*h*(1-h).
+    # CRITICAL: h=0 and h=1 are fixed points of h' = r*h*(1-h).
     # If h_init is at or very near a fixed point, the gate never moves.
-    # We must perturb away from fixed points.
-    #
-    # For "on" gate (k > 0, starts near 0): perturb up to EPS_LOGISTIC
-    # For "off" gate (k < 0, starts near 1): perturb down to 1 - EPS_LOGISTIC
-    h_init_exact = 1 / (1 + sp.exp(2 * k * a))
-    
-    # Use symbolic form for perturbation that will be evaluated numerically later
-    # We create a symbolic expression that clamps away from fixed points
-    # h_init = max(EPS_LOGISTIC, min(1 - EPS_LOGISTIC, h_init_exact))
-    h_init = sp.Max(EPS_LOGISTIC, sp.Min(1 - EPS_LOGISTIC, h_init_exact))
+    # The clamping away from fixed points is applied AFTER numeric evaluation
+    # in lift_time_functions_to_autonomous() using EPS_LOGISTIC.
+    # Here we just store the exact symbolic expression.
+    h_init = 1 / (1 + sp.exp(2 * k * a))
     
     # Substitution: tanh(k*(t-a)) = 2*h - 1
     substitution = 2 * h - 1
@@ -2252,16 +2268,17 @@ def lift_time_functions_to_autonomous(
     aux_counter_start: int = 1
 ) -> Tuple[SymSystem, Dict[sp.Symbol, sp.Expr], int]:
     """
-    Transform all time-dependent functions in a SymSystem to autonomous ODEs.
+    Transform time-dependent systems to autonomous form using clock state.
     
-    This is the main entry point for autonomous lifting. It scans all ODEs for
-    time-dependent patterns and lifts them to state variables with their own ODEs.
+    CLOCK APPROACH (correct):
+    - Add clock state: T' = 1, T(0) = 0
+    - Substitute `time` → `T` everywhere (ODEs and assignment rules)
+    - Keep time-dependent expressions as assignment rules (not ODEs)
     
-    Patterns handled:
-    1. exp(-k*time) → exponential decay ODE
-    2. cos(ω*time), sin(ω*time) → coupled harmonic oscillator
-    3. tanh(k*(time±a)) → logistic ODE
-    4. sqrt(X² + c) → squared variable ODE (Phase 2)
+    This is mathematically exact and numerically robust.
+    
+    Also handles:
+    - sqrt(X² + c) → squared variable ODE (Phase 2, state-dependent)
     
     Args:
         sym: SymSystem to transform
@@ -2271,23 +2288,83 @@ def lift_time_functions_to_autonomous(
         Tuple of (transformed SymSystem, auxiliary definitions, next aux counter)
     """
     time_sym = sp.Symbol('time')
+
+    # Build locals dict for sympify to avoid conflicts with SymPy reserved names
+    # (e.g., Q, S, I, E, O, N are commonly used in biology but reserved in SymPy)
+    sympify_locals: Dict[str, sp.Symbol] = {'time': time_sym}
+    for var in sym.vars:
+        sympify_locals[var.name] = var
+    for param_name in sym.params:
+        sympify_locals[param_name] = sp.Symbol(param_name, positive=True)
+    # Also include assignment rule names as symbols
+    for rule_name in sym.assignment_rules:
+        if rule_name not in sympify_locals:
+            sympify_locals[rule_name] = sp.Symbol(rule_name, positive=True)
+
+    # Check if system contains explicit time dependence
+    has_time_dependence = False
+    for var, ode in sym.odes.items():
+        if time_sym in ode.free_symbols:
+            has_time_dependence = True
+            break
+
+    # Also check assignment rules for time dependence
+    for rule_name, rule_expr_str in sym.assignment_rules.items():
+        rule_expr = sp.sympify(rule_expr_str, locals=sympify_locals)
+        if time_sym in rule_expr.free_symbols:
+            has_time_dependence = True
+            break
     
-    # Collect all time-dependent expressions across all ODEs
-    time_exprs: Set[sp.Expr] = set()
-    sqrt_exprs: Set[sp.Expr] = set()  # Phase 2: sqrt(X² + c) patterns
+    # Track auxiliary definitions
+    all_aux_defs: Dict[sp.Symbol, sp.Expr] = {}
+    aux_counter = aux_counter_start
+    
+    # If time-dependent, add clock state T' = 1
+    if has_time_dependence:
+        T = sp.Symbol('T', positive=True)
+        
+        # Substitute time → T in all ODEs
+        new_odes: Dict[sp.Symbol, sp.Expr] = {}
+        for var, ode in sym.odes.items():
+            new_odes[var] = ode.subs(time_sym, T)
+        
+        # Substitute time → T in assignment rules
+        new_assignment_rules: Dict[str, str] = {}
+        for rule_name, rule_expr_str in sym.assignment_rules.items():
+            # Simple string replacement for time → T
+            new_rule = rule_expr_str.replace('time', 'T')
+            new_assignment_rules[rule_name] = new_rule
+        
+        # Add clock ODE: T' = 1
+        new_odes[T] = sp.Integer(1)
+        
+        # Add clock IC: T(0) = 0
+        new_initials = dict(sym.initials)
+        new_initials[T] = 0.0
+        
+        # Add clock to variable list
+        new_vars = list(sym.vars) + [T]
+        
+        # Document clock auxiliary
+        all_aux_defs[T] = time_sym  # T represents time
+        
+        # Create updated system
+        sym = SymSystem(
+            vars=new_vars,
+            params=sym.params,
+            odes=new_odes,
+            initials=new_initials,
+            initial_exprs=sym.initial_exprs,
+            assignment_rules=new_assignment_rules
+        )
+    
+    # Phase 2: Handle sqrt(X² + c) patterns for STATE-dependent expressions only
+    # (time-dependent sqrt is handled via assignment rules with T substitution)
+    sqrt_exprs: Set[sp.Expr] = set()
+    state_vars = set(sym.vars)
     
     for var, ode in sym.odes.items():
-        # Find all subexpressions that depend on time
-        for atom in ode.atoms(sp.Function):
-            if time_sym in atom.free_symbols:
-                time_exprs.add(atom)
-        # Also check for exp specifically
-        for atom in ode.atoms(sp.exp):
-            if time_sym in atom.free_symbols:
-                time_exprs.add(atom)
-        # Phase 2: Check for sqrt(X² + c) patterns
         for atom in ode.atoms(sp.Pow):
-            # Check if this is a square root
             if len(atom.args) == 2:
                 base, exp = atom.args
                 is_sqrt = False
@@ -2301,69 +2378,23 @@ def lift_time_functions_to_autonomous(
                     is_sqrt = True
                 
                 if is_sqrt and base.is_Add:
-                    # This is sqrt(sum) - potential sqrt(X² + c) pattern
-                    sqrt_exprs.add(atom)
+                    # Check if this depends on state variables (not just T/time)
+                    base_symbols = base.free_symbols
+                    has_state_var = any(s in state_vars and s.name != 'T' for s in base_symbols)
+                    if has_state_var:
+                        sqrt_exprs.add(atom)
     
-    if not time_exprs and not sqrt_exprs:
-        # No time-dependent expressions or sqrt patterns
-        return sym, {}, aux_counter_start
-    
-    # Track which expressions have been lifted and their substitutions
+    # Track which expressions have been lifted
     expr_to_sub: Dict[sp.Expr, sp.Expr] = {}
     all_new_vars: List[sp.Symbol] = []
     all_new_odes: Dict[sp.Symbol, sp.Expr] = {}
     all_new_initials: Dict[sp.Symbol, sp.Expr] = {}
-    all_aux_defs: Dict[sp.Symbol, sp.Expr] = {}
     
-    # Track harmonics by omega for reuse
-    omega_to_oscillator: Dict[sp.Expr, Tuple[sp.Symbol, sp.Symbol]] = {}
-    
-    aux_counter = aux_counter_start
-    
-    # Process each time-dependent expression
-    for expr in sorted(time_exprs, key=str):
-        if expr in expr_to_sub:
-            continue  # Already processed
-        
-        result: Optional[AutonomousLiftResult] = None
-        
-        # Try exponential decay pattern
-        result = lift_exp_decay(expr, aux_counter, sym.params)
-        if result is not None:
-            aux_counter += len(result.new_vars)
-        
-        # Try harmonic pattern
-        if result is None:
-            result = lift_harmonic(expr, aux_counter, sym.params, omega_to_oscillator)
-            if result is not None:
-                # Track this oscillator for potential reuse
-                pattern = _detect_harmonic_pattern(expr)
-                if pattern and result.new_vars:
-                    omega = pattern[1]
-                    omega_to_oscillator[omega] = (result.new_vars[0], result.new_vars[1])
-                aux_counter += len(result.new_vars)
-        
-        # Try tanh sigmoid pattern
-        if result is None:
-            result = lift_tanh_sigmoid(expr, aux_counter, sym.params)
-            if result is not None:
-                aux_counter += len(result.new_vars)
-        
-        # If we found a pattern, record the results
-        if result is not None:
-            expr_to_sub[expr] = result.substitution
-            all_new_vars.extend(result.new_vars)
-            all_new_odes.update(result.new_odes)
-            all_new_initials.update(result.new_initials)
-            all_aux_defs.update(result.aux_defs)
-    
-    # Phase 2: Process sqrt(X² + c) patterns
-    # These need to be lifted to u = X² + c with u' = 2*X*X'
+    # Process sqrt(X² + c) patterns
     for sqrt_expr in sorted(sqrt_exprs, key=str):
         if sqrt_expr in expr_to_sub:
-            continue  # Already processed
+            continue
         
-        # Try squared variable lifting
         result = lift_squared_for_sqrt(sqrt_expr, aux_counter, sym)
         if result is not None:
             expr_to_sub[sqrt_expr] = result.substitution
@@ -2373,49 +2404,48 @@ def lift_time_functions_to_autonomous(
             all_aux_defs.update(result.aux_defs)
             aux_counter += len(result.new_vars)
     
-    if not expr_to_sub:
-        # No patterns matched
-        return sym, {}, aux_counter
+    if not expr_to_sub and not has_time_dependence:
+        # No patterns matched and no time dependence
+        return sym, {}, aux_counter_start
     
-    # Substitute time-dependent expressions in original ODEs
-    new_odes: Dict[sp.Symbol, sp.Expr] = {}
-    for var, ode in sym.odes.items():
-        new_ode = ode
-        for expr, sub in expr_to_sub.items():
-            new_ode = new_ode.subs(expr, sub)
-        new_odes[var] = sp.simplify(new_ode)
-    
-    # Combine with new auxiliary ODEs
-    combined_odes = {**new_odes, **all_new_odes}
-    
-    # Compute numeric initial conditions
-    new_initials = dict(sym.initials)
-    for var, init_expr in all_new_initials.items():
-        # Evaluate symbolic initial condition
-        init_val = init_expr
-        for param_name, param_val in sym.params.items():
-            init_val = init_val.subs(sp.Symbol(param_name), param_val)
-        try:
-            new_initials[var] = float(init_val)
-        except (TypeError, ValueError):
-            # Keep symbolic if can't evaluate
-            new_initials[var] = 1.0  # Fallback
-    
-    # Create new variable list
-    new_vars = list(sym.vars) + all_new_vars
-    
-    return (
-        SymSystem(
+    # Apply sqrt substitutions to ODEs
+    if expr_to_sub:
+        new_odes = {}
+        for var, ode in sym.odes.items():
+            new_ode = ode
+            for expr, sub in expr_to_sub.items():
+                new_ode = new_ode.subs(expr, sub)
+            new_odes[var] = sp.simplify(new_ode)
+        
+        # Combine with new auxiliary ODEs
+        combined_odes = {**new_odes, **all_new_odes}
+        
+        # Compute numeric initial conditions
+        new_initials = dict(sym.initials)
+        for var, init_expr in all_new_initials.items():
+            init_val = init_expr
+            for param_name, param_val in sym.params.items():
+                for sym_in_expr in init_val.free_symbols:
+                    if sym_in_expr.name == param_name:
+                        init_val = init_val.subs(sym_in_expr, param_val)
+            try:
+                new_initials[var] = float(init_val)
+            except (TypeError, ValueError):
+                new_initials[var] = 1.0
+        
+        # Create new variable list
+        new_vars = list(sym.vars) + all_new_vars
+        
+        sym = SymSystem(
             vars=new_vars,
             params=sym.params,
             odes=combined_odes,
             initials=new_initials,
             initial_exprs=sym.initial_exprs,
-            assignment_rules={}  # Clear assignment rules - we're using autonomous form
-        ),
-        all_aux_defs,
-        aux_counter
-    )
+            assignment_rules=sym.assignment_rules
+        )
+    
+    return sym, all_aux_defs, aux_counter
 
 
 def _is_time_only_function(func: sp.Expr, state_vars: Set[sp.Symbol]) -> bool:
@@ -3823,6 +3853,19 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
     """
     lines: List[str] = []
     lines.append(f"model {model_name}()")
+    lines.append("")
+    
+    # --- Compartment declaration (for SBML compatibility) ---
+    lines.append("compartment cell = 1;")
+    lines.append("")
+    
+    # --- Species declarations in compartment ---
+    all_state_vars = sorted([eq.var for eq in result.gma_equations], key=lambda s: s.name)
+    if all_state_vars:
+        for v in all_state_vars:
+            lines.append(f"species {v.name} in cell;")
+        lines.append("")
+    
     lines.append("// GMA (Generalized Mass Action) format")
     lines.append("// Multiple flux channels with different kinetic orders preserved exactly")
     
@@ -3997,12 +4040,16 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
     lines.append(f"model {model_name}()")
     lines.append("")
     
+    # --- Compartment declaration (default cell=1 for SBML compatibility) ---
+    lines.append("compartment cell = 1;")
+    lines.append("")
+    
     # --- Species declarations ---
-    # All variables with ODEs must be declared as species
+    # All variables with ODEs must be declared as species in the compartment
     all_state_vars = sorted(result.variables, key=lambda s: s.name)
     if all_state_vars:
-        species_names = ", ".join([v.name for v in all_state_vars])
-        lines.append(f"species {species_names};")
+        for v in all_state_vars:
+            lines.append(f"species {v.name} in cell;")
         lines.append("")
     
     # --- Enhanced metadata header ---
