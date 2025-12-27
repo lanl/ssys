@@ -1596,8 +1596,13 @@ class RecastValidator:
         """
         Compute initial conditions for recast model.
         
-        For auxiliary variables, compute from their definitions.
-        For original variables, use original initial conditions.
+        Priority order:
+        1. Explicit initial conditions from recast file (recast_ir.initial)
+        2. For original variables: use original model ICs
+        3. For auxiliaries: compute from definitions
+        4. Fallback: 1.0
+        
+        This ensures clock variables (T=0) are initialized correctly from the recast file.
         """
         y0 = {}
         orig_var_names = {str(v) for v in orig_vars}
@@ -1614,11 +1619,15 @@ class RecastValidator:
         for var in recast_vars:
             var_name = str(var)
             
-            if var_name in orig_var_names:
-                # Original variable - use original IC
+            # PRIORITY 1: Check if recast file has explicit IC for this variable
+            # This handles clock variables (T=0) and any other explicit ICs
+            if var_name in self.recast_ir.initial:
+                y0[var_name] = self.recast_ir.initial[var_name]
+            elif var_name in orig_var_names:
+                # PRIORITY 2: Original variable - use original IC
                 y0[var_name] = orig_initials.get(var_name, 1.0)
             elif var in self.auxiliary_defs:
-                # Auxiliary variable - compute from definition
+                # PRIORITY 3: Auxiliary variable - compute from definition
                 aux_def = self.auxiliary_defs[var]
                 subs_dict = {}
                 
@@ -1635,11 +1644,8 @@ class RecastValidator:
                 except:
                     y0[var_name] = 1.0  # Fallback
             else:
-                # Unknown - check recast IR initial
-                if var_name in self.recast_ir.initial:
-                    y0[var_name] = self.recast_ir.initial[var_name]
-                else:
-                    y0[var_name] = 1.0
+                # PRIORITY 4: Unknown variable - default
+                y0[var_name] = 1.0
         
         return y0
     
