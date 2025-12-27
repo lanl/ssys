@@ -3957,37 +3957,40 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast",
     lines.append("")
     
     # --- auxiliary variable definitions ---
-    # Filter out dummy_const (internal implementation detail) and clock variables
-    filtered_aux_defs = {}
+    # For comments: include ALL auxiliaries (including clock) for documentation
+    # For assignment rules: filter out clock variables (they need ODEs, not assignment rules)
+    all_aux_defs_for_comments = {}
+    filtered_aux_defs_for_rules = {}
     if result.auxiliary_defs:
         for k, v in result.auxiliary_defs.items():
             if k.name == "dummy_const":
-                continue  # Internal implementation detail
+                continue  # Internal implementation detail - exclude from both
             # Check if this is a clock variable (definition is just 'time')
             is_clock = (v == sp.Symbol('time') or str(v) == 'time')
-            if is_clock:
-                continue  # Clock variable needs ODE
-            filtered_aux_defs[k] = v
+            all_aux_defs_for_comments[k] = v  # Include in comments for validator
+            if not is_clock:
+                filtered_aux_defs_for_rules[k] = v  # Exclude clock from assignment rules
     
-    if filtered_aux_defs:
-        if lifted_mode == "assignment":
-            # Output as assignment rules (algebraically exact, prevents drift)
-            lines.append("// ========================================================================")
-            lines.append("// LIFTED DENOMINATORS (assignment rules to prevent drift)")
-            lines.append("// ========================================================================")
-            for aux, defn in sorted(filtered_aux_defs.items(), key=lambda kv: str(kv[0])):
-                defn_str = _sympy_to_antimony_syntax(str(defn))
-                lines.append(f"{aux} := {defn_str};")
-            lines.append("")
-        else:
-            # ODE mode: output definitions as comments for documentation
-            lines.append("// ========================================================================")
-            lines.append("// AUXILIARY DEFINITIONS (for lifted variables)")
-            lines.append("// ========================================================================")
-            for aux, defn in sorted(filtered_aux_defs.items(), key=lambda kv: str(kv[0])):
-                lines.append(f"// {aux} := {defn}")
-            lines.append("// ========================================================================")
-            lines.append("")
+    if lifted_mode == "assignment" and filtered_aux_defs_for_rules:
+        # Output as assignment rules (algebraically exact, prevents drift)
+        # EXCLUDE clock variables - they need ODEs, not assignment rules
+        lines.append("// ========================================================================")
+        lines.append("// LIFTED DENOMINATORS (assignment rules to prevent drift)")
+        lines.append("// ========================================================================")
+        for aux, defn in sorted(filtered_aux_defs_for_rules.items(), key=lambda kv: str(kv[0])):
+            defn_str = _sympy_to_antimony_syntax(str(defn))
+            lines.append(f"{aux} := {defn_str};")
+        lines.append("")
+    elif all_aux_defs_for_comments:
+        # ODE mode: output definitions as comments for documentation
+        # INCLUDE clock variables in comments for validator to recognize
+        lines.append("// ========================================================================")
+        lines.append("// AUXILIARY DEFINITIONS (for lifted variables)")
+        lines.append("// ========================================================================")
+        for aux, defn in sorted(all_aux_defs_for_comments.items(), key=lambda kv: str(kv[0])):
+            lines.append(f"// {aux} := {defn}")
+        lines.append("// ========================================================================")
+        lines.append("")
     
     # --- Assignment rules from original model (time-dependent quantities) ---
     if result.assignment_rules:
