@@ -3897,26 +3897,30 @@ def _format_factor(factor: sp.Expr) -> str:
     # Anything else - fallback to string representation
     return str(factor)
 
-def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
+def gma_to_antimony(result: RecastResult, model_name: str = "recast", 
+                    lifted_mode: str = "ode") -> str:
     """
     Format GMA equations to Antimony with clear labeling.
     Preserves all production/degradation terms exactly.
     
-    CRITICAL: Lifted auxiliary variables (Y_1, Y_2, etc.) are output as
-    ASSIGNMENT RULES, not species with ODEs. This prevents manifold drift
-    by ensuring algebraic constraints (e.g., Y_1 = a^2 + 1) are always exact.
+    Args:
+        result: RecastResult to format
+        model_name: Name for the output model
+        lifted_mode: How to output lifted auxiliary variables (Y_1, Y_2, etc.)
+            - "ode": Output as species with ODEs (default, may drift)
+            - "assignment": Output as assignment rules (algebraically exact)
     """
     lines: List[str] = []
     lines.append(f"model {model_name}()")
     lines.append("")
     
-    # --- Identify lifted auxiliaries ---
-    # Lifted auxiliaries have definitions in auxiliary_defs and should be
-    # assignment rules (computed from state), not state variables with ODEs.
-    # EXCEPTION: Clock variables (T := time) are state variables because they
-    # need T' = 1 ODE to evolve with time.
+    # --- Identify lifted auxiliaries based on mode ---
+    # Lifted auxiliaries have definitions in auxiliary_defs.
+    # In "ode" mode: output them as species with ODEs
+    # In "assignment" mode: output them as assignment rules (prevents manifold drift)
+    # EXCEPTION: Clock variables (T := time) are always state variables (need T' = 1)
     lifted_aux_names: Set[str] = set()
-    if result.auxiliary_defs:
+    if lifted_mode == "assignment" and result.auxiliary_defs:
         for aux, defn in result.auxiliary_defs.items():
             aux_name = aux.name if hasattr(aux, 'name') else str(aux)
             # Check if this is a clock variable (definition is just 'time')
@@ -3929,7 +3933,7 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
     lines.append("")
     
     # --- Species declarations in compartment ---
-    # Only declare species for variables that are NOT lifted auxiliaries
+    # Only declare species for variables that are NOT lifted auxiliaries (in assignment mode)
     all_gma_vars = sorted([eq.var for eq in result.gma_equations], key=lambda s: s.name)
     state_vars = [v for v in all_gma_vars if v.name not in lifted_aux_names]
     if state_vars:
@@ -3952,11 +3956,8 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
     
     lines.append("")
     
-    # --- auxiliary variable definitions as ASSIGNMENT RULES ---
-    # CRITICAL: Lifted auxiliaries (Y_1, Y_2, etc.) must be assignment rules,
-    # NOT species with ODEs. This prevents manifold drift.
-    # Filter out dummy_const (internal implementation detail, not meaningful for users)
-    # Also filter out clock variable T (needs ODE T' = 1)
+    # --- auxiliary variable definitions ---
+    # Filter out dummy_const (internal implementation detail) and clock variables
     filtered_aux_defs = {}
     if result.auxiliary_defs:
         for k, v in result.auxiliary_defs.items():
@@ -3969,14 +3970,24 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast") -> str:
             filtered_aux_defs[k] = v
     
     if filtered_aux_defs:
-        lines.append("// ========================================================================")
-        lines.append("// LIFTED DENOMINATORS (assignment rules to prevent drift)")
-        lines.append("// ========================================================================")
-        for aux, defn in sorted(filtered_aux_defs.items(), key=lambda kv: str(kv[0])):
-            # Output as Antimony assignment rule syntax
-            defn_str = _sympy_to_antimony_syntax(str(defn))
-            lines.append(f"{aux} := {defn_str};")
-        lines.append("")
+        if lifted_mode == "assignment":
+            # Output as assignment rules (algebraically exact, prevents drift)
+            lines.append("// ========================================================================")
+            lines.append("// LIFTED DENOMINATORS (assignment rules to prevent drift)")
+            lines.append("// ========================================================================")
+            for aux, defn in sorted(filtered_aux_defs.items(), key=lambda kv: str(kv[0])):
+                defn_str = _sympy_to_antimony_syntax(str(defn))
+                lines.append(f"{aux} := {defn_str};")
+            lines.append("")
+        else:
+            # ODE mode: output definitions as comments for documentation
+            lines.append("// ========================================================================")
+            lines.append("// AUXILIARY DEFINITIONS (for lifted variables)")
+            lines.append("// ========================================================================")
+            for aux, defn in sorted(filtered_aux_defs.items(), key=lambda kv: str(kv[0])):
+                lines.append(f"// {aux} := {defn}")
+            lines.append("// ========================================================================")
+            lines.append("")
     
     # --- Assignment rules from original model (time-dependent quantities) ---
     if result.assignment_rules:
