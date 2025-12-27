@@ -1636,35 +1636,31 @@ class RecastValidator:
             report.trajectory_test = self.check_trajectory_comparison()
         
         # Determine overall pass/fail
-        tests_run = []
-        if report.symbolic_test:
-            tests_run.append(report.symbolic_test)
-        if report.numerical_test:
-            tests_run.append(report.numerical_test)
-        if report.trajectory_test:
-            tests_run.append(report.trajectory_test)
+        # STRICT: ALL three tests (symbolic, numerical, trajectory) must PASS
+        # If any test fails, is not attempted, or times out, overall validation fails
         
-        # STRICT: Pass only if ALL tests pass (both symbolic AND numerical)
-        # A recast is validated only when both tests confirm equivalence
-        all_pass = all(t.result == ValidationResult.PASS for t in tests_run)
+        symbolic_pass = (report.symbolic_test is not None and 
+                        report.symbolic_test.result == ValidationResult.PASS)
+        numerical_pass = (report.numerical_test is not None and 
+                         report.numerical_test.result == ValidationResult.PASS)
+        trajectory_pass = (report.trajectory_test is not None and 
+                          report.trajectory_test.result == ValidationResult.PASS)
         
-        # Handle cases where a test was not attempted (e.g., time-dependent models)
-        # Count as not failing, but still require at least one definitive pass
-        any_fail = any(t.result == ValidationResult.FAIL for t in tests_run)
-        any_pass = any(t.result == ValidationResult.PASS for t in tests_run)
-        
-        # Overall pass requires:
-        # 1. No test failures, AND
-        # 2. At least one test passed (not all skipped/timeout)
-        report.overall_pass = (not any_fail) and any_pass
+        # All three tests must pass for overall pass
+        report.overall_pass = symbolic_pass and numerical_pass and trajectory_pass
         
         # Generate summary
         if report.overall_pass:
             report.summary = "✓ Validation PASSED: Recast is mathematically equivalent"
-        elif any_fail:
-            report.summary = "✗ Validation FAILED: Recast differs from original"
         else:
-            report.summary = "? Validation INCONCLUSIVE: Tests timed out or not attempted"
+            # Check if any test actually failed (vs. not attempted)
+            tests = [report.symbolic_test, report.numerical_test, report.trajectory_test]
+            any_fail = any(t is not None and t.result == ValidationResult.FAIL for t in tests)
+            
+            if any_fail:
+                report.summary = "✗ Validation FAILED: Recast differs from original"
+            else:
+                report.summary = "? Validation INCONCLUSIVE: Not all tests passed or were attempted"
         
         return report
 

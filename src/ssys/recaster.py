@@ -87,8 +87,15 @@ def _antimony_to_sympy_syntax(expr_str: str) -> str:
 
 
 def _sympy_to_antimony_syntax(expr_str: str) -> str:
-    """Convert Python/SymPy exponentiation syntax (**) to Antimony syntax (^)."""
-    return expr_str.replace('**', '^')
+    """Convert Python/SymPy syntax to Antimony syntax.
+    
+    Conversions:
+    - ** → ^ (exponentiation)
+    - Abs() → abs() (SBML-compatible absolute value)
+    """
+    result = expr_str.replace('**', '^')
+    result = result.replace('Abs(', 'abs(')
+    return result
 
 
 def parse_antimony(text: str) -> ModelIR:
