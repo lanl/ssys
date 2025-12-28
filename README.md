@@ -355,6 +355,41 @@ The tool classifies both input and output systems:
 
 ---
 
+## Handling Zero Initial Conditions
+
+S-systems require positive state variables due to power-law terms with potentially negative exponents. If a model has a state variable with initial condition `x(0) = 0`, the recaster uses **ε-regularization** to handle this:
+
+### Current Behavior
+
+Zero initial conditions are automatically replaced with a small positive value (`EPS_INIT`):
+- Default: `EPS_INIT = 1e-6`
+- User-configurable via `@SIM` metadata in the Antimony file
+
+### Configuration
+
+Specify `EPS_INIT` in your model's `@SIM` comment:
+```antimony
+// @SIM T_START=0 T_END=100 N_STEPS=500 EPS_INIT=1e-6
+// Note: Zero-valued initial conditions are replaced with EPS_INIT during recasting.
+```
+
+### Choosing EPS_INIT
+
+- **Smaller values** (e.g., `1e-9`): Higher accuracy if the solution immediately leaves zero
+- **Larger values** (e.g., `1e-4`): Better numerical stability for stiff systems
+- **Scale-aware**: If your variables have typical magnitude S, use `ε ≈ 1e-6 * S`
+
+### Limitations
+
+The ε-regularization approach:
+- Solves a slightly different IVP (the original had `x(0)=0`, the recast has `x(0)=ε`)
+- May introduce sensitivity near `t=0`
+- May break exact conservation laws that depend on zeros
+
+For models where exact zero handling is critical (e.g., Bergman minimal model), see `DEVELOPMENT_NOTES.md` for alternative strategies under consideration.
+
+---
+
 ## Examples
 
 ### Example 1: Exponential Decay

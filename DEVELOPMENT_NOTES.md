@@ -62,10 +62,11 @@ SymPy-based numerical validation that is already implemented.
 
 ---
 
-## Planned: Handling Zero Initial Conditions
+## Handling Zero Initial Conditions
 
-This section documents strategies for recasting models where a state variable has a 
-legitimate zero initial condition (e.g., Bergman minimal model).
+This section documents the current implementation and future strategies for recasting 
+models where a state variable has a legitimate zero initial condition (e.g., Bergman 
+minimal model, SIR models with R(0)=0).
 
 ### The Zero-IC Problem
 
@@ -78,12 +79,30 @@ Negative powers and log-based reasoning require strict positivity. If an origina
 has a legitimate state with `x(0)=0` (or a state that can hit 0), a strict S-system 
 recast with `x^-1` terms is not well-defined at that point.
 
-### Approach 1: Strict S-system with ε-regularized ICs
+---
 
-**Idea:** Produce a strict S-system recast (BST S-system). If any recast variable appears 
-with negative exponent (e.g., `Z^-1`), keep that variable positive by replacing zero ICs:
-- `x(0)=0` → `x(0)=ε`
-- similarly for any auxiliary variable that depends on that state
+### Current Implementation: ε-Regularized ICs (v0.5.2)
+
+**Status:** ✅ Implemented
+
+The recaster uses ε-regularization: zero initial conditions are replaced with a small 
+positive value during pool construction.
+
+**Configuration via @SIM metadata:**
+```antimony
+// @SIM T_START=0 T_END=100 N_STEPS=500 EPS_INIT=1e-6
+// Note: Zero-valued initial conditions are replaced with EPS_INIT during recasting.
+```
+
+**Parameters:**
+- `EPS_INIT`: The ε value used for zero IC replacement (default: `1e-6`)
+- User-configurable per model via `@SIM` comment metadata
+
+**How to choose ε:**
+- Use **scale-aware ε**, not universal constant
+- If variable has typical scale S, pick `ε ≈ 1e-12*S` to `1e-6*S` depending on tolerances
+- Ensure ε is above solver's absolute tolerance scale
+- For most biological models, `1e-6` is a reasonable default
 
 **Exactness:**
 - **Not exact** as an IVP when the original IC is truly zero (solving a different IVP)
@@ -95,21 +114,38 @@ with negative exponent (e.g., `Z^-1`), keep that variable positive by replacing 
 - Can be stable if ε chosen sensibly and resulting system is not excessively stiff
 - ε can introduce stiffness when it appears in denominators or negative powers
 
-**How to choose ε:**
-- Use **scale-aware ε**, not universal constant
-- If variable has typical scale S, pick `ε ≈ 1e-12*S` to `1e-8*S` depending on tolerances
-- Ensure ε is above solver's absolute tolerance scale
-
 **Pros:**
 - Produces pure S-system (useful if downstream tools assume S-system)
 - Keeps everything in ODE form (no assignment rules/DAEs)
+- Simple to use and configure
 
 **Cons:**
 - Not exact for true zero ICs
 - Can introduce stiffness and extreme sensitivity
 - Can break invariants and conservation laws that rely on exact zeros
 
-### Approach 2: Softplus/Exponential Positivity Transform (Regularization)
+---
+
+### Future Work: Alternative Zero-IC Strategies
+
+The following alternative approaches are documented for future implementation. These
+would be selectable via a CLI flag:
+
+```
+--zero-ic-strategy {epsilon,softplus,assignment}
+```
+
+| Strategy | Output Form | Exactness | Use Case |
+|----------|-------------|-----------|----------|
+| `epsilon` (current) | Strict S-system | Approximate | Default, when S-system form required |
+| `softplus` | Strict S-system | Approximate | Wide dynamic range, positivity constraints |
+| `assignment` | GMA + DAE | Exact | Critical zeros, avoid manifold drift |
+
+---
+
+#### Strategy: Softplus/Exponential Positivity Transform
+
+**CLI flag:** `--zero-ic-strategy softplus`
 
 **Idea:** Replace each positive-constrained variable `x` with a smooth positive function 
 of an unconstrained variable `u`:
@@ -123,6 +159,13 @@ Then recast the transformed system.
 - With softplus: represent values close to 0 by taking `u << 0`, but never exactly 0
 - With exp: can never represent 0 at all
 - Choose `u(0)` so that `x(0) ≈ ε`
+
+**Implementation requirements:**
+1. Transform input: `x → u` where `x = softplus(u)` or `x = exp(u)`
+2. Chain rule transformation of all ODEs: `u' = x'(u) / softplus'(u)`
+3. Solve for `u(0)` from `x(0)` (requires numerical solve for softplus inverse)
+4. Inverse transform for output interpretation
+5. ~150-250 lines of new code
 
 **Exactness:**
 - **Not an algebraically exact recast** of the original ODE in `x`
@@ -138,13 +181,18 @@ Then recast the transformed system.
 **Pros:**
 - Enforces positivity without hard clamps
 - Can make some systems more numerically robust
+- Preserves S-system structure
 
 **Cons:**
 - Not exact relative to original model with true zeros
 - Complicates interpretation and validation (must compare observables)
-- Often breaks strict GMA/S-system structure unless lifted further
+- Output variables are transformed (confusing for users)
 
-### Approach 3: GMA with Assignment Rules (Recommended)
+---
+
+#### Strategy: GMA with Assignment Rules
+
+**CLI flag:** `--zero-ic-strategy assignment`
 
 **Idea:** Avoid forcing strict S-system structure where it causes singularities. Instead:
 - Keep **ODEs** in **GMA** form (sum/difference of monomials where possible)
@@ -152,13 +200,22 @@ Then recast the transformed system.
   **assignment rules** rather than differential "lift" equations
 
 **Example pattern:**
-```
-// Define helper algebraic expression
-Z := 1 + x^2;
+```antimony
+// Instead of differential equation for lifted denominator:
+// W_1' = -W_1^2 * (X' + K')   <-- problematic if X(0)=0
 
-// Use in ODEs via assignment (do NOT integrate Z' as an ODE)
-y' = k * Z * y;
+// Use assignment rule:
+W_1 := 1/(X + K);
+
+// Then ODEs use W_1 directly:
+Y' = k * X * W_1;
 ```
+
+**Implementation requirements:**
+1. Add flag to `lift_rational_functions()` to optionally emit assignment rules
+2. Modify `ssystem_to_antimony()` to output `:=` rules for algebraic auxiliaries
+3. Track which auxiliaries are "algebraic" vs "differential" in RecastResult
+4. ~100-200 lines of changes to existing code
 
 **Exactness:**
 - **Algebraically exact** as a recast of the original system (same IVP)
@@ -178,24 +235,27 @@ y' = k * Z * y;
 - Not a strict S-system (BST) anymore
 - Some downstream tooling may not support assignment rules
 
-### Decision Table
+---
 
-| Goal | Best Approach | Rationale |
+### Strategy Selection Guide
+
+| Goal | Best Strategy | Rationale |
 |------|---------------|-----------|
-| Exact equivalence to original IVP | **3** | Assignment rules preserve algebra exactly |
-| Must output strict BST S-system | **1** | Only way without DAEs; accept ε as approximation |
-| Avoid manifold drift from lifted denominators | **3** | Keep constraints algebraic |
-| Strong positivity guarantees for numerics | **2** or **3** | 2 enforces; 3 avoids singularities |
+| Default / simple use | `epsilon` | Current implementation, works for most cases |
+| Exact equivalence to original IVP | `assignment` | Assignment rules preserve algebra exactly |
+| Must output strict BST S-system | `epsilon` | Only way without DAEs; accept ε as approximation |
+| Avoid manifold drift from lifted denominators | `assignment` | Keep constraints algebraic |
+| Wide dynamic range with positivity constraints | `softplus` | Smooth transform helps numerics |
 
 ### Recommendation
 
 For models where a state can be exactly zero and that zero is meaningful (e.g., Bergman):
 
-1. **Prefer Approach 3** (GMA + assignment rules) for an **exact**, robust recast
-2. Use Approach 1 only if you **must** deliver a strict S-system—then treat ε as part 
-   of the model specification and **report it** as a modeling choice
-3. Treat Approach 2 (softplus/log/exp) as an **approximation/regularization technique**, 
-   not as an exact recast
+1. **Use `--zero-ic-strategy assignment`** (GMA + assignment rules) for an **exact**, robust recast
+2. Use `--zero-ic-strategy epsilon` (current default) if you **must** deliver a strict S-system—
+   then treat ε as part of the model specification and configure via `EPS_INIT`
+3. Use `--zero-ic-strategy softplus` as an **approximation/regularization technique** for 
+   systems with extreme dynamic ranges
 
 ---
 
