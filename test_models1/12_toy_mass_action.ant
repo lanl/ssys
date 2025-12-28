@@ -26,4 +26,5 @@ model toy_mass_action()
   //   to arrive at canonical S-system equations. 
   // * All parameters are positive, as stated.
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0 T_END=20 N_STEPS=400 EPS_INIT=1e-6
+// Note: Zero-valued initial conditions are replaced with EPS_INIT during recasting.

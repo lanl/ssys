@@ -69,4 +69,5 @@ model Xiong2018_ThreeVariable_ContactKilling_Inhibitor
   A   = 0.0;
 
 end
-// @SIM T_START=0 T_END=100 N_STEPS=500
+// @SIM T_START=0 T_END=100 N_STEPS=500 EPS_INIT=1e-6
+// Note: Zero-valued initial conditions are replaced with EPS_INIT during recasting.

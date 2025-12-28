@@ -14,4 +14,5 @@ model central_t_S_system()
   X1 = c;
   X2 = nu;
   X3 = 0.386;
-end// @SIM T_START=0 T_END=20 N_STEPS=400
+end// @SIM T_START=0 T_END=20 N_STEPS=400 EPS_INIT=1e-6
+// Note: Zero-valued initial conditions are replaced with EPS_INIT during recasting.

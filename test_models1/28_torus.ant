@@ -25,4 +25,5 @@ model m_28_torus()
   Z_3' =  Z_1*(Z_1^2 + Z_2^2)^(-0.5);
 
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0 T_END=20 N_STEPS=400 EPS_INIT=1e-6
+// Note: Zero-valued initial conditions are replaced with EPS_INIT during recasting.

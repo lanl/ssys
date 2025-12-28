@@ -29,4 +29,5 @@ model feedback()
   // X_1_analytic(t) = (a/(b+c)) * (1 + (sqrt(c/b)*sin(t*sqrt(b*c)) - cos(t*sqrt(b*c))) * exp(-b*t))
   // X_2_analytic(t) = (a/(b+c)) * (1 - (sqrt(b/c)*sin(t*sqrt(b*c)) + cos(t*sqrt(b*c))) * exp(-b*t))
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0 T_END=20 N_STEPS=400 EPS_INIT=1e-6
+// Note: Zero-valued initial conditions are replaced with EPS_INIT during recasting.

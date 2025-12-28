@@ -25,4 +25,5 @@ model Michaelis_Menten_prod_deg_SSystem()
   X1 = 0.1;
   Y2 = Km2 + X1;   // ensures Y2(t) - X1(t) = Km2 for all t
 
-end// @SIM T_START=0 T_END=20 N_STEPS=400
+end// @SIM T_START=0 T_END=20 N_STEPS=400 EPS_INIT=1e-6
+// Note: Zero-valued initial conditions are replaced with EPS_INIT during recasting.

@@ -160,4 +160,5 @@ model DeYoungKeizer1992_IP3R_SinglePool_Reduced
   // x011 is computed from the conservation rule above.
 
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0 T_END=20 N_STEPS=400 EPS_INIT=1e-6
+// Note: Zero-valued initial conditions are replaced with EPS_INIT during recasting.
