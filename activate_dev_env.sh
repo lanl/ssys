@@ -66,13 +66,8 @@ show_env_info() {
         echo "libroadrunner: not available (RK4 fallback)"
     fi
     
-    # JAX status
-    if python -c "import jax" 2>/dev/null; then
-        local jax_version=$(python -c "import jax; print(jax.__version__)" 2>/dev/null)
-        echo "jax: $jax_version (fast autodiff)"
-    else
-        echo "jax: not installed (symbolic Jacobian fallback)"
-    fi
+    # JAX status - intentionally disabled (see DEVELOPMENT_NOTES.md)
+    echo "jax: not installed (use of JAX is intentionally disabled)"
     
     echo ""
     echo "Available commands:"
