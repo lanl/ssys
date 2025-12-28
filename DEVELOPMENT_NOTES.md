@@ -1,6 +1,6 @@
 # Development Notes
 
-Development notes for the ssys project. Feature requests and enhancements are
+Development notes for the ssys project. Deferred feature requests and enhancements are
 tracked as issues in the remote repository.
 
 ---
@@ -25,11 +25,10 @@ The ssys recaster is functional with the following capabilities:
 
 ---
 
-## Deferred: Legacy Parser Removal
+## Planned: Bespoke Parser Removal
 
 The hand-rolled Antimony parser (`parse_antimony()`, `build_sym_system()`, 
-`ModelIR`) is retained for backward compatibility. Cleanup deferred to a 
-future release.
+`ModelIR`) is retained for backward compatibility. Removal of this parser is planned for a near-term future release.
 
 **Files affected:** `src/ssys/recaster.py`
 
@@ -41,9 +40,31 @@ future release.
 
 ---
 
+## Planned: JAX Dependency Evaluation
+
+The optional `[jax]` extra in `pyproject.toml` provides JAX-based numerical validation 
+using automatic differentiation. This functionality appears largely redundant with the 
+SymPy-based numerical validation that is already implemented.
+
+**Investigation needed:**
+- Profile JAX vs SymPy validation performance on representative models
+- Identify any cases where JAX autodiff provides unique value (e.g., higher-dimensional models)
+- Measure JIT compilation overhead vs. evaluation speed
+
+**Current status:** JAX validation path is disabled by default due to observed slowdowns 
+(JIT compilation overhead). SymPy numerical validation provides equivalent coverage.
+
+**Files affected:**
+- `src/ssys/validator.py` - Contains disabled JAX validation code
+- `pyproject.toml` - `[jax]` optional dependency group
+
+**Decision:** If investigation shows no compelling use case, remove JAX dependency entirely.
+
+---
+
 ## Issue Tracking
 
-Feature requests are tracked in the remote repository:
+Notable deferred feature requests are tracked in the remote repository:
 
 - **GMA→S-System Condensation** - BST-style aggregation for approximate S-systems
 - **Piecewise Function Support** - Smooth sigmoid approximations for SBML piecewise
