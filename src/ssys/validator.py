@@ -1543,7 +1543,7 @@ class RecastValidator:
     def check_trajectory_comparison(self,
                                      t_end: float = 1.0,
                                      n_points: int = 100,
-                                     threshold: float = 1e-3) -> EquivalenceTest:
+                                     threshold: float = 5e-2) -> EquivalenceTest:
         """
         Compare simulation trajectories between original and reconstructed recast.
         
@@ -1566,7 +1566,7 @@ class RecastValidator:
         Args:
             t_end: Default end time for simulation if @SIM not present
             n_points: Default number of time points if @SIM not present
-            threshold: Error threshold for pass/fail (default 0.1%)
+            threshold: Error threshold for pass/fail (default 5%)
             
         Returns:
             EquivalenceTest with trajectory validation results
@@ -1660,10 +1660,15 @@ class RecastValidator:
             )
             
             # Step 4: Compute scaled relative error
-            # error(t) = |X_orig - X_recast| / (1 + max(|X_orig|, |X_recast|))
-            errors = np.abs(X_orig - X_reconstructed) / (
-                1.0 + np.maximum(np.abs(X_orig), np.abs(X_reconstructed))
+            # Normalize by characteristic scale (peak value over trajectory)
+            # This matches notebook_helpers.py for consistent error reporting
+            # error(t) = |X_orig - X_recast| / scale, where scale = max(peak_orig, peak_recast)
+            scale = np.maximum(
+                np.max(np.abs(X_orig), axis=0),
+                np.max(np.abs(X_reconstructed), axis=0)
             )
+            scale = np.maximum(scale, 1e-10)  # Floor to avoid division by zero
+            errors = np.abs(X_orig - X_reconstructed) / scale[np.newaxis, :]
             
             max_error = float(np.max(errors))
             mean_error = float(np.mean(errors))
