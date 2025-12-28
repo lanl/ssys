@@ -54,6 +54,12 @@ dev = [
     "jupyter>=1.0",
     "ipython>=8.12",
 ]
+jax = [
+    # JAX enables faster numerical validation with automatic differentiation
+    # Install with: pip install ssys[jax]
+    "jax>=0.4",
+    "jaxlib>=0.4",
+]
 
 [project.urls]
 Homepage = "https://lisdi-git.lanl.gov/hlavacek/ssys"
