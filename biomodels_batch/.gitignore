@@ -1,0 +1,33 @@
+# Ignore downloaded data
+data/sbml/
+data/antimony/
+data/fetch_history.json
+data/model_registry.json
+data/metadata.json
+
+# Ignore results
+results/
+
+# Allow directory structure
+!data/.gitkeep
+!results/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# OS
+.DS_Store
+Thumbs.db

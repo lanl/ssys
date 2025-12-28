@@ -1,0 +1,33 @@
+# BioModels benchmark suite requirements
+# Install with: pip install -r requirements.txt
+
+# Core dependencies (should already be installed with ssys)
+# IMPORTANT: numpy<2.0 required for compatibility with scipy/pandas/tellurium
+numpy>=1.24.0,<2.0
+scipy>=1.11.0
+sympy>=1.12
+matplotlib>=3.7.0
+
+# BioModels API access
+bioservices>=1.11.2
+requests>=2.31.0
+
+# SBML to Antimony conversion
+# Option 1: Tellurium (includes Antimony and libroadrunner)
+tellurium>=2.2.10
+
+# Option 2: Standalone Antimony (lighter weight alternative)
+# antimony>=2.13.0
+
+# Data handling
+pandas>=2.0.0
+
+# Jupyter notebook generation
+nbformat>=5.9.0
+jupyter>=1.0.0
+
+# Progress bars for long operations
+tqdm>=4.65.0
+
+# Parallel processing utilities
+joblib>=1.3.0

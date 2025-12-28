@@ -442,7 +442,7 @@ def condense_gma_to_ssystem(gma_result, x_ref, exp_tol=1e-8) -> RecastResult
 ## Future Enhancements: BioModels Coverage Analysis
 
 **Status:** Planning (post-SBML-first refactor)  
-**Data Source:** `biomodels/results/filter_summary.txt` (1644 models analyzed)
+**Data Source:** `biomodels_batch/results/filter_summary.txt` (1644 models analyzed)
 
 ### Current Coverage
 
@@ -484,7 +484,7 @@ Where `sigmoid(x) = 1/(1 + exp(-x))` is already liftable to GMA.
 - How to validate approximation quality?
 
 **Reference models to investigate:**
-- Run: `python biomodels/2_filter_models.py` and examine piecewise patterns
+- Run: `python biomodels_batch/2_filter_models.py` and examine piecewise patterns
 - Look for common idioms in SBML kinetic laws
 
 ### Medium-Priority: Additional Trig Functions
