@@ -68,6 +68,7 @@ Notable deferred feature requests are tracked in the remote repository:
 
 - **GMA→S-System Condensation** - BST-style aggregation for approximate S-systems
 - **Piecewise Function Support** - Smooth sigmoid approximations for SBML piecewise
+- **Handling Zero Initial Conditions** - Alternative approaches
 
 See: https://lisdi-git.lanl.gov/hlavacek/ssys/-/issues
 
