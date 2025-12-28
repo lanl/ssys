@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2025-12-28
+
+### Added
+- User-configurable `EPS_INIT` via `@SIM` comment metadata
+  - Users can now specify `// @SIM EPS_INIT=1e-6` in Antimony files
+  - This controls the epsilon value used for zero IC approximation in pool construction
+- Compartment filtering from params to avoid duplicate output
+
+### Changed
+- Default `T_END` changed from 20.0 to 1.0 for faster simulation feedback
+- Default `N_STEPS` changed from 400 to 100 for faster simulation feedback
+- Default `EPS_INIT` changed from 1e-9 to 1e-6 for better numerical stability
+
+### Fixed
+- Fixed all mypy type errors (21 errors resolved)
+  - Fixed `Reaction` dataclass attribute names in roadrunner_backend.py
+  - Added type annotations for validator.py list variables
+  - Fixed untyped lambda in notebook_helpers.py
+
 ## [0.5.1] - 2025-12-28
 
 ### Removed
@@ -121,7 +140,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - matplotlib >=3.7
 - nbformat >=5.9
 
-[Unreleased]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.1...main
+[Unreleased]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.2...main
+[0.5.2]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.1...v0.5.2
 [0.5.1]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.0...v0.5.1
 [0.5.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.4.0...v0.5.0
 [0.4.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.3.0...v0.4.0

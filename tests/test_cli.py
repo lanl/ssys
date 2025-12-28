@@ -1,12 +1,11 @@
 """Tests for CLI module."""
 
 import os
-import tempfile
 from pathlib import Path
 
 import pytest
 
-from ssys.cli import read_manifest, recast_file, build_notebook
+from ssys.cli import build_notebook, read_manifest, recast_file
 
 
 class TestReadManifest:

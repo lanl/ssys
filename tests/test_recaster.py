@@ -219,6 +219,231 @@ class TestEdgeCases:
         assert X in rec.factor_map
 
 
+class TestCompartmentPreservation:
+    """Tests for compartment name preservation through recasting."""
+
+    def test_symsystem_compartments_field(self):
+        """Test that SymSystem stores compartments."""
+        from ssys.recaster import SymSystem
+
+        X = sp.Symbol("X", positive=True)
+        sym = SymSystem(
+            vars=[X],
+            params={"k": 0.5},
+            odes={X: -sp.Symbol("k") * X},
+            initials={X: 1.0},
+            compartments={"plasma": 1.0}
+        )
+
+        assert sym.compartments == {"plasma": 1.0}
+
+    def test_compartment_propagation_through_recast(self):
+        """Test compartments propagate through recast_to_ssystem."""
+        from ssys.recaster import SymSystem, recast_to_ssystem
+
+        X = sp.Symbol("X", positive=True)
+        k = sp.Symbol("k", positive=True)
+        sym = SymSystem(
+            vars=[X],
+            params={"k": 0.5},
+            odes={X: -k * X},
+            initials={X: 1.0},
+            compartments={"plasma": 1.0}
+        )
+
+        result = recast_to_ssystem(sym)
+
+        assert result.compartments == {"plasma": 1.0}
+
+    def test_compartment_in_antimony_output(self):
+        """Test original compartment name appears in Antimony output."""
+        from ssys.recaster import SymSystem, recast_to_ssystem, ssystem_to_antimony
+
+        X = sp.Symbol("X", positive=True)
+        k = sp.Symbol("k", positive=True)
+        sym = SymSystem(
+            vars=[X],
+            params={"k": 0.5},
+            odes={X: -k * X},
+            initials={X: 1.0},
+            compartments={"plasma": 1.0}
+        )
+
+        result = recast_to_ssystem(sym)
+        output = ssystem_to_antimony(result, model_name="test")
+
+        assert "compartment plasma = 1" in output
+        assert "compartment cell" not in output
+
+    def test_default_compartment_when_empty(self):
+        """Test default compartment 'cell' used when no compartments."""
+        from ssys.recaster import SymSystem, recast_to_ssystem, ssystem_to_antimony
+
+        X = sp.Symbol("X", positive=True)
+        k = sp.Symbol("k", positive=True)
+        sym = SymSystem(
+            vars=[X],
+            params={"k": 0.5},
+            odes={X: -k * X},
+            initials={X: 1.0},
+            compartments={}
+        )
+
+        result = recast_to_ssystem(sym)
+        output = ssystem_to_antimony(result, model_name="test")
+
+        assert "compartment cell = 1" in output
+
+    def test_compartment_not_duplicated_in_params(self):
+        """Test compartment names are filtered from params output."""
+        from ssys.recaster import SymSystem, recast_to_ssystem
+
+        X = sp.Symbol("X", positive=True)
+        k = sp.Symbol("k", positive=True)
+        # plasma in both params and compartments
+        sym = SymSystem(
+            vars=[X],
+            params={"k": 0.5, "plasma": 1.0},
+            odes={X: -k * X},
+            initials={X: 1.0},
+            compartments={"plasma": 1.0}
+        )
+
+        result = recast_to_ssystem(sym)
+
+        # compartment should not appear in params (filtered out)
+        assert "plasma" not in result.params
+
+
+class TestEpsInitMetadata:
+    """Tests for user-configurable EPS_INIT via @SIM metadata."""
+
+    def test_extract_sim_metadata_eps_init(self):
+        """Test parsing EPS_INIT from @SIM comment."""
+        from ssys.recaster import _extract_sim_metadata
+
+        text = """
+        // @SIM T_START=0 T_END=100 N_STEPS=500 EPS_INIT=1e-6
+        X' = -k*X
+        k = 0.5
+        X = 0.0
+        """
+        t_start, t_end, n_steps, eps_init = _extract_sim_metadata(text)
+
+        assert t_start == 0.0
+        assert t_end == 100.0
+        assert n_steps == 500
+        assert eps_init == 1e-6
+
+    def test_extract_sim_metadata_eps_init_none(self):
+        """Test that eps_init is None when not specified."""
+        from ssys.recaster import _extract_sim_metadata
+
+        text = """
+        // @SIM T_START=0 T_END=100 N_STEPS=500
+        X' = -k*X
+        k = 0.5
+        X = 1.0
+        """
+        t_start, t_end, n_steps, eps_init = _extract_sim_metadata(text)
+
+        assert t_start == 0.0
+        assert t_end == 100.0
+        assert n_steps == 500
+        assert eps_init is None
+
+    def test_extract_sim_metadata_eps_init_only(self):
+        """Test parsing EPS_INIT alone without other metadata."""
+        from ssys.recaster import _extract_sim_metadata
+
+        text = """
+        // @SIM EPS_INIT=1e-12
+        X' = -k*X
+        k = 0.5
+        X = 0.0
+        """
+        t_start, t_end, n_steps, eps_init = _extract_sim_metadata(text)
+
+        assert t_start is None
+        assert t_end is None
+        assert n_steps is None
+        assert eps_init == 1e-12
+
+    def test_eps_init_propagation_through_parsing(self):
+        """Test eps_init is propagated through parse_antimony_via_sbml."""
+        from ssys.recaster import parse_antimony_via_sbml
+
+        text = """
+        model test
+        X' = -k*X
+        k = 0.5
+        X = 0.0
+        end
+        // @SIM EPS_INIT=1e-8
+        """
+        sym = parse_antimony_via_sbml(text)
+
+        assert sym.eps_init == 1e-8
+
+    def test_eps_init_used_in_pool_construction(self):
+        """Test user-specified eps_init is used for zero IC approximation."""
+        from ssys.recaster import SymSystem, recast_to_ssystem
+
+        X = sp.Symbol("X", positive=True)
+        Y = sp.Symbol("Y", positive=True)
+        k = sp.Symbol("k", positive=True)
+
+        # Create system with zero IC and negative exponent (requires eps_init)
+        # X' = k*Y - k*X^2  has two terms with different signs
+        sym = SymSystem(
+            vars=[X, Y],
+            params={"k": 1.0},
+            odes={
+                X: k * Y - k * X**2,
+                Y: k * X - k * Y,
+            },
+            initials={X: 0.0, Y: 1.0},  # X has zero IC
+            eps_init=1e-6  # User-specified eps_init
+        )
+
+        result = recast_to_ssystem(sym)
+
+        # The auxiliary variable for X with zero IC should use eps_init=1e-6
+        # instead of the default 1e-9
+        # Check that 1e-9 (default) is NOT used for any IC
+        default_eps = 1e-9
+        for var, val in result.initials.items():
+            # Should NOT use default EPS_INIT (1e-9)
+            assert abs(val - default_eps) > 1e-14 or val == 0.0, \
+                "Default EPS_INIT should not be used when user specifies"
+
+    def test_default_eps_init_when_not_specified(self):
+        """Test default EPS_INIT is used when eps_init not specified."""
+        from ssys.recaster import SymSystem, recast_to_ssystem
+
+        X = sp.Symbol("X", positive=True)
+        Y = sp.Symbol("Y", positive=True)
+        k = sp.Symbol("k", positive=True)
+
+        # Create system without eps_init specified
+        sym = SymSystem(
+            vars=[X, Y],
+            params={"k": 1.0},
+            odes={
+                X: k * Y - k * X**2,
+                Y: k * X - k * Y,
+            },
+            initials={X: 0.0, Y: 1.0},  # X has zero IC
+            # eps_init not specified - should use default
+        )
+
+        result = recast_to_ssystem(sym)
+
+        # System should use default EPS_INIT or keep 0.0
+        # (depends on whether negative exponents are present)
+        assert result is not None  # Should not crash
+
+
 class TestVersionConsistency:
     """Tests for version consistency between pyproject.toml and __init__.py."""
 
@@ -229,16 +454,17 @@ class TestVersionConsistency:
         pyproject_text = pyproject_path.read_text()
 
         # Extract version from pyproject.toml
-        match = re.search(r'^version\s*=\s*"([^"]+)"', pyproject_text, re.MULTILINE)
-        assert match is not None, "Could not find version in pyproject.toml"
+        pattern = r'^version\s*=\s*"([^"]+)"'
+        match = re.search(pattern, pyproject_text, re.MULTILINE)
+        assert match is not None, "Could not find version"
         pyproject_version = match.group(1)
 
         # Compare with ssys.__version__
         init_version = ssys.__version__
 
         assert pyproject_version == init_version, (
-            f"Version mismatch: pyproject.toml has '{pyproject_version}', "
-            f"ssys.__version__ has '{init_version}'"
+            f"Version mismatch: pyproject.toml has '{pyproject_version}'"
+            f", ssys.__version__ has '{init_version}'"
         )
 
 

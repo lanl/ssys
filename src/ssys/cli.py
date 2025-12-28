@@ -62,7 +62,7 @@ def recast_file(
 
     # Extract @SIM metadata FIRST (before any parsing)
     # This works for both parser modes
-    t_start, t_end, n_steps = _extract_sim_metadata(txt)
+    t_start, t_end, n_steps, eps_init = _extract_sim_metadata(txt)
 
     # Parse based on selected parser
     if parser == "sbml":
@@ -163,8 +163,8 @@ from ssys.notebook_helpers import load_and_report
     config_cell = '''# ============================================================
 # SIMULATION SETTINGS (edit these values to adjust simulations)
 # ============================================================
-T_END = 20.0      # End time for simulations
-N_STEPS = 400     # Number of time steps
+T_END = 1.0       # End time for simulations (default: 1.0)
+N_STEPS = 100     # Number of time steps (default: 100)
 '''
     nb.cells.append(new_code_cell(config_cell))
 

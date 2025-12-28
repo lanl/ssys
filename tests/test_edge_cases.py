@@ -4,21 +4,21 @@ import pytest
 import sympy as sp
 
 from ssys.recaster import (
-    SymSystem,
     RecastResult,
     RecastStatus,
-    expand_to_terms,
-    term_to_coeff_exps,
-    product_expr,
-    _is_term_monomial,
-    _get_coefficient_sign,
-    find_rational_denominators,
-    find_composite_functions,
-    _antimony_to_sympy_syntax,
-    _sympy_to_antimony_syntax,
-    classify_system,
-    classify_result,
+    SymSystem,
     SystemClass,
+    _antimony_to_sympy_syntax,
+    _get_coefficient_sign,
+    _is_term_monomial,
+    _sympy_to_antimony_syntax,
+    classify_result,
+    classify_system,
+    expand_to_terms,
+    find_composite_functions,
+    find_rational_denominators,
+    product_expr,
+    term_to_coeff_exps,
 )
 
 

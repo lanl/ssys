@@ -131,7 +131,7 @@ def build_rhs_from_sympy(vars_syms, rhs_exprs, param_vals, assignment_rules=None
 
 def _expand_exps_through_factors(exps, factor_map):
     """Expand exponents through factor map. Handles both numeric and symbolic exponents."""
-    new = {}
+    new: dict[str, sp.Expr] = {}
     for s, e in exps.items():
         if s in factor_map:
             for v in factor_map[s]:
@@ -311,8 +311,12 @@ def _beautify_latex(latex_str):
     # Only match when NOT followed by underscore (those were handled above)
     for name, symbol in greek_letters.items():
         # Match Greek name at word boundary, not followed by underscore
-        # Use lambda to avoid backslash interpretation issues
-        latex_str = re.sub(r"(?<!\\)\b" + name + r"\b(?!_)", lambda m, s=symbol: s, latex_str)
+        # Use a replacement function to avoid backslash interpretation issues
+        def make_greek_replacement(symbol_str: str):
+            """Create a replacement function that returns the given symbol."""
+            return lambda m: symbol_str
+
+        latex_str = re.sub(r"(?<!\\)\b" + name + r"\b(?!_)", make_greek_replacement(symbol), latex_str)
 
     # Step 4: Replace 'eps' with epsilon (if not already escaped)
     latex_str = re.sub(r"(?<!\\)\beps\b(?!_)", r"\\epsilon", latex_str)
@@ -641,9 +645,9 @@ def load_and_report(
     Args:
         ant_path: Path to input Antimony file
         recast_path: Path to recast output Antimony file
-        T: Simulation end time (if None, uses @SIM T_END from file, default 20.0)
+        T: Simulation end time (if None, uses @SIM T_END from file, default 1.0)
         T_start: Simulation start time (if None, uses @SIM T_START from file, default 0.0)
-        steps: Number of simulation steps (if None, uses @SIM N_STEPS from file, default 400)
+        steps: Number of simulation steps (if None, uses @SIM N_STEPS from file, default 100)
         mode: Output mode ('simplified' or 'canonical')
         validation_json: Optional path to validation JSON file
     """

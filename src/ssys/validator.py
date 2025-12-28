@@ -188,9 +188,9 @@ class RecastValidator:
         # Add 'initial' alias for 'initials' (ModelIR uses 'initial', SymSystem uses 'initials')
         if not hasattr(self.orig_ir, "initial"):
             # Convert initials dict to have string keys for ModelIR compatibility
-            self.orig_ir.initial = {str(k): v for k, v in self.orig_system.initials.items()}
+            self.orig_ir.initial = {str(k): v for k, v in self.orig_system.initials.items()}  # type: ignore[attr-defined]
         if not hasattr(self.recast_ir, "initial"):
-            self.recast_ir.initial = {str(k): v for k, v in self.recast_system.initials.items()}
+            self.recast_ir.initial = {str(k): v for k, v in self.recast_system.initials.items()}  # type: ignore[attr-defined]
 
         # Add @SIM metadata compatibility (SymSystem doesn't have these by default)
         if not hasattr(self.orig_ir, "sim_t_start"):
@@ -202,24 +202,24 @@ class RecastValidator:
 
         # Add 'species' alias for 'vars' (ModelIR uses 'species', SymSystem uses 'vars')
         if not hasattr(self.orig_ir, "species"):
-            self.orig_ir.species = [str(v) for v in self.orig_system.vars]
+            self.orig_ir.species = [str(v) for v in self.orig_system.vars]  # type: ignore[attr-defined]
         if not hasattr(self.recast_ir, "species"):
-            self.recast_ir.species = [str(v) for v in self.recast_system.vars]
+            self.recast_ir.species = [str(v) for v in self.recast_system.vars]  # type: ignore[attr-defined]
 
         # Add 'reactions' attribute (SymSystem uses ODEs directly, no reactions)
         if not hasattr(self.orig_ir, "reactions"):
-            self.orig_ir.reactions = []
+            self.orig_ir.reactions = []  # type: ignore[attr-defined]
         if not hasattr(self.recast_ir, "reactions"):
-            self.recast_ir.reactions = []
+            self.recast_ir.reactions = []  # type: ignore[attr-defined]
 
         # Add 'explicit_rates' alias for 'odes' (for roadrunner backend)
         # Convert Python ** to Antimony ^ for exponentiation
         if not hasattr(self.orig_ir, "explicit_rates"):
-            self.orig_ir.explicit_rates = {
+            self.orig_ir.explicit_rates = {  # type: ignore[attr-defined]
                 str(k): str(v).replace("**", "^") for k, v in self.orig_system.odes.items()
             }
         if not hasattr(self.recast_ir, "explicit_rates"):
-            self.recast_ir.explicit_rates = {
+            self.recast_ir.explicit_rates = {  # type: ignore[attr-defined]
                 str(k): str(v).replace("**", "^") for k, v in self.recast_system.odes.items()
             }
 
@@ -1132,8 +1132,8 @@ class RecastValidator:
             # Compute Jacobian of Φ using JAX autodiff
             jac_phi = jacfwd(phi_vec)
 
-            errors = []
-            counterexamples = []
+            errors: list[float] = []
+            counterexamples: list[dict[str, Any]] = []
 
             # Sample points in log-uniform distribution
             np.random.seed(42)
@@ -1142,9 +1142,9 @@ class RecastValidator:
 
             # Identify which recast variables are auxiliaries vs. original/independent
             orig_var_names = {str(v) for v in orig_vars_ordered}
-            independent_vars = []
-            auxiliary_vars = []
-            auxiliary_var_indices = []
+            independent_vars: list[tuple[int, Any]] = []
+            auxiliary_vars: list[tuple[int, Any]] = []
+            auxiliary_var_indices: list[int] = []
 
             # Also identify clock variables (T := time) - these should be sampled, not computed
             # A clock variable is one whose definition IS exactly 'time' or 't'
@@ -1411,8 +1411,8 @@ class RecastValidator:
                     ode_at_phi = ode_at_phi.subs(clock_subs)
                 f_orig_at_Phi_funcs.append(lambdify(all_symbols, ode_at_phi, modules="numpy"))
 
-            errors = []
-            counterexamples = []
+            errors: list[float] = []
+            counterexamples: list[dict[str, Any]] = []
 
             # Sample points in log-uniform distribution (positive orthant)
             np.random.seed(42)  # Reproducibility
@@ -1880,11 +1880,11 @@ class RecastValidator:
         orig_var_names = {str(v) for v in orig_vars}
 
         # Get original initial values
-        orig_initials = {}
+        orig_initials: dict[str, float] = {}
         for var in orig_vars:
             var_name = str(var)
-            if var_name in self.orig_ir.initial:
-                orig_initials[var_name] = self.orig_ir.initial[var_name]
+            if var_name in self.orig_ir.initial:  # type: ignore[attr-defined]
+                orig_initials[var_name] = self.orig_ir.initial[var_name]  # type: ignore[attr-defined]
             else:
                 orig_initials[var_name] = 1.0  # Default
 
@@ -1893,8 +1893,8 @@ class RecastValidator:
 
             # PRIORITY 1: Check if recast file has explicit IC for this variable
             # This handles clock variables (T=0) and any other explicit ICs
-            if var_name in self.recast_ir.initial:
-                y0[var_name] = self.recast_ir.initial[var_name]
+            if var_name in self.recast_ir.initial:  # type: ignore[attr-defined]
+                y0[var_name] = self.recast_ir.initial[var_name]  # type: ignore[attr-defined]
             elif var_name in orig_var_names:
                 # PRIORITY 2: Original variable - use original IC
                 y0[var_name] = orig_initials.get(var_name, 1.0)
@@ -1958,8 +1958,8 @@ class RecastValidator:
             if mapping_expr.is_Mul:
                 # Extract factors - check if all are symbols or powers of symbols
                 all_symbols = True
-                factor_indices = []
-                factor_exponents = []
+                factor_indices: list[int] = []
+                factor_exponents: list[float] = []
 
                 for factor in mapping_expr.args:
                     if isinstance(factor, sp.Symbol):

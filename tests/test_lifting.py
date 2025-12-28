@@ -5,6 +5,8 @@ import sympy as sp
 
 from ssys.recaster import (
     SymSystem,
+    _exponents_match,
+    _is_coefficient_positive,
     expand_to_terms,
     find_composite_functions,
     find_rational_denominators,
@@ -12,10 +14,8 @@ from ssys.recaster import (
     lift_composite_functions,
     lift_rational_functions,
     lift_time_functions_to_autonomous,
-    term_to_coeff_exps,
     product_expr,
-    _is_coefficient_positive,
-    _exponents_match,
+    term_to_coeff_exps,
 )
 
 

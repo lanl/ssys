@@ -1,6 +1,6 @@
 # ODE → S‑System Recast (Antimony → Antimony)
 
-**Version:** v0.5.1  
+**Version:** v0.5.2
 **Date:** 2025-12-28
 
 This toolkit converts ordinary differential equation (ODE) models written in **Antimony** into **S‑System** or **GMA** form and writes the result back to Antimony. It provides both a **Python library** and a **command-line interface** for batch processing models and generating **Jupyter notebook** verification reports.
@@ -318,13 +318,14 @@ This follows Savageau & Voit (1987): positive orthant assumption, decomposition 
 - Non-positive variables (requires preprocessing)
 
 ✅ **Simulation metadata:**
-- `@SIM` comments specify simulation time parameters:
+- `@SIM` comments specify simulation parameters:
   ```antimony
-  // @SIM T_START=0 T_END=100 N_STEPS=500
+  // @SIM T_START=0 T_END=100 N_STEPS=500 EPS_INIT=1e-6
   ```
   - `T_START`: Simulation start time (default: 0.0)
-  - `T_END`: Simulation end time (default: 20.0)
-  - `N_STEPS`: Number of steps (default: 400)
+  - `T_END`: Simulation end time (default: 1.0)
+  - `N_STEPS`: Number of steps (default: 100)
+  - `EPS_INIT`: Epsilon value for zero initial condition approximation in pool construction (default: 1e-6). Use smaller values for higher precision or larger values if numerical instability occurs.
 
 ---
 

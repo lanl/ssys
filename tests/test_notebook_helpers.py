@@ -4,23 +4,23 @@ import pytest
 import sympy as sp
 
 from ssys.notebook_helpers import (
-    _beautify_latex,
     _antimony_to_latex_direct,
-    _is_monomial,
-    _get_term_sign,
-    _is_already_ssystem,
-    _is_already_gma,
-    parse_antimony_odes,
-    latex_factor_map,
+    _beautify_latex,
     _expand_exps_through_factors,
-    product_expr,
+    _get_term_sign,
+    _is_already_gma,
+    _is_already_ssystem,
+    _is_monomial,
     _simplify_exponent_content,
-    is_nonautonomous,
-    was_nonautonomous,
     find_clock_variable,
     get_autonomy_label,
+    is_nonautonomous,
+    latex_factor_map,
+    parse_antimony_odes,
+    product_expr,
+    was_nonautonomous,
 )
-from ssys.recaster import SymSystem, RecastResult, RecastStatus
+from ssys.recaster import RecastResult, RecastStatus, SymSystem
 
 
 class TestBeautifyLatex:

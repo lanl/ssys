@@ -4,23 +4,23 @@ import pytest
 import sympy as sp
 
 from ssys.recaster import (
-    SymSystem,
+    GMAEquation,
     RecastResult,
     RecastStatus,
     SSysEquation,
-    GMAEquation,
+    SymSystem,
     SystemClass,
-    classify_system,
-    classify_result,
-    product_to_antimony,
-    ssystem_to_antimony,
-    gma_to_antimony,
-    _sympy_to_antimony_syntax,
     _antimony_to_sympy_syntax,
-    latex_ssys,
-    recast_to_ssystem,
+    _sympy_to_antimony_syntax,
     build_sym_system,
+    classify_result,
+    classify_system,
+    gma_to_antimony,
+    latex_ssys,
     parse_antimony,
+    product_to_antimony,
+    recast_to_ssystem,
+    ssystem_to_antimony,
 )
 
 

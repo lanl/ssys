@@ -14,7 +14,7 @@ func_def_pat = re.compile(r"^([A-Za-z_]\w*)\s*\(([^)]*)\)\s*:=\s*(.+)$")
 # Pattern to detect function calls in expressions: name(arg1, arg2, ...)
 func_call_pat = re.compile(r"([A-Za-z_]\w*)\s*\(([^()]*)\)")
 
-EPS_INIT = 1e-9
+EPS_INIT = 1e-6
 
 
 def _expand_function_calls(
@@ -226,6 +226,7 @@ class ModelIR:
     sim_t_start: float | None = None  # Simulation start time
     sim_t_end: float | None = None  # Simulation end time
     sim_n_steps: int | None = None  # Number of simulation steps
+    eps_init: float | None = None  # User-specified EPS_INIT for zero IC replacement
     # Function templates: name -> (param_list, expression_body)
     # e.g., "M" -> (["x"], "1 + gam * h * x^(h-1) / (1 + x^h)^2")
     function_templates: dict[str, tuple[list[str], str]] = field(default_factory=dict)
@@ -442,21 +443,24 @@ def parse_antimony(text: str) -> ModelIR:
     return ir
 
 
-def _extract_sim_metadata(text: str) -> tuple[float | None, float | None, int | None]:
+def _extract_sim_metadata(
+    text: str,
+) -> tuple[float | None, float | None, int | None, float | None]:
     """
     Extract @SIM metadata from Antimony comments.
 
-    Format: // @SIM T_START=0 T_END=100 N_STEPS=500
+    Format: // @SIM T_START=0 T_END=100 N_STEPS=500 EPS_INIT=1e-6
 
     Args:
         text: Antimony text to scan for @SIM metadata
 
     Returns:
-        Tuple of (t_start, t_end, n_steps), any of which may be None if not found
+        Tuple of (t_start, t_end, n_steps, eps_init), any of which may be None if not found
     """
     t_start = None
     t_end = None
     n_steps = None
+    eps_init = None
 
     sim_marker_pattern = re.compile(r"@SIM\b")
     key_value_pattern = re.compile(r"(\w+)\s*=\s*([0-9.eE+-]+)")
@@ -483,8 +487,13 @@ def _extract_sim_metadata(text: str) -> tuple[float | None, float | None, int | 
                             n_steps = int(float(value))
                         except ValueError:
                             pass
+                    elif key == "EPS_INIT":
+                        try:
+                            eps_init = float(value)
+                        except ValueError:
+                            pass
 
-    return t_start, t_end, n_steps
+    return t_start, t_end, n_steps, eps_init
 
 
 def _preprocess_antimony_text(text: str) -> str:
@@ -527,7 +536,7 @@ def parse_antimony_via_sbml(antimony_text: str) -> "SymSystem":
         )
 
     # Extract @SIM metadata BEFORE conversion (comments are lost in SBML)
-    t_start, t_end, n_steps = _extract_sim_metadata(antimony_text)
+    t_start, t_end, n_steps, eps_init = _extract_sim_metadata(antimony_text)
 
     # CRITICAL: Preprocess to join multi-line statements
     # libantimony requires complete statements on single lines
@@ -567,6 +576,7 @@ def parse_antimony_via_sbml(antimony_text: str) -> "SymSystem":
     sym.sim_t_start = t_start
     sym.sim_t_end = t_end
     sym.sim_n_steps = n_steps
+    sym.eps_init = eps_init
 
     # Cache original Antimony text for RoadRunner simulation
     sym.antimony_text = antimony_text
@@ -912,6 +922,7 @@ def _parse_sbml_document(doc, source: str = "<unknown>") -> "SymSystem":
         odes=simplified_odes,
         initials=initials,
         assignment_rules=assignment_rules,
+        compartments=compartments,
     )
 
 
@@ -975,10 +986,12 @@ class SymSystem:
     assignment_rules: dict[str, str] = field(
         default_factory=dict
     )  # Assignment rules from original model
+    compartments: dict[str, float] = field(default_factory=dict)  # compartment_name -> size
     # Optional metadata attributes (set by parse_antimony_via_sbml)
     sim_t_start: float | None = None  # Simulation start time from @SIM
     sim_t_end: float | None = None  # Simulation end time from @SIM
     sim_n_steps: int | None = None  # Number of simulation steps from @SIM
+    eps_init: float | None = None  # User-specified EPS_INIT for zero IC replacement
     antimony_text: str = ""  # Cache original Antimony text for RoadRunner
 
 
@@ -1129,6 +1142,7 @@ class RecastResult:
     factor_map: dict[sp.Symbol, list[sp.Symbol]] = field(default_factory=dict)
     gma_equations: list[GMAEquation] = field(default_factory=list)
     params: dict[str, float] = field(default_factory=dict)
+    compartments: dict[str, float] = field(default_factory=dict)  # compartment_name -> size
     error_message: str | None = None
     blockers: dict[str, list[str]] = field(default_factory=dict)
     auxiliary_defs: dict[sp.Symbol, sp.Expr] = field(default_factory=dict)  # Y_1 -> K_2 + X_1
@@ -1483,6 +1497,7 @@ def canonicalize_aux_names(res: "RecastResult", prefix: str = "Z") -> "RecastRes
         variables=new_variables,
         factor_map=new_factor_map,
         params=res.params,
+        compartments=res.compartments,  # Propagate compartments
     )
 
 
@@ -1973,6 +1988,7 @@ def lift_rational_functions(
             initials=new_initials,
             initial_exprs=sym.initial_exprs,  # Propagate symbolic IC expressions
             assignment_rules=sym.assignment_rules,  # Preserve original assignment rules
+            compartments=sym.compartments,  # Propagate compartments
         )
 
     # Return final system and ALL accumulated auxiliary definitions
@@ -2068,7 +2084,13 @@ def add_dummy_for_constants(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol, 
     aux_defs = {dummy: sp.Integer(1)}
 
     return (
-        SymSystem(vars=new_vars, params=new_params, odes=new_odes, initials=new_initials),
+        SymSystem(
+            vars=new_vars,
+            params=new_params,
+            odes=new_odes,
+            initials=new_initials,
+            compartments=sym.compartments,  # Propagate compartments
+        ),
         aux_defs,
     )
 
@@ -2765,6 +2787,7 @@ def lift_time_functions_to_autonomous(
             initials=new_initials,
             initial_exprs=sym.initial_exprs,
             assignment_rules=new_assignment_rules,
+            compartments=sym.compartments,  # Propagate compartments
         )
 
     # Phase 2: Handle sqrt(X² + c) patterns for STATE-dependent expressions only
@@ -2852,6 +2875,7 @@ def lift_time_functions_to_autonomous(
             initials=new_initials,
             initial_exprs=sym.initial_exprs,
             assignment_rules=sym.assignment_rules,
+            compartments=sym.compartments,  # Propagate compartments
         )
 
     return sym, all_aux_defs, aux_counter
@@ -3355,6 +3379,7 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
             odes=combined_odes,
             initials=new_initials,
             initial_exprs=sym.initial_exprs,
+            compartments=sym.compartments,  # Propagate compartments
         )
 
         # Recursively lift and manually adjust auxiliary names to continue from max_z_index
@@ -3438,6 +3463,7 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
             initials=new_initials,
             initial_exprs=sym.initial_exprs,  # Propagate symbolic IC expressions
             assignment_rules=assignment_rules,  # Time-only auxiliaries as assignment rules
+            compartments=sym.compartments,  # Propagate compartments
         ),
         aux_to_func_with_offset,  # Dictionary mapping Z_i -> f(X) + offset
     )
@@ -3843,6 +3869,7 @@ def _gma_recast(sym: SymSystem, original_vars: set[sp.Symbol]) -> RecastResult:
         factor_map=factor_map,
         gma_equations=gma_equations,
         params=sym.params,
+        compartments=sym.compartments,  # Propagate compartments from original
         initial_exprs=sym.initial_exprs,  # Propagate symbolic IC expressions
         assignment_rules=sym.assignment_rules,  # Preserve original assignment rules
     )
@@ -3947,6 +3974,7 @@ def _direct_ssystem_recast(
         variables=new_variables,
         factor_map=factor_map,
         params=sym.params,
+        compartments=sym.compartments,  # Propagate compartments from original
         initial_exprs=sym.initial_exprs,  # Propagate symbolic IC expressions
         assignment_rules=sym.assignment_rules,  # Preserve original assignment rules
     )
@@ -4127,24 +4155,30 @@ def _pool_ssystem_recast(sym: "SymSystem", mode: str = "simplified") -> "RecastR
                 vars_with_neg_exp.add(var)
 
     # 6) Adjust zero initial conditions: use EPS_INIT only for vars with negative exponents
+    # Use user-specified eps_init if available, otherwise use module default
+    eps_init_value = sym.eps_init if sym.eps_init is not None else EPS_INIT
     for var in new_variables:
         if var in new_initials and abs(new_initials[var]) < 1e-14:
             # This variable has zero IC
             if var in vars_with_neg_exp:
-                # Has negative exponents - use EPS_INIT to prevent division by zero
-                new_initials[var] = EPS_INIT
+                # Has negative exponents - use eps_init to prevent division by zero
+                new_initials[var] = eps_init_value
             else:
                 # No negative exponents - keep exact zero
                 new_initials[var] = 0.0
 
     # 7) build result and canonicalize names to Z_1, Z_2, ...
+    # Filter out compartments from params to avoid duplicate output
+    filtered_params = {k: v for k, v in sym.params.items() if k not in sym.compartments}
+
     res = RecastResult(
         status=RecastStatus.CANONICAL_SSYSTEM,
         equations=new_equations,
         initials=new_initials,
         variables=new_variables,
         factor_map=factor_map,
-        params=sym.params,
+        params=filtered_params,
+        compartments=sym.compartments,  # Propagate compartments
     )
     return canonicalize_aux_names(res, prefix="Z")
 
@@ -4360,7 +4394,15 @@ def gma_to_antimony(
                 lifted_aux_names.add(aux_name)
 
     # --- Compartment declaration (for SBML compatibility) ---
-    lines.append("compartment cell = 1;")
+    # Use original compartment name if available, otherwise default to "cell"
+    if result.compartments:
+        for comp_name, comp_size in result.compartments.items():
+            lines.append(f"compartment {comp_name} = {comp_size:g};")
+        # Use first compartment name for species declarations
+        default_compartment = next(iter(result.compartments.keys()))
+    else:
+        lines.append("compartment cell = 1;")
+        default_compartment = "cell"
     lines.append("")
 
     # --- Species declarations in compartment ---
@@ -4369,7 +4411,7 @@ def gma_to_antimony(
     state_vars = [v for v in all_gma_vars if v.name not in lifted_aux_names]
     if state_vars:
         for v in state_vars:
-            lines.append(f"species {v.name} in cell;")
+            lines.append(f"species {v.name} in {default_compartment};")
         lines.append("")
 
     lines.append("// GMA (Generalized Mass Action) format")
@@ -4582,8 +4624,16 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
     lines.append(f"model {model_name}()")
     lines.append("")
 
-    # --- Compartment declaration (default cell=1 for SBML compatibility) ---
-    lines.append("compartment cell = 1;")
+    # --- Compartment declaration (for SBML compatibility) ---
+    # Use original compartment name if available, otherwise default to "cell"
+    if result.compartments:
+        for comp_name, comp_size in result.compartments.items():
+            lines.append(f"compartment {comp_name} = {comp_size:g};")
+        # Use first compartment name for species declarations
+        default_compartment = next(iter(result.compartments.keys()))
+    else:
+        lines.append("compartment cell = 1;")
+        default_compartment = "cell"
     lines.append("")
 
     # --- Species declarations ---
@@ -4591,7 +4641,7 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
     all_state_vars = sorted(result.variables, key=lambda s: s.name)
     if all_state_vars:
         for v in all_state_vars:
-            lines.append(f"species {v.name} in cell;")
+            lines.append(f"species {v.name} in {default_compartment};")
         lines.append("")
 
     # --- Enhanced metadata header ---

@@ -421,10 +421,13 @@ def _reconstruct_antimony(model_ir: ModelIR) -> str:
     if model_ir.reactions:
         lines.append("  // Reactions")
         for rxn in model_ir.reactions:
-            lhs = " + ".join(rxn.reactants) if rxn.reactants else ""
-            rhs = " + ".join(rxn.products) if rxn.products else ""
-            arrow = "->" if not lhs else "-> " if not rhs else " -> "
-            lines.append(f"  {rxn.id}: {lhs}{arrow}{rhs}; {rxn.rate_law};")
+            # lhs and rhs are lists of (coeff, species_name) tuples
+            lhs_str = " + ".join(name for _coeff, name in rxn.lhs) if rxn.lhs else ""
+            rhs_str = " + ".join(name for _coeff, name in rxn.rhs) if rxn.rhs else ""
+            arrow = "->" if not lhs_str else "-> " if not rhs_str else " -> "
+            rxn_name = rxn.name if rxn.name else ""
+            rxn_prefix = f"{rxn_name}: " if rxn_name else ""
+            lines.append(f"  {rxn_prefix}{lhs_str}{arrow}{rhs_str}; {rxn.rate_expr};")
         lines.append("")
 
     # Explicit rate rules (ODEs)

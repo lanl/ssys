@@ -2,13 +2,13 @@
 
 import pytest
 
-from ssys.validator import (
-    ValidationResult,
-    EquivalenceTest,
-    ValidationReport,
-    RecastValidator,
-)
 from ssys.recaster import SystemClass
+from ssys.validator import (
+    EquivalenceTest,
+    RecastValidator,
+    ValidationReport,
+    ValidationResult,
+)
 
 
 class TestValidationResult:
