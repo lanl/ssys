@@ -39,7 +39,6 @@ def recast_file(
     out_dir: str,
     mode: str = "simplified",
     validate: bool = False,
-    solver: str = "roadrunner",
     parser: str = "legacy",
 ) -> tuple[str, str, str, str | None]:
     """
@@ -50,7 +49,6 @@ def recast_file(
         out_dir: Output directory for recast file
         mode: Output mode ('simplified' or 'canonical')
         validate: Whether to run validation tests
-        solver: ODE solver for validation ('roadrunner' or 'rk4')
         parser: Parser to use ('legacy' or 'sbml')
             - 'legacy': Hand-rolled regex parser (current behavior)
             - 'sbml': RoadRunner → SBML → libSBML (reference Antimony parser)
@@ -120,7 +118,6 @@ def recast_file(
                 out_path,
                 mode=mode,
                 output_json=validation_json_path,
-                solver=solver,
                 parser=parser,
             )
         except Exception as e:
@@ -134,7 +131,6 @@ def build_notebook(
     cases: list[tuple[str, str, str, str | None]],
     out_dir: str,
     mode: str = "simplified",
-    solver: str = "roadrunner",
 ) -> str:
     """
     Build a Jupyter notebook that reports on all recast models.
@@ -143,7 +139,6 @@ def build_notebook(
         cases: List of (name, input_path, output_path, validation_path)
         out_dir: Output directory for notebook
         mode: Output mode ('simplified' or 'canonical')
-        solver: ODE solver to use ('roadrunner' or 'rk4')
 
     Returns:
         Path to generated notebook
@@ -165,12 +160,11 @@ from ssys.notebook_helpers import load_and_report
     nb.cells.append(new_code_cell(helpers))
 
     # Configuration cell - user-adjustable simulation parameters
-    config_cell = f'''# ============================================================
+    config_cell = '''# ============================================================
 # SIMULATION SETTINGS (edit these values to adjust simulations)
 # ============================================================
 T_END = 20.0      # End time for simulations
 N_STEPS = 400     # Number of time steps
-SOLVER = "{solver}"  # ODE solver: "roadrunner" or "rk4"
 '''
     nb.cells.append(new_code_cell(config_cell))
 
@@ -185,8 +179,7 @@ SOLVER = "{solver}"  # ODE solver: "roadrunner" or "rk4"
             f"load_and_report({repr(ant_path)}, "
             f"{repr(recast_basename)}, T=T_END, steps=N_STEPS, "
             f"mode={repr(mode)}, "
-            f"validation_json={repr(validation_basename)}, "
-            f"solver=SOLVER)"
+            f"validation_json={repr(validation_basename)})"
         )
         nb.cells.append(new_code_cell(call))
 
@@ -216,7 +209,7 @@ def main():
         "--mode",
         choices=["simplified", "canonical"],
         default="simplified",
-        help="Output mode: 'simplified' (default, current behavior) or 'canonical' (strict 2-term S-system form)",
+        help="Output mode: 'simplified' (default) or 'canonical' (strict 2-term S-system)",
     )
     parser.add_argument(
         "--validate",
@@ -224,16 +217,10 @@ def main():
         help="Run validation on each recast (symbolic and numerical tests)",
     )
     parser.add_argument(
-        "--solver",
-        choices=["roadrunner", "rk4"],
-        default="roadrunner",
-        help="ODE solver: 'roadrunner' (CVODE, default) or 'rk4'",
-    )
-    parser.add_argument(
         "--parser",
         choices=["legacy", "sbml"],
         default="sbml",
-        help="Antimony parser: 'sbml' (RoadRunner reference parser, default) or 'legacy' (regex)",
+        help="Antimony parser: 'sbml' (RoadRunner reference, default) or 'legacy' (regex)",
     )
     parser.add_argument(
         "--version",
@@ -256,7 +243,6 @@ def main():
             args.outdir,
             mode=args.mode,
             validate=args.validate,
-            solver=args.solver,
             parser=args.parser,
         )
         for ant in ant_files
@@ -278,7 +264,7 @@ def main():
                     pass  # Skip malformed/unreadable files
         print(f"✓ Validated {validated}/{len(cases)} models")
 
-    nb_path = build_notebook(cases, args.outdir, mode=args.mode, solver=args.solver)
+    nb_path = build_notebook(cases, args.outdir, mode=args.mode)
     print(f"✓ Recast complete. Notebook written: {nb_path}")
 
 

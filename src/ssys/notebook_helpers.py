@@ -17,35 +17,6 @@ from ssys.recaster import (
 FILL_MISSING_PARAMS = False  # set True to auto-fill absent params with 1.0
 
 
-import warnings
-
-
-def rk4(f, t_span, y0, n_steps):
-    """Simple RK4 integrator.
-
-    Suppresses overflow/invalid warnings which can occur in some mathematical
-    models (e.g., superexponential growth) but are not bugs.
-    """
-    t0, t1 = t_span
-    t = np.linspace(t0, t1, n_steps + 1)
-    h = (t1 - t0) / n_steps
-    y = np.zeros((len(t), len(y0)), dtype=float)
-    y[0] = np.array(y0, dtype=float)
-
-    # Suppress overflow/invalid warnings - these are expected for some models
-    with warnings.catch_warnings():
-        warnings.filterwarnings("ignore", category=RuntimeWarning)
-        for i in range(n_steps):
-            ti = t[i]
-            yi = y[i]
-            k1 = f(ti, yi)
-            k2 = f(ti + 0.5 * h, yi + 0.5 * h * k1)
-            k3 = f(ti + 0.5 * h, yi + 0.5 * h * k2)
-            k4 = f(ti + h, yi + h * k3)
-            y[i + 1] = yi + (h / 6.0) * (k1 + 2 * k2 + 2 * k3 + k4)
-    return t, y
-
-
 def build_rhs_from_sympy(vars_syms, rhs_exprs, param_vals, assignment_rules=None):
     """Build numerical RHS function from symbolic expressions.
 
@@ -664,7 +635,6 @@ def load_and_report(
     steps=None,
     mode="simplified",
     validation_json=None,
-    solver="roadrunner",
 ):
     """Load and report on a single recast model.
 
@@ -676,7 +646,6 @@ def load_and_report(
         steps: Number of simulation steps (if None, uses @SIM N_STEPS from file, default 400)
         mode: Output mode ('simplified' or 'canonical')
         validation_json: Optional path to validation JSON file
-        solver: ODE solver to use - "roadrunner" (default) or "rk4"
     """
     ant_text = open(ant_path).read()
     rec_text = open(recast_path).read()
@@ -824,46 +793,41 @@ def load_and_report(
     orig_state_names = []
     rec_state_names = []
 
-    # Choose simulation method based on solver parameter
-    if solver in ("roadrunner", "rk4"):
-        # Use ODE backend abstraction
-        from ssys.ode_backends import simulate_ode
+    # Use ODE backend abstraction
+    from ssys.ode_backends import simulate_ode
 
-        # Simulate original model
-        result_orig = simulate_ode(ir, T_start, T, steps + 1, backend=solver)
-        if not result_orig["success"]:
-            display(
-                Markdown(
-                    f"**❌ Original simulation failed with {solver}:** {result_orig['message']}"
-                )
+    # Simulate original model
+    result_orig = simulate_ode(ir, T_start, T, steps + 1)
+    if not result_orig["success"]:
+        display(
+            Markdown(
+                f"**❌ Original simulation failed:** {result_orig['message']}"
             )
-            display(Markdown("*Cannot proceed without successful simulation.*"))
-            return  # Exit early - no fallback
-        else:
-            t_orig = result_orig["t"]
-            y_orig = result_orig["y"]
-            # Get state names from simulation result for correct column mapping
-            orig_state_names = result_orig.get("state_names", [])
-
-        # Build recast IR for simulation
-        recast_ir = ssys.parse_antimony(rec_text)
-        result_rec = simulate_ode(recast_ir, T_start, T, steps + 1, backend=solver)
-        if not result_rec["success"]:
-            display(
-                Markdown(f"**❌ Recast simulation failed with {solver}:** {result_rec['message']}")
-            )
-            display(Markdown("*Cannot proceed without successful simulation.*"))
-            return  # Exit early - no fallback
-        else:
-            t_rec = result_rec["t"]
-            y_rec = result_rec["y"]
-            # Get state names from simulation result for correct column mapping
-            rec_state_names = result_rec.get("state_names", [])
-            # CRITICAL FIX: Use actual symbols from rec.variables instead of recreating from strings
-            # This ensures symbol identity matches for plotting factor_map
-            aux_syms = sorted(rec.variables, key=lambda s: s.name)
+        )
+        display(Markdown("*Cannot proceed without successful simulation.*"))
+        return  # Exit early
     else:
-        raise ValueError(f"Unknown solver: {solver}. Choose 'rk4' or 'roadrunner'.")
+        t_orig = result_orig["t"]
+        y_orig = result_orig["y"]
+        # Get state names from simulation result for correct column mapping
+        orig_state_names = result_orig.get("state_names", [])
+
+    # Build recast IR for simulation
+    recast_ir = ssys.parse_antimony(rec_text)
+    result_rec = simulate_ode(recast_ir, T_start, T, steps + 1)
+    if not result_rec["success"]:
+        display(
+            Markdown(f"**❌ Recast simulation failed:** {result_rec['message']}")
+        )
+        display(Markdown("*Cannot proceed without successful simulation.*"))
+        return  # Exit early
+    else:
+        t_rec = result_rec["t"]
+        y_rec = result_rec["y"]
+        # Get state names from simulation result for correct column mapping
+        rec_state_names = result_rec.get("state_names", [])
+        # Use actual symbols from rec.variables for plotting factor_map
+        aux_syms = sorted(rec.variables, key=lambda s: s.name)
 
     var_syms = sorted(sym.odes.keys(), key=lambda s: s.name)
 

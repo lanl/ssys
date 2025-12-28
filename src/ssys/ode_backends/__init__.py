@@ -1,9 +1,7 @@
 """
-ODE solver backends for S-system simulation.
+ODE solver backend for S-system simulation.
 
-Provides a unified interface for different ODE solvers:
-- libRoadRunner (default, production)
-- RK4 (fallback, debugging)
+Uses libRoadRunner for ODE integration.
 """
 
 from .interface import simulate_ode

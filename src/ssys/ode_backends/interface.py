@@ -1,5 +1,7 @@
 """
 Unified interface for ODE solver backends.
+
+Uses libRoadRunner for ODE integration.
 """
 
 from typing import Any
@@ -15,11 +17,10 @@ def simulate_ode(
     t_end: float,
     n_points: int,
     y0_override: dict[str, float] | None = None,
-    backend: str = "roadrunner",
     options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
-    Simulate an ODE system using the specified backend.
+    Simulate an ODE system using libRoadRunner.
 
     Args:
         model_ir: Parsed model intermediate representation
@@ -27,7 +28,6 @@ def simulate_ode(
         t_end: End time
         n_points: Number of time points
         y0_override: Optional initial conditions override
-        backend: Solver backend ('roadrunner' or 'rk4')
         options: Backend-specific options
 
     Returns:
@@ -42,24 +42,19 @@ def simulate_ode(
     if options is None:
         options = {}
 
-    if backend == "roadrunner":
-        try:
-            from .roadrunner_backend import simulate_with_roadrunner
+    try:
+        from .roadrunner_backend import simulate_with_roadrunner
 
-            return simulate_with_roadrunner(model_ir, t0, t_end, n_points, y0_override, options)
-        except ImportError as e:
-            # libRoadRunner not available - fail explicitly, no fallback
-            return {
-                "t": np.array([]),
-                "y": np.array([]),
-                "state_names": [],
-                "success": False,
-                "message": f"libRoadRunner not available: {e}",
-                "integrator_stats": {},
-            }
-    elif backend == "rk4":
-        from .rk4_backend import simulate_with_rk4
-
-        return simulate_with_rk4(model_ir, t0, t_end, n_points, y0_override, options)
-    else:
-        raise ValueError(f"Unknown backend: {backend}. Choose 'roadrunner' or 'rk4'.")
+        return simulate_with_roadrunner(
+            model_ir, t0, t_end, n_points, y0_override, options
+        )
+    except ImportError as e:
+        # libRoadRunner not available
+        return {
+            "t": np.array([]),
+            "y": np.array([]),
+            "state_names": [],
+            "success": False,
+            "message": f"libRoadRunner not available: {e}",
+            "integrator_stats": {},
+        }

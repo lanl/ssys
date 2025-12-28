@@ -139,7 +139,6 @@ class RecastValidator:
         recast_file: str,
         factor_map: dict[sp.Symbol, list[sp.Symbol]] | None = None,
         mode: str = "simplified",
-        solver: str = "roadrunner",
         parser: str = "legacy",
     ):
         """
@@ -150,13 +149,11 @@ class RecastValidator:
             recast_file: Path to recast Antimony file
             factor_map: Mapping from original to auxiliary variables (X -> [X1, X2, ...])
             mode: Recast mode ('simplified' or 'canonical')
-            solver: ODE solver for trajectory validation ('roadrunner' or 'rk4')
             parser: Parser to use for Antimony files ('legacy' or 'sbml')
         """
         self.original_file = original_file
         self.recast_file = recast_file
         self.mode = mode
-        self.solver = solver
         self.parser = parser
 
         # Read recast file to extract mapping comments
@@ -1803,42 +1800,19 @@ class RecastValidator:
         y0_override=None,
     ):
         """
-        Simulate a model using the specified solver (no fallbacks).
-
-        Uses self.solver which can be 'roadrunner' or 'rk4'.
-        No silent fallbacks - if the specified solver fails, we report the error.
+        Simulate a model using libRoadRunner.
         """
-        if self.solver == "roadrunner":
-            return self._simulate_with_roadrunner(
-                model_ir,
-                odes,
-                vars_ordered,
-                t_end,
-                n_points,
-                param_values,
-                time_symbol,
-                model_name,
-                y0_override,
-            )
-        elif self.solver == "rk4":
-            return self._simulate_with_rk4(
-                model_ir,
-                odes,
-                vars_ordered,
-                t_end,
-                n_points,
-                param_values,
-                time_symbol,
-                model_name,
-                y0_override,
-            )
-        else:
-            return {
-                "success": False,
-                "t": np.array([]),
-                "y": np.array([]),
-                "message": f"Unknown solver: {self.solver}",
-            }
+        return self._simulate_with_roadrunner(
+            model_ir,
+            odes,
+            vars_ordered,
+            t_end,
+            n_points,
+            param_values,
+            time_symbol,
+            model_name,
+            y0_override,
+        )
 
     def _simulate_with_roadrunner(
         self,
@@ -1889,51 +1863,6 @@ class RecastValidator:
                 "message": f"RoadRunner error: {str(e)}",
             }
 
-    def _simulate_with_rk4(
-        self,
-        model_ir,
-        odes,
-        vars_ordered,
-        t_end,
-        n_points,
-        param_values,
-        time_symbol,
-        model_name,
-        y0_override=None,
-    ):
-        """Simulate using RK4 solver."""
-        try:
-            from .ode_backends.rk4_backend import simulate_with_rk4
-
-            result = simulate_with_rk4(model_ir, 0.0, t_end, n_points, y0_override=y0_override)
-
-            if result["success"]:
-                state_names = result["state_names"]
-                y_reordered = np.zeros((len(result["t"]), len(vars_ordered)))
-
-                for i, var in enumerate(vars_ordered):
-                    var_name = str(var)
-                    if var_name in state_names:
-                        j = state_names.index(var_name)
-                        y_reordered[:, i] = result["y"][:, j]
-                    else:
-                        y_reordered[:, i] = 0.0
-
-                return {"success": True, "t": result["t"], "y": y_reordered, "message": ""}
-            else:
-                return {
-                    "success": False,
-                    "t": np.array([]),
-                    "y": np.array([]),
-                    "message": f"RK4 simulation failed: {result.get('message', 'Unknown error')}",
-                }
-        except Exception as e:
-            return {
-                "success": False,
-                "t": np.array([]),
-                "y": np.array([]),
-                "message": f"RK4 error: {str(e)}",
-            }
 
     def _compute_recast_initial_conditions(self, recast_vars, orig_vars, param_values):
         """
@@ -2179,7 +2108,6 @@ def validate_recast_pair(
     factor_map: dict | None = None,
     mode: str = "simplified",
     output_json: str | None = None,
-    solver: str = "roadrunner",
     parser: str = "legacy",
 ) -> ValidationReport:
     """
@@ -2191,13 +2119,12 @@ def validate_recast_pair(
         factor_map: Optional factor map
         mode: Recast mode
         output_json: Optional path to save JSON report
-        solver: ODE solver for trajectory validation ('roadrunner' or 'rk4')
         parser: Parser for Antimony files ('legacy' or 'sbml')
 
     Returns:
         ValidationReport
     """
-    validator = RecastValidator(original_file, recast_file, factor_map, mode, solver, parser)
+    validator = RecastValidator(original_file, recast_file, factor_map, mode, parser)
     report = validator.validate()
 
     if output_json:

@@ -19,9 +19,7 @@ import sys
 from pathlib import Path
 
 
-def run_mode(
-    input_dir: str, mode: str, outdir: str, solver: str = "roadrunner", parser: str = "sbml"
-) -> int:
+def run_mode(input_dir: str, mode: str, outdir: str, parser: str = "sbml") -> int:
     """Run ssys-recaster for a specific mode."""
     manifest = f"{input_dir}/models.manifest"
 
@@ -39,8 +37,6 @@ def run_mode(
         outdir,
         "--mode",
         mode,
-        "--solver",
-        solver,
         "--parser",
         parser,
         "--validate",
@@ -90,12 +86,6 @@ Model directories:
         "--outdir", default=None, help="Output directory (default: out_<input_dir>)"
     )
     parser.add_argument(
-        "--solver",
-        choices=["roadrunner", "rk4"],
-        default="roadrunner",
-        help="ODE solver: 'roadrunner' (CVODE, default) or 'rk4'",
-    )
-    parser.add_argument(
         "--parser",
         choices=["sbml", "legacy"],
         default="sbml",
@@ -118,17 +108,13 @@ Model directories:
         print("-" * 60)
         print("SIMPLIFIED MODE")
         print("-" * 60)
-        ret1 = run_mode(
-            input_dir, "simplified", f"out_{base_name}_simplified", args.solver, args.parser
-        )
+        ret1 = run_mode(input_dir, "simplified", f"out_{base_name}_simplified", args.parser)
 
         print()
         print("-" * 60)
         print("CANONICAL MODE")
         print("-" * 60)
-        ret2 = run_mode(
-            input_dir, "canonical", f"out_{base_name}_canonical", args.solver, args.parser
-        )
+        ret2 = run_mode(input_dir, "canonical", f"out_{base_name}_canonical", args.parser)
 
         print()
         print("=" * 60)
@@ -150,7 +136,7 @@ Model directories:
     else:
         # Single mode
         outdir = args.outdir or f"out_{base_name}"
-        ret = run_mode(input_dir, args.mode, outdir, args.solver, args.parser)
+        ret = run_mode(input_dir, args.mode, outdir, args.parser)
         if ret == 0:
             print(f"\nNotebook: {outdir}/recast_report.ipynb")
         sys.exit(ret)
