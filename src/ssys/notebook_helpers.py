@@ -7,7 +7,10 @@ import matplotlib.pyplot as plt
 from IPython.display import display, Markdown, Code
 
 import ssys
-from ssys.recaster import RecastStatus, SystemClass, classify_system, classify_result
+from ssys.recaster import (
+    RecastStatus, SystemClass, classify_system, classify_result,
+    parse_antimony_via_sbml
+)
 
 FILL_MISSING_PARAMS = False  # set True to auto-fill absent params with 1.0
 
@@ -583,23 +586,33 @@ def load_and_report(ant_path, recast_path, T=None, T_start=None, steps=None,
     ant_text = open(ant_path).read()
     rec_text = open(recast_path).read()
     
-    # Parse original model to extract simulation metadata
+    # Parse original model using SBML-based parser (same as CLI)
+    # This ensures consistent ODE extraction across CLI and notebook
+    sym = parse_antimony_via_sbml(ant_text)
+    
+    # Also parse with hand-rolled parser for simulation (ModelIR needed by simulate_ode)
     ir = ssys.parse_antimony(ant_text)
+    
+    # Extract simulation metadata from hand-rolled parser (ir has @SIM data)
+    # SBML doesn't have @SIM concept, so we get it from the Antimony parser
+    sim_t_start = ir.sim_t_start
+    sim_t_end = ir.sim_t_end
+    sim_n_steps = ir.sim_n_steps
     
     # Model @SIM values take PRECEDENCE over function parameters
     # This ensures per-model simulation settings are respected
-    if ir.sim_t_start is not None:
-        T_start = ir.sim_t_start
+    if sim_t_start is not None:
+        T_start = sim_t_start
     elif T_start is None:
         T_start = 0.0  # default
     
-    if ir.sim_t_end is not None:
-        T = ir.sim_t_end
+    if sim_t_end is not None:
+        T = sim_t_end
     elif T is None:
         T = 20.0  # default
     
-    if ir.sim_n_steps is not None:
-        steps = ir.sim_n_steps
+    if sim_n_steps is not None:
+        steps = sim_n_steps
     elif steps is None:
         steps = 400  # default
     display(Markdown("**Files**"))
@@ -611,8 +624,7 @@ def load_and_report(ant_path, recast_path, T=None, T_start=None, steps=None,
     display(Markdown("**Recast Antimony**"))
     display(Code(rec_text, language="text"))
 
-    # Build symbolic system (ir already parsed above for @SIMTIME)
-    sym = ssys.build_sym_system(ir)
+    # Recast the symbolic system (already parsed above using SBML-based parser)
     rec = ssys.recast_to_ssystem(sym, mode=mode)
 
     params = dict(sym.params)

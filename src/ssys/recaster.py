@@ -860,7 +860,13 @@ def _parse_sbml_document(doc, source: str = "<unknown>") -> 'SymSystem':
     # STEP 6b: Handle InitialAssignments (parameter expressions for ICs)
     # ========================================================================
     # In SBML, InitialAssignments allow ICs to be set via formulas like I = I_b
+    # or parameter expressions like gamma_rate = 1/7
     # We need to evaluate these formulas to get numeric initial conditions
+    #
+    # NOTE: When Antimony converts "gamma_rate = 1/7" to SBML, it creates:
+    #   1. A parameter element (value may be unset or 0)
+    #   2. An InitialAssignment that defines the actual value
+    # So we MUST process InitialAssignments for parameters, not just species
     for i in range(model.getNumInitialAssignments()):
         ia = model.getInitialAssignment(i)
         var_id = ia.getSymbol()
@@ -876,6 +882,20 @@ def _parse_sbml_document(doc, source: str = "<unknown>") -> 'SymSystem':
                         init_expr = init_expr.subs(all_syms[param_name], param_val)
                 # Update the species initial value
                 species_info[var_id]['init'] = float(init_expr)
+            except Exception:
+                pass  # Keep default if evaluation fails
+        
+        elif var_id in params:
+            # Handle parameter expressions like gamma_rate = 1/7
+            try:
+                # Evaluate the formula
+                init_expr = sp.sympify(formula_str, locals=all_syms)
+                # Substitute known parameter values
+                for param_name, param_val in params.items():
+                    if param_name != var_id and param_name in all_syms:
+                        init_expr = init_expr.subs(all_syms[param_name], param_val)
+                # Update the parameter value
+                params[var_id] = float(init_expr)
             except Exception:
                 pass  # Keep default if evaluation fails
 
