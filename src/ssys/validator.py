@@ -1679,7 +1679,7 @@ class RecastValidator:
                     result=ValidationResult.PASS,
                     max_error=max_error,
                     mean_error=mean_error,
-                    details=f"Trajectories match. Max scaled error: {max_error:.2e} at t={worst_t:.2f} ({worst_var})"
+                    details=f"Trajectories match. Max scaled error: {max_error:.2e} at t={worst_t:.2g} ({worst_var})"
                 )
             else:
                 return EquivalenceTest(
@@ -1687,7 +1687,7 @@ class RecastValidator:
                     result=ValidationResult.FAIL,
                     max_error=max_error,
                     mean_error=mean_error,
-                    details=f"Trajectories diverge. Max scaled error: {max_error:.2e} at t={worst_t:.2f} ({worst_var})",
+                    details=f"Trajectories diverge. Max scaled error: {max_error:.2e} at t={worst_t:.2g} ({worst_var})",
                     counterexamples=[{
                         't': float(worst_t),
                         'variable': worst_var,
