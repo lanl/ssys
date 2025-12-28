@@ -173,7 +173,7 @@ def tokenize_species_side(side: str) -> list[tuple[int, str]]:
 def _expand_exps_through_factors(exps, factor_map):
     """Return a new {sym: exp} dict where any original symbol present in factor_map
     is replaced by its factor variables, each receiving the same exponent."""
-    new = {}
+    new: dict[sp.Symbol, sp.Expr] = {}
     for s, e in exps.items():
         if s in factor_map:
             for v in factor_map[s]:
@@ -286,40 +286,9 @@ def parse_antimony(text: str) -> ModelIR:
                         except ValueError:
                             pass
 
-    # Pre-process: join continuation lines (lines without semicolons)
-    # Antimony statements end with semicolons. Lines that don't end with ';'
-    # (after stripping comments) are continuations of the previous statement.
-    joined_lines: list[str] = []
-    current_stmt = ""
-    for raw in ir.raw_lines:
-        # Strip inline comments
-        code_part = raw.split("//", 1)[0].rstrip()
-        if not code_part:
-            continue  # Skip empty/comment-only lines
-
-        current_stmt += " " + code_part if current_stmt else code_part
-
-        # Check if statement is complete (ends with ; or is model/end/special)
-        trimmed = current_stmt.strip()
-        is_complete = (
-            trimmed.endswith(";")
-            or trimmed.lower().startswith("model ")
-            or trimmed.lower() == "end"
-            # Note: species/compartment/const declarations without semicolons
-            # are common but they don't span multiple lines, so the next line
-            # will start a new statement anyway
-        )
-
-        if is_complete or trimmed.endswith(";"):
-            joined_lines.append(current_stmt.strip())
-            current_stmt = ""
-
-    # Don't forget any remaining statement
-    if current_stmt.strip():
-        joined_lines.append(current_stmt.strip())
-
-    # Use joined lines for parsing
-    ir.raw_lines = joined_lines
+    # NOTE: Line continuation is NOT used for our simple parser.
+    # Each line is treated as a separate statement.
+    # Complex models should use parse_antimony_via_sbml() instead.
 
     # First pass: extract @SIM metadata from comments
     # Format: // @SIM T_START=0 T_END=100 N_STEPS=500
@@ -1006,6 +975,11 @@ class SymSystem:
     assignment_rules: dict[str, str] = field(
         default_factory=dict
     )  # Assignment rules from original model
+    # Optional metadata attributes (set by parse_antimony_via_sbml)
+    sim_t_start: float | None = None  # Simulation start time from @SIM
+    sim_t_end: float | None = None  # Simulation end time from @SIM
+    sim_n_steps: int | None = None  # Number of simulation steps from @SIM
+    antimony_text: str = ""  # Cache original Antimony text for RoadRunner
 
 
 def build_sym_system(ir: ModelIR) -> SymSystem:
@@ -1280,8 +1254,8 @@ def classify_result(result: RecastResult, mode: str = "simplified") -> SystemCla
 
         # All terms are compatible - could be canonical
         # Check if each equation has exactly 1 production + 1 degradation
-        for eq in result.gma_equations:
-            if len(eq.production) != 1 or len(eq.degradation) != 1:
+        for gma_eq2 in result.gma_equations:
+            if len(gma_eq2.production) != 1 or len(gma_eq2.degradation) != 1:
                 return SystemClass.GMA
         return SystemClass.CANONICAL_SSYSTEM
 
@@ -1297,9 +1271,9 @@ def classify_result(result: RecastResult, mode: str = "simplified") -> SystemCla
         is_canonical = True
         is_ssystem = True
 
-        for eq in result.equations:
-            g_coeff = eq.growth[0]
-            d_coeff = eq.decay[0]
+        for ssys_eq in result.equations:
+            g_coeff = ssys_eq.growth[0]
+            d_coeff = ssys_eq.decay[0]
 
             # Check if growth coefficient is non-zero
             g_nonzero = False
@@ -2377,7 +2351,7 @@ def lift_harmonic(
     expr: sp.Expr,
     aux_counter: int,
     params: dict[str, float],
-    existing_harmonics: dict[sp.Expr, tuple[sp.Symbol, sp.Symbol]] = None,
+    existing_harmonics: dict[sp.Expr, tuple[sp.Symbol, sp.Symbol]] | None = None,
 ) -> AutonomousLiftResult | None:
     """
     Lift harmonic function cos(ω*time + φ) or sin(ω*time + φ) to autonomous ODEs.
@@ -3017,9 +2991,9 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
         aux_counter += 1
 
     # Handle sin/cos pairs (state-dependent only) - create BOTH auxiliaries even if only one appears
-    for arg, funcs in sin_cos_pairs.items():
-        sin_func = funcs.get("sin", sp.sin(arg))
-        cos_func = funcs.get("cos", sp.cos(arg))
+    for arg, funcs_dict in sin_cos_pairs.items():
+        sin_func = funcs_dict.get("sin", sp.sin(arg))
+        cos_func = funcs_dict.get("cos", sp.cos(arg))
 
         # Create auxiliary for sin
         Z_sin = sp.symbols(f"Z_{aux_counter}", positive=True)
@@ -3068,9 +3042,9 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
     new_aux_odes: dict[sp.Symbol, sp.Expr] = {}
 
     # Handle sin/cos pairs with coupled derivatives
-    for arg, funcs in sin_cos_pairs.items():
-        sin_func = funcs.get("sin", sp.sin(arg))
-        cos_func = funcs.get("cos", sp.cos(arg))
+    for arg, funcs_dict2 in sin_cos_pairs.items():
+        sin_func = funcs_dict2.get("sin", sp.sin(arg))
+        cos_func = funcs_dict2.get("cos", sp.cos(arg))
         Z_sin = func_to_aux[sin_func]
         Z_cos = func_to_aux[cos_func]
 
@@ -3772,7 +3746,7 @@ def recast_to_ssystem(sym: "SymSystem", mode: str = "simplified") -> "RecastResu
     if lifted_vars and all_auxiliary_defs and not has_composite_aux:
         # Only apply inverse mappings for non-composite systems (rational/identity mappings)
         # Build inverse map: original_var -> expression in terms of auxiliaries
-        orig_to_aux_expr = {}
+        orig_to_aux_expr: dict[sp.Symbol, sp.Expr] = {}
 
         # For identity mappings: if Y_1 = Z (simple symbol equality)
         for aux, defn in all_auxiliary_defs.items():
@@ -4312,7 +4286,7 @@ def _format_factor(factor: sp.Expr) -> str:
 
     # Symbol (parameter)
     if isinstance(factor, sp.Symbol):
-        return factor.name
+        return str(factor.name)
 
     # Power: base^exp
     if isinstance(factor, sp.Pow):
