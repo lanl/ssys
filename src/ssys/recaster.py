@@ -1204,13 +1204,9 @@ def classify_result(result: RecastResult, mode: str = "simplified") -> SystemCla
     has_time_varying_coeffs = False
     if result.assignment_rules:
         for rule_name, rule_expr in result.assignment_rules.items():
-            # Check if rule contains 'T' (clock state) - case sensitive
-            # This indicates time-varying coefficients via assignment rules
-            if ' T ' in f' {rule_expr} ' or rule_expr.startswith('T ') or \
-               rule_expr.endswith(' T') or rule_expr == 'T' or \
-               '(T)' in rule_expr or '(T-' in rule_expr or '(T+' in rule_expr or \
-               '*T' in rule_expr or 'T*' in rule_expr or '/T' in rule_expr or \
-               'T/' in rule_expr or '^T' in rule_expr or 'T^' in rule_expr:
+            # Check if rule contains 'T' (clock state) as a standalone identifier
+            # Use word boundary regex to match T but not words containing T (like "TIME")
+            if re.search(r'\bT\b', str(rule_expr)):
                 has_time_varying_coeffs = True
                 break
     
