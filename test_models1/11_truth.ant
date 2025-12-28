@@ -12,18 +12,13 @@ model Monod_chemostat_GMA_exact()
 
   // Dynamics (all terms are power-law monomials; negatives appear via subtraction)
   // X1' = alpha1 * X1 * X2 / (1 + X2) - X1  =>  alpha1*X1*X2*Y^(-1) - 1*X1
-  X1' =  alpha1 * X1 * X2 * (Y^(-1))
-       - 1 * X1;
+  X1' = alpha1 * X1 * X2 * (Y^(-1)) - 1 * X1;
 
   // X2' = X_r - X2 - beta2 * X1 * X2 / (1 + X2)
-  X2' =  X_r
-       - 1 * X2
-       - beta2 * X1 * X2 * (Y^(-1));
+  X2' = X_r - 1 * X2 - beta2 * X1 * X2 * (Y^(-1));
 
   // Ancillary identity (exact): Y = 1 + X2  ⇒  Y' = X2'
-  Y'  =  X_r
-       - 1 * X2
-       - beta2 * X1 * X2 * (Y^(-1));
+  Y' = X_r - 1 * X2 - beta2 * X1 * X2 * (Y^(-1));
 
   // Initial conditions (consistent with your original)
   X1 = 0.1;

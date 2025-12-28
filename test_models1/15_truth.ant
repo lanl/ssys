@@ -33,12 +33,7 @@ model tryptophan_operon_GMA_exact()
 
   X1' =  (X9 * (X10^(-1))) - (X11 * X1);
   X2' =  (X11 * X1)        - (1 * X1);
-  X3' =  alpha5*X3*(X9^(-1))
-       + (X15*cX7)*X3*(X14^(-1))
-       - X1
-       - X12*X2
-       - cX6sq*(X3^2)*(X13^(-1))
-       - cX4*X3;
+  X3' = alpha5*X3*(X9^(-1)) + (X15*cX7)*X3*(X14^(-1)) - X1 - X12*X2 - cX6sq*(X3^2)*(X13^(-1)) - cX4*X3;
 
   // ===== Ancillary identity ODEs (exact via chain rule) =====
   // X9  = X3 + 1        => X9'  = X3'
@@ -46,33 +41,13 @@ model tryptophan_operon_GMA_exact()
   // X14 = X3 + 0.005    => X14' = X3'
   // X13 = cX6^2 + X3^2  => X13' = 2*X3*X3'
 
-  X9'  =  alpha5*X3*(X9^(-1))
-       + (X15*cX7)*X3*(X14^(-1))
-       - X1
-       - X12*X2
-       - cX6sq*(X3^2)*(X13^(-1))
-       - cX4*X3;
+  X9' = alpha5*X3*(X9^(-1)) + (X15*cX7)*X3*(X14^(-1)) - X1 - X12*X2 - cX6sq*(X3^2)*(X13^(-1)) - cX4*X3;
 
-  X10' =  X8*( alpha5*X3*(X9^(-1))
-             + (X15*cX7)*X3*(X14^(-1))
-             - X1
-             - X12*X2
-             - cX6sq*(X3^2)*(X13^(-1))
-             - cX4*X3 );
+  X10' = X8*(alpha5*X3*(X9^(-1)) + (X15*cX7)*X3*(X14^(-1)) - X1 - X12*X2 - cX6sq*(X3^2)*(X13^(-1)) - cX4*X3);
 
-  X14' =  alpha5*X3*(X9^(-1))
-       + (X15*cX7)*X3*(X14^(-1))
-       - X1
-       - X12*X2
-       - cX6sq*(X3^2)*(X13^(-1))
-       - cX4*X3;
+  X14' = alpha5*X3*(X9^(-1)) + (X15*cX7)*X3*(X14^(-1)) - X1 - X12*X2 - cX6sq*(X3^2)*(X13^(-1)) - cX4*X3;
 
-  X13' =  2*X3*( alpha5*X3*(X9^(-1))
-               + (X15*cX7)*X3*(X14^(-1))
-               - X1
-               - X12*X2
-               - cX6sq*(X3^2)*(X13^(-1))
-               - cX4*X3 );
+  X13' = 2*X3*(alpha5*X3*(X9^(-1)) + (X15*cX7)*X3*(X14^(-1)) - X1 - X12*X2 - cX6sq*(X3^2)*(X13^(-1)) - cX4*X3);
 
   // ===== Initial conditions (match your original) =====
   X1 = 0.185;

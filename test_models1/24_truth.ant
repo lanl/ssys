@@ -13,7 +13,7 @@
 //   X3' = k * X1^-1 * X2
 ////////////////////////////////////////////////////////////////////////////////
 
-model 24_scalarExpLog_scaled_truth()
+model scalarExpLog_scaled_truth_24()
 
   species X1, X2, X3;
 

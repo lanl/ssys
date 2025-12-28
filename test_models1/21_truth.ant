@@ -41,21 +41,13 @@ model Haldane_chemostat_GMA_exact()
   // ===== GMA ODEs =====
 
   // X' = mu_max * X * S * Y^(-1) - D * X
-  X' = mu_max * X * S * Y^(-1)
-     - D * X
+  X' = mu_max * X * S * Y^(-1) - D * X;
 
   // S' = D*S_in - D*S - (mu_max/Y_xs) * X * S * Y^(-1)
-  S' = D * S_in
-     - D * S
-     - (mu_max / Y_xs) * X * S * Y^(-1)
+  S' = D * S_in - D * S - (mu_max / Y_xs) * X * S * Y^(-1);
 
   // Y' = (1 + 2S/K_I) * S'  (expanded into pure monomials)
-  Y' =  D * S_in
-      + (2*D*S_in / K_I) * S
-      - D * S
-      - (2*D / K_I) * S^2
-      - (mu_max / Y_xs) * X * S * Y^(-1)
-      - (2*mu_max / (K_I * Y_xs)) * X * S^2 * Y^(-1)
+  Y' = D * S_in + (2*D*S_in / K_I) * S - D * S - (2*D / K_I) * S^2 - (mu_max / Y_xs) * X * S * Y^(-1) - (2*mu_max / (K_I * Y_xs)) * X * S^2 * Y^(-1);
 
   // ===== Initial conditions (consistent with Y definition) =====
   X = 0.1
