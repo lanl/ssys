@@ -110,10 +110,16 @@ select = [
 ]
 ignore = [
     "E501",  # line too long (handled by formatter)
+    "E402",  # module level import not at top (we have intentional late imports)
+    "B007",  # unused loop variable (stylistic, _var prefix is verbose)
+    "B904",  # raise from None (intentional for cleaner error messages)
+    "B905",  # zip without strict (legacy code, strict breaks older Python)
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py
+"src/ssys/validator.py" = ["F401"]  # pytest/jax imports for availability check
+"biomodels/*.py" = ["F401", "F821"]  # type hints for optional dependencies
 
 [tool.mypy]
 python_version = "3.10"
