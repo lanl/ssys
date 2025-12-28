@@ -77,7 +77,6 @@ class ValidationReport:
     # Test results
     symbolic_test: Optional[EquivalenceTest] = None
     numerical_test: Optional[EquivalenceTest] = None
-    numerical_test_sympy: Optional[EquivalenceTest] = None  # Non-JAX method (dev mode only)
     trajectory_test: Optional[EquivalenceTest] = None
     auxiliary_tests: List[EquivalenceTest] = field(default_factory=list)
     
@@ -110,8 +109,7 @@ class ValidationReport:
             },
             'tests': {
                 'symbolic': test_to_dict(self.symbolic_test),
-                'numerical_jax': test_to_dict(self.numerical_test),
-                'numerical_sympy': test_to_dict(self.numerical_test_sympy),
+                'numerical': test_to_dict(self.numerical_test),
                 'trajectory': test_to_dict(self.trajectory_test),
                 'auxiliaries': [test_to_dict(t) for t in self.auxiliary_tests]
             },
@@ -1946,32 +1944,9 @@ class RecastValidator:
             report.symbolic_test = self.check_symbolic_equivalence()
         
         if run_numerical:
-            # Check if we're in dev mode (pytest installed from [dev] extras)
-            dev_mode = _is_dev_mode()
-            jax_available = False
-            
-            try:
-                import jax
-                jax_available = True
-            except ImportError:
-                pass
-            
-            if dev_mode:
-                # DEV MODE: Run BOTH numerical tests for comprehensive debugging
-                if jax_available:
-                    report.numerical_test = self.check_numerical_pointwise_jax()
-                # Always run sympy version in dev mode
-                report.numerical_test_sympy = self.check_numerical_pointwise()
-                
-                # If JAX wasn't available, copy sympy result to main numerical_test
-                if not jax_available:
-                    report.numerical_test = report.numerical_test_sympy
-            else:
-                # PRODUCTION MODE: JAX if available, else SymPy fallback
-                if jax_available:
-                    report.numerical_test = self.check_numerical_pointwise_jax()
-                else:
-                    report.numerical_test = self.check_numerical_pointwise()
+            # Always use SymPy numerical validation
+            # JAX was causing hangs/slowdowns - see DEVELOPMENT_NOTES.md
+            report.numerical_test = self.check_numerical_pointwise()
         
         if run_trajectory:
             report.trajectory_test = self.check_trajectory_comparison()

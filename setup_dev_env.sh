@@ -97,12 +97,12 @@ uv venv --python 3.12 "$ENV_NAME"
 echo "Activating environment..."
 source "$ENV_NAME/bin/activate"
 
-# Install package with dev extras and JAX
+# Install package with dev extras
 # Note: libroadrunner, antimony, and python-libsbml are now REQUIRED
 # core dependencies (SBML-first architecture), not optional extras.
-# JAX is optional for end users but included in dev setup for faster validation.
-echo "Installing ssys with dev tools and JAX..."
-uv pip install -e ".[dev,jax]"
+# JAX is NOT included - it causes hangs/slowdowns (see DEVELOPMENT_NOTES.md)
+echo "Installing ssys with dev tools..."
+uv pip install -e ".[dev]"
 
 # Verify installation
 echo ""
@@ -128,11 +128,8 @@ else
     exit 1
 fi
 
-if python -c "import jax; print(f'jax version: {jax.__version__}')" 2>/dev/null; then
-    echo "✓ jax available (fast numerical validation)"
-else
-    echo "⚠ jax NOT available (will use symbolic Jacobian fallback)"
-fi
+# JAX check removed - we don't use JAX anymore (causes hangs)
+# See DEVELOPMENT_NOTES.md for details
 
 # Register Jupyter kernel for this environment
 echo ""

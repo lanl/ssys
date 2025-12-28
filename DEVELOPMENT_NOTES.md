@@ -603,6 +603,63 @@ The 0.0 errors are NOT bugs - they indicate mathematical equivalence:
 
 ---
 
+## JAX Numerical Validation Issues
+
+**Status:** Deferred (SymPy validation sufficient)  
+**Date:** 2025-12-27
+
+### Problem Statement
+
+When JAX is installed, `recast_models.py` validation runs extremely slowly or hangs indefinitely:
+- With JAX installed: >5 minutes for 29 models (test_models1) before interruption
+- Without JAX: ~30 seconds for the same 29 models
+
+### Root Cause Analysis
+
+The slowdown likely stems from SymPy's `lambdify(..., modules='jax')` which generates JAX-compatible code from symbolic expressions. Issues include:
+
+1. **JIT compilation overhead**: JAX compiles functions on first call. For each model, the validator compiles:
+   - `phi_vec` (mapping function)
+   - `f_orig_at_phi` (original ODE at mapped points)
+   - `f_recast_vec` (recast ODE)
+   - `jacfwd(phi_vec)` (Jacobian via autodiff)
+
+2. **Per-model compilation**: With 29+ models, compilation overhead accumulates
+
+3. **Potential hangs**: Certain symbolic expressions may generate JAX code that doesn't terminate or triggers infinite tracing
+
+4. **Apple Silicon considerations**: JAX on M-series Macs may have Metal/MPS backend issues
+
+### Decision
+
+Disable JAX in validator - SymPy numerical validation provides equivalent coverage:
+- Both compute Jacobian-vector products: J_Φ(Z) · f_recast(Z)
+- Both compare against f_orig(Φ(Z))
+- SymPy uses symbolic Jacobian + NumPy evaluation (fast, stable)
+- JAX would use autodiff Jacobian (theoretically faster, but compilation overhead dominates)
+
+### Changes Made
+
+1. **validator.py**: Disabled JAX path, always use SymPy numerical validation
+   - Renamed JSON key from `numerical_jax` to `numerical`
+   - Removed `numerical_sympy` (redundant dual-test mode)
+   - Kept `check_numerical_pointwise_jax()` method (commented out) for future use
+
+2. **setup_dev_env.sh**: Removed JAX from dev environment
+   - Changed `uv pip install -e ".[dev,jax]"` to `uv pip install -e ".[dev]"`
+
+3. **pyproject.toml**: Kept `[jax]` optional extra for users who want to experiment
+
+### Future Work
+
+If GPU-accelerated validation becomes necessary:
+1. Profile specific models to identify which cause hangs
+2. Consider pre-compiling JAX functions and caching
+3. Test on non-Apple-Silicon hardware
+4. Explore alternative autodiff libraries (e.g., `autograd`)
+
+---
+
 # References
 
 - Savageau & Voit 1987: "Recasting Nonlinear Differential Equations as S-Systems"
