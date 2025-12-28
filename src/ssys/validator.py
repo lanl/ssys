@@ -36,6 +36,21 @@ class ValidationResult(Enum):
     NOT_ATTEMPTED = "not_attempted"
 
 
+def _is_dev_mode() -> bool:
+    """
+    Detect if we're running in development mode.
+    
+    Development mode is indicated by having pytest installed (from [dev] extras).
+    In dev mode, we run both JAX and non-JAX numerical tests for debugging.
+    In production mode, we run JAX if available, else non-JAX.
+    """
+    try:
+        import pytest
+        return True
+    except ImportError:
+        return False
+
+
 @dataclass
 class EquivalenceTest:
     """Results from a single equivalence test."""
@@ -62,6 +77,7 @@ class ValidationReport:
     # Test results
     symbolic_test: Optional[EquivalenceTest] = None
     numerical_test: Optional[EquivalenceTest] = None
+    numerical_test_sympy: Optional[EquivalenceTest] = None  # Non-JAX method (dev mode only)
     trajectory_test: Optional[EquivalenceTest] = None
     auxiliary_tests: List[EquivalenceTest] = field(default_factory=list)
     
@@ -94,7 +110,8 @@ class ValidationReport:
             },
             'tests': {
                 'symbolic': test_to_dict(self.symbolic_test),
-                'numerical': test_to_dict(self.numerical_test),
+                'numerical_jax': test_to_dict(self.numerical_test),
+                'numerical_sympy': test_to_dict(self.numerical_test_sympy),
                 'trajectory': test_to_dict(self.trajectory_test),
                 'auxiliaries': [test_to_dict(t) for t in self.auxiliary_tests]
             },
@@ -1013,7 +1030,10 @@ class RecastValidator:
             
             # Extract parameter values
             param_values = self.recast_ir.params
-            param_names = sorted(param_values.keys())
+            # CRITICAL: Filter out any param names that match state variable names
+            # This prevents "duplicate argument 't'" errors when 't' is both a state var and param
+            recast_var_names = {str(v) for v in recast_vars_ordered}
+            param_names = sorted([p for p in param_values.keys() if p not in recast_var_names])
             param_vals_array = jnp.array([param_values[name] for name in param_names])
             
             # Build mapping functions Φ(Z) using lambdify for JAX
@@ -1081,12 +1101,14 @@ class RecastValidator:
             auxiliary_var_indices = []
             
             # Also identify clock variables (T := time) - these should be sampled, not computed
+            # A clock variable is one whose definition IS exactly 'time' or 't'
+            # (not just involves time, like sin(t) + 2)
             clock_vars = set()
             for aux_name, aux_def in self.auxiliary_defs.items():
-                # Check if auxiliary is a clock variable (definition is just 'time' or 't')
-                if hasattr(aux_def, 'free_symbols'):
-                    aux_def_syms = {str(s).lower() for s in aux_def.free_symbols}
-                    if aux_def_syms <= {'time', 't'}:
+                # Check if auxiliary definition IS just 'time' or 't' (identity)
+                # This catches T := time but NOT Z_1 := sin(t) + 2
+                if isinstance(aux_def, sp.Symbol):
+                    if str(aux_def).lower() in ['time', 't']:
                         clock_vars.add(str(aux_name))
             
             for i, var in enumerate(recast_vars_ordered):
@@ -1240,8 +1262,12 @@ class RecastValidator:
             
             # Extract parameter values from recast IR
             param_values = self.recast_ir.params
+            # CRITICAL: Filter out any param names that match state variable names
+            # This prevents "duplicate argument 't'" errors when 't' is both a state var and param
+            recast_var_names = {str(v) for v in recast_vars_ordered}
+            filtered_param_names = sorted([p for p in param_values.keys() if p not in recast_var_names])
             # Use canonical symbols instead of creating new ones
-            param_symbols = [self.canonical_symbols[name] for name in sorted(param_values.keys())]
+            param_symbols = [self.canonical_symbols[name] for name in filtered_param_names]
             param_vals_ordered = [param_values[str(sym)] for sym in param_symbols]
             
             # Check if 'time' symbol appears in any ODE (time-dependent models)
@@ -1252,10 +1278,11 @@ class RecastValidator:
             for ode in self.recast_odes_expanded.values():
                 all_ode_symbols.update(ode.free_symbols)
             
-            # Check for time symbol (could be 'time' or 't')
+            # Check for time symbol - ONLY 'time' (Antimony reserved keyword)
+            # NOT 't' which may be a user-defined state variable (e.g., in 16_normal.ant)
             time_symbol = None
             for sym in all_ode_symbols:
-                if str(sym).lower() == 'time' or str(sym) == 't':
+                if str(sym).lower() == 'time':
                     time_symbol = sym
                     break
             
@@ -1272,10 +1299,12 @@ class RecastValidator:
             
             # Lambdify each element of Jacobian with both state vars and params
             # ALSO include time symbol if present (for time-dependent models)
+            # But ONLY if it's not already a state variable (e.g., 't' in cos_growth)
+            # CRITICAL: Check by NAME, not object identity (different Symbol objects may exist)
             n_orig = len(orig_vars_ordered)
             n_recast = len(recast_vars_ordered)
             all_symbols = list(recast_vars_ordered) + param_symbols
-            if time_symbol is not None:
+            if time_symbol is not None and str(time_symbol) not in recast_var_names:
                 all_symbols = all_symbols + [time_symbol]
             J_Phi_funcs = []
             for i in range(n_orig):
@@ -1345,12 +1374,14 @@ class RecastValidator:
             auxiliary_var_indices = []
             
             # Also identify clock variables (T := time) - these should be sampled, not computed
+            # A clock variable is one whose definition IS exactly 'time' or 't'
+            # (not just involves time, like sin(t) + 2)
             clock_vars = set()
             for aux_name, aux_def in self.auxiliary_defs.items():
-                # Check if auxiliary is a clock variable (definition is just 'time' or 't')
-                if hasattr(aux_def, 'free_symbols'):
-                    aux_def_syms = {str(s).lower() for s in aux_def.free_symbols}
-                    if aux_def_syms <= {'time', 't'}:
+                # Check if auxiliary definition IS just 'time' or 't' (identity)
+                # This catches T := time but NOT Z_1 := sin(t) + 2
+                if isinstance(aux_def, sp.Symbol):
+                    if str(aux_def).lower() in ['time', 't']:
                         clock_vars.add(str(aux_name))
             
             for i, var in enumerate(recast_vars_ordered):
@@ -1412,11 +1443,15 @@ class RecastValidator:
                                 break
                     
                     # Substitute time value if auxiliary depends on time
+                    # BUT only if it's not already substituted as a state variable
+                    # (e.g., t in cos_growth is a state variable, not integration time)
                     if t_sample is not None:
                         for sym in aux_def.free_symbols:
                             sym_name = str(sym).lower()
                             if sym_name == 'time' or sym_name == 't':
-                                subs_dict[sym] = t_sample
+                                # Check if this symbol was already substituted as state variable
+                                if sym not in subs_dict:
+                                    subs_dict[sym] = t_sample
                                 break
                     
                     # Evaluate - use evalf() then convert to float
@@ -1430,9 +1465,10 @@ class RecastValidator:
                     Z_sample[idx] = aux_val
                 
                 # Combine state variables and parameters for evaluation
-                # Also include sampled time value if time-dependent
+                # Also include sampled time value if time-dependent AND time is not a state var
+                # CRITICAL: Check by NAME, not object identity (different Symbol objects may exist)
                 all_vals = tuple(Z_sample) + tuple(param_vals_ordered)
-                if time_symbol is not None:
+                if time_symbol is not None and str(time_symbol) not in recast_var_names:
                     all_vals = all_vals + (t_sample,)
                 
                 # Evaluate J_Φ(Z) element by element - returns a matrix
@@ -1910,13 +1946,32 @@ class RecastValidator:
             report.symbolic_test = self.check_symbolic_equivalence()
         
         if run_numerical:
-            # Try JAX first (more robust), fall back to symbolic Jacobian
+            # Check if we're in dev mode (pytest installed from [dev] extras)
+            dev_mode = _is_dev_mode()
+            jax_available = False
+            
             try:
                 import jax
-                report.numerical_test = self.check_numerical_pointwise_jax()
+                jax_available = True
             except ImportError:
-                # JAX not available, use symbolic Jacobian method
-                report.numerical_test = self.check_numerical_pointwise()
+                pass
+            
+            if dev_mode:
+                # DEV MODE: Run BOTH numerical tests for comprehensive debugging
+                if jax_available:
+                    report.numerical_test = self.check_numerical_pointwise_jax()
+                # Always run sympy version in dev mode
+                report.numerical_test_sympy = self.check_numerical_pointwise()
+                
+                # If JAX wasn't available, copy sympy result to main numerical_test
+                if not jax_available:
+                    report.numerical_test = report.numerical_test_sympy
+            else:
+                # PRODUCTION MODE: JAX if available, else SymPy fallback
+                if jax_available:
+                    report.numerical_test = self.check_numerical_pointwise_jax()
+                else:
+                    report.numerical_test = self.check_numerical_pointwise()
         
         if run_trajectory:
             report.trajectory_test = self.check_trajectory_comparison()
