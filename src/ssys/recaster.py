@@ -4413,6 +4413,9 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast",
     if result.params:
         lines.append("// Parameters (from original model)")
         for param_name in sorted(result.params.keys()):
+            # Skip parameters that are actually assignment rules (they're computed, not constants)
+            if result.assignment_rules and param_name in result.assignment_rules:
+                continue
             param_val = result.params[param_name]
             lines.append(f"{param_name} = {param_val:g};")
         lines.append("")
