@@ -584,6 +584,78 @@ def latex_factor_map(rec):
     return "\\begin{aligned}\n" + " \\\\\n".join(rows) + "\n\\end{aligned}"
 
 
+def is_nonautonomous(sym):
+    """Check if a SymSystem has explicit time dependence.
+
+    Returns True if any ODE contains the 'time' symbol (Antimony keyword).
+    """
+    for ode_expr in sym.odes.values():
+        free = ode_expr.free_symbols
+        if any(s.name == "time" for s in free):
+            return True
+    return False
+
+
+def was_nonautonomous(sym):
+    """Check if system was originally nonautonomous but lifted.
+
+    Detects either:
+    - Explicit 'time' symbol in ODEs
+    - Clock variable (t' = 1) indicating lifted time
+
+    Returns True if system has/had explicit time dependence.
+    """
+    # Check for 'time' keyword
+    if is_nonautonomous(sym):
+        return True
+
+    # Check for clock variable (was lifted from nonautonomous)
+    if find_clock_variable(sym) is not None:
+        return True
+
+    return False
+
+
+def find_clock_variable(sym):
+    """Find clock variable in a SymSystem (lifted time).
+
+    A clock variable has ODE = 1 (constant derivative, tracks time).
+    Returns the variable name if found, None otherwise.
+    """
+    for var, ode_expr in sym.odes.items():
+        # Check if ODE == 1 (simplify to handle symbolic forms)
+        simplified = sp.simplify(ode_expr - 1)
+        if simplified == 0:
+            return str(var)
+    return None
+
+
+def get_autonomy_label(sym, is_recast=False, orig_was_nonautonomous=False):
+    """Get autonomy label for display.
+
+    Args:
+        sym: SymSystem to analyze
+        is_recast: True if this is a recast system
+        orig_was_nonautonomous: True if original was nonautonomous
+
+    Returns:
+        Tuple of (label, clock_var_name or None)
+        Label is one of: "autonomous", "nonautonomous", "autonomous, lifted"
+    """
+    nonauto = is_nonautonomous(sym)
+
+    if nonauto:
+        return ("nonautonomous", None)
+
+    # System is autonomous - check if it was lifted
+    clock_var = find_clock_variable(sym)
+
+    if clock_var and (is_recast or orig_was_nonautonomous):
+        return ("autonomous, lifted", clock_var)
+
+    return ("autonomous", None)
+
+
 def load_and_report(
     ant_path,
     recast_path,
@@ -660,8 +732,33 @@ def load_and_report(
     input_class = classify_system(sym)
     output_class = classify_result(rec, mode=mode)
 
+    # Check autonomy status - use was_nonautonomous to catch pre-lifted models
+    orig_has_time = was_nonautonomous(sym)
+    orig_clock = find_clock_variable(sym)
+
+    # Parse recast system to check for clock variable
+    rec_sym = parse_antimony_via_sbml(rec_text)
+    rec_autonomy_label, clock_var = get_autonomy_label(
+        rec_sym, is_recast=True, orig_was_nonautonomous=orig_has_time
+    )
+
+    # Build original autonomy label
+    if is_nonautonomous(sym):
+        orig_autonomy_label = "nonautonomous"
+    elif orig_clock:
+        orig_autonomy_label = f"autonomous, lifted, clock: {orig_clock}"
+    else:
+        orig_autonomy_label = "autonomous"
+
+    # Build classification string with autonomy info
+    input_str = f"{input_class.value} ({orig_autonomy_label})"
+    if clock_var:
+        output_str = f"{output_class.value} ({rec_autonomy_label}, clock: {clock_var})"
+    else:
+        output_str = f"{output_class.value} ({rec_autonomy_label})"
+
     # Display classification: Input → Output
-    display(Markdown(f"**Classification:** {input_class.value} → {output_class.value}"))
+    display(Markdown(f"**Classification:** {input_str} → {output_str}"))
 
     # Display validation results if available
     if validation_json and os.path.exists(validation_json):
