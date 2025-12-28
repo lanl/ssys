@@ -1543,7 +1543,7 @@ class RecastValidator:
     def check_trajectory_comparison(self,
                                      t_end: float = 1.0,
                                      n_points: int = 100,
-                                     threshold: float = 5e-2) -> EquivalenceTest:
+                                     threshold: float = 1.5e-2) -> EquivalenceTest:
         """
         Compare simulation trajectories between original and reconstructed recast.
         
