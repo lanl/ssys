@@ -1,11 +1,13 @@
 ---
-title: 'ssys: Exact recasting of ODE models into canonical S-system form'
+title: 'ssys: Exact algebraic recasting of ODE models into canonical S-system form'
 tags:
   - systems biology
   - dynamical systems
+  - S-systems
+  - power-law formalism
   - symbolic computation
   - Antimony
-  - model transformation
+  - SBML
 authors:
   - name: William S. Hlavacek
     orcid: 0000-0003-4383-8711
@@ -13,106 +15,58 @@ authors:
 affiliations:
   - name: Theoretical Biology & Biophysics Group, Theoretical Division, Los Alamos National Laboratory, Los Alamos, NM 87545, USA
     index: 1
-date: 2025-11-21
+date: 2025-12-28
 bibliography: paper.bib
 ---
 
 # Summary
 
-`ssys` is a small, focused toolkit that **recasts** ordinary differential equation (ODE) models written in **Antimony** into **canonical S-system** form in a mathematically exact way. For each state variable \(X_i\) with right-hand side \(f_i(X)\) decomposed into a finite sum of signed monomials \(f_i=\sum_j s_{ij}\), the tool constructs auxiliary “pool” variables \(\{V_{ij}\}\) such that \(X_i=\prod_j V_{ij}\) and
-\\[\dot V_{ij} = \pm \alpha_{ij}\, \frac{\prod_k X_k^{g_{ijk}}}{\prod_{\ell\neq j} V_{i\ell}} ,\\]
-which guarantees \( \frac{d}{dt}\prod_j V_{ij}=\sum_j s_{ij}=f_i(X) \) identically. The recast is therefore **exact**, not an approximation. The software emits (i) an Antimony file for the S-system, (ii) a stable **mapping** from original states to the product of auxiliaries, and (iii) a Jupyter report that prints the original and recast models in LaTeX, integrates both systems, and verifies an algebraic residual \(\|\dot X_{\text{recast}}-\dot X_{\text{orig}}\|\) at random test points.
+`ssys` is a Python toolkit for exact algebraic transformation of ordinary differential equation (ODE) models into canonical S-system or Generalized Mass Action (GMA) form. Given a model in Antimony or SBML format, `ssys` produces a mathematically equivalent representation where each equation has the form:
+$$\frac{dX_i}{dt} = \alpha_i \prod_j X_j^{g_{ij}} - \beta_i \prod_j X_j^{h_{ij}}$$
+The transformation introduces auxiliary variables as needed to decompose arbitrary nonlinearities—including rational functions, exponentials, logarithms, and trigonometric functions—into products of power-law terms. The recast is exact: the original and transformed systems have identical dynamics.
 
-Two use-cases motivate releasing this as a stand-alone, tested tool. **(A)** It provides **ground truth** S-systems to **evaluate structure-learning methods** that target power-law kinetics (e.g., generalized SINDy or Bayesian symbolic learners). **(B)** It exposes a **normal form** in which **steady states reduce to linear algebra in log-space**, enabling rank-based **identifiability diagnostics** for exponents and rate ratios. The package is lightweight (pure Python with SymPy/NumPy/Matplotlib), scriptable (CLI + manifest harness), and designed to be embedded in other workflows.
+The software provides a command-line interface for batch processing, a three-test validation suite (symbolic, numerical, trajectory), and generates Jupyter notebooks with LaTeX renderings and trajectory comparisons. It parses models via the reference Antimony library and libRoadRunner, ensuring compatibility with standard SBML semantics.
 
 # Statement of need
 
-Power-law (“S-system”) representations have long been used in biochemical systems analysis [@Savageau1969; @Voit2013]. Yet, researchers lack an **open, maintained, and reproducible** path to take an ODE model—as it is commonly authored today in **Antimony**—and obtain an **exact** S-system together with a **provable mapping** back to the original variables. Existing simulators or legacy codes either approximate the mapping, require bespoke formats, or are not readily scriptable for batch testing and benchmarking. `ssys` fills that gap:
+S-systems are a canonical ODE form developed within Biochemical Systems Theory [@Savageau1969; @SavageauVoit1987]. Any ODE system composed of elementary functions can, in principle, be exactly recast into S-system form [@SavageauVoit1987]. This canonical representation offers several advantages: steady-state equations become linear in log-space, enabling algebraic analysis of identifiability and sensitivity; the uniform power-law structure facilitates parameter estimation via linear regression techniques [@Daniels2015]; and the formalism provides a natural basis for sparse regression methods like SINDy [@Brunton2016].
 
-- **Exactness by construction.** The pool-auxiliary factorization guarantees algebraic equivalence.
-- **Reproducible reporting.** A harness consumes a manifest of Antimony files, produces recast models and a JupyterLab report with side-by-side integrations and LaTeX renderings.
-- **Instrumentation for methods research.** The emitted mapping and a built-in residual check make it straightforward to create **ground-truth test suites** for learners of S-system structure and parameters (e.g., [@Daniels2015]).
-- **Leverage of the normal form.** In log-space, steady-state equations are linear, enabling rank tests for parameter/elasticity identifiability without resorting to heavy nonlinear profiling.
+Despite the theoretical utility of S-systems, no general-purpose, open-source tool previously existed to perform exact recasting of arbitrary ODE models. Prior approaches relied on numerical fitting, which produces approximations rather than algebraic equivalences. `ssys` fills this gap by providing:
+
+- **Exact transformation.** The recast is algebraically equivalent to the original, verified by symbolic differentiation and numerical comparison.
+- **Broad applicability.** The tool handles rational functions, composite transcendental functions, and time-dependent coefficients through systematic lifting procedures.
+- **Standard formats.** Input/output in Antimony format ensures interoperability with SBML-based workflows and model repositories such as BioModels [@Malik2020].
+- **Validation infrastructure.** A three-test suite (symbolic Jacobian verification, pointwise numerical sampling, trajectory comparison) provides certificates of correctness.
+
+The package enables researchers to convert published models into canonical form for analysis, create ground-truth benchmarks for structure-learning algorithms, and leverage the log-linear properties of S-systems for identifiability studies.
 
 # State of the field
 
-Antimony is a widely used, human-readable modeling language for systems biology [@Smith2009Antimony], with transparent interop to SBML [@Hucka2003]. The S-system formalism is classical [@Savageau1969; @Voit2013], but modern, general-purpose **recasting tools** are scarce. We are not aware of an open-source package that (i) ingests arbitrary Antimony ODEs, (ii) returns an **exact** S-system, and (iii) emits the explicit **state-mapping** and a **residual** certificate. `ssys` aims to be that missing bridge.
+Antimony is a widely used human-readable modeling language for systems biology [@Smith2009Antimony], with transparent interoperability to SBML [@Hucka2003]. The S-system formalism is classical [@Savageau1969; @Voit2013], but general-purpose recasting tools are scarce. We are not aware of an open-source package that ingests arbitrary Antimony/SBML ODEs and returns an exact S-system with explicit state mappings and correctness certificates. `ssys` aims to be that missing bridge.
 
 # Functionality
 
-- **Parser & IR.** A minimal Antimony parser builds a symbolic IR (variables, parameters, reactions/rules, explicit \(X'=\cdot\) rate rules). Parameters and initials are carried forward.
-- **Exact recast.** Each \(f_i\) is expanded into signed monomials; per term \(s_{ij}\) we create one auxiliary \(V_{ij}\) and define \(\dot V_{ij}\) so that \(X_i=\prod_j V_{ij}\) and \( \dot X_i = \sum_j s_{ij}\) hold identically.
-- **Canonical names.** Auxiliaries are renamed \(X_1,X_2,\dots\) in first-appearance order so reports are stable.
-- **Mapping.** The emitted S-system Antimony file includes comments of the form `// X = X_3*X_7*X_8` and the notebook prints the mapping in LaTeX.
-- **Reports.** The harness (`harness.py`) accepts a manifest of `.ant` files and produces `out/*.ant` plus a `recast_report.ipynb` with: files, LaTeX of original and recast ODEs, an algebraic residual, and **side-by-side** time-course plots (original vs reconstructed from auxiliaries).
-- **Verification.** A residual function draws random positive test points, evaluates both \(\dot X\) and the reconstructed \(\sum_j \dot V_{ij}\prod_{\ell\ne j}V_{i\ell}\), and reports a relative max-norm error (typically ~1e-14–1e-12).
-
-# Example
-
-Original Antimony (logistic growth):
-```antimony
-model m2()
-  X = 1
-  r = 1.2
-  K = 5
-  X' = r*X*(1 - X/K)
-end
-```
-
-Excerpt of recast (mapping and canonical S-system):
-```antimony
-model m2_recast()
-  // Mapping from original variables to canonical auxiliaries (product form)
-  // X = X_1*X_2
-  X_1 = 1
-  X_2 = 1
-  r = 1.2
-  K = 5
-  X_1' = r*X_2 - 0
-  X_2' = 0 - (r/K)*X_1*X_2^2
-end
-```
-
-The report notebook integrates both systems and overlays \(X(t)\) (from the original) with \(X_1(t)X_2(t)\) (from the recast).
-
-# Design and implementation
-
-`ssys` is implemented in ~300 lines of pure Python on top of **SymPy** [@Meurer2017SymPy] for symbolic manipulation and **NumPy/Matplotlib/Jupyter** [@Harris2020NumPy; @Hunter2007Matplotlib; @Kluyver2016Jupyter] for numerical demonstration and reporting. The key routine `recast_to_ssystem` performs:
-
-1. **Symbolic expansion** of each \(f_i\) to a sum of monomials.
-2. **Term-wise auxiliaries** \(V_{ij}\) with exponents over original variables and negative exponents over all *other* auxiliaries in the same pool (never over \(V_{ij}\) itself), ensuring exact product-rule cancellation.
-3. **Canonicalization** of auxiliary names and emission of mapping + initials (first auxiliary seeded to \(X_i(0)\), others to 1.0).
+- **SBML-first parsing.** Models are parsed via the Antimony library and libRoadRunner, then converted to SymPy symbolic expressions for manipulation.
+- **Function lifting.** Composite functions (exp, log, sin, cos, etc.) and rational denominators are lifted to auxiliary variables with chain-rule-derived ODEs, preserving exactness.
+- **Sum splitting.** Sums of monomials are factored into products via pool-auxiliary construction, yielding the canonical two-term S-system form.
+- **Validation.** Three independent tests verify correctness: symbolic Jacobian chain-rule verification, numerical sampling at random positive points, and trajectory comparison via libRoadRunner simulation.
+- **Output modes.** Simplified mode preserves zeros; canonical mode ensures strict two-term form with epsilon slack variables.
 
 # Quality control
 
-- Unit tests cover parsing, exactness of the recast (residual ≈ 0), mapping consistency, and numeric equivalence on a curated test suite (decay, logistic, Lotka–Volterra, branched pathway, Bertalanffy, SIR, van der Pol, etc.).
-- The harness runs headlessly in CI and stores the notebook as an artifact.
-- The algebraic residual is reported per test in the notebook to catch regressions.
+The package includes 213 unit tests covering parsing, recasting, validation, and CLI functionality. Test suites include 29 core models, 42 literature examples from Savageau, Voit, and others, and 18 BioModels-derived cases. Continuous integration runs all tests on each commit.
 
-# Availability and installation
+# Availability
 
-`ssys` is a single-file module plus a harness script. It targets Python ≥3.9 and depends on SymPy/NumPy/Matplotlib/Jupyter.
+`ssys` is available on GitLab at https://lisdi-git.lanl.gov/hlavacek/ssys under the BSD-3-Clause license. Installation requires Python ≥3.10, SymPy, NumPy, libRoadRunner, and the Antimony library.
 
 ```bash
-pip install sympy numpy matplotlib jupyterlab
-# clone your repo and run the harness
-python harness.py --manifest tests/tests.manifest --outdir out --module ssys_recaster.py
+pip install -e ".[dev]"
+ssys-recast --manifest models.manifest --outdir output --validate
 ```
-
-# Usage
-
-- **CLI/harness:** Provide a text manifest of `.ant` files (one per line). The harness writes recast `.ant` outputs and a `recast_report.ipynb` containing LaTeX, mapping, residual, and plots.
-- **Library:** `import ssys_recaster as ss; rec = ss.recast_to_ssystem(sym)` where `sym` is built from `parse_antimony` → `build_sym_system`.
-
-# Limitations and future work
-
-- **Grammar coverage.** The current parser supports reactions, assignments, and explicit \(X'=\cdot\) rules; events and piecewise constructs are not yet implemented. Assignment rules could be inlined; events would require a lifted hybrid representation.
-- **Elementary functions.** A planned “aux-lifting” pass will introduce positive auxiliaries for `exp`, `log`, `sin`, etc., and prove exactness under the lifting identities.
-- **Stiffness.** The demo integrator is RK4 for clarity; we will add an optional stiff solver (e.g., BDF/LSODA via SciPy) in the notebook harness.
-- **Positivity.** The recast assumes positive orthant states; we guard numerical evaluation with a small floor when needed. Documenting this explicitly with invariants would tighten guarantees.
 
 # Acknowledgements
 
-We thank colleagues and mentors in biochemical systems analysis for foundational ideas and feedback. Any errors are our own.
+This work was supported by the U.S. Department of Energy through the Los Alamos National Laboratory (LANL). LANL is operated by Triad National Security, LLC, for the National Nuclear Security Administration of the U.S. Department of Energy (Contract No. 89233218CNA000001).
 
 # References
