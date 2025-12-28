@@ -580,11 +580,10 @@ def parse_antimony_via_sbml(antimony_text: str) -> 'SymSystem':
     sym = parse_sbml_from_string(sbml_string)
     
     # Attach simulation metadata if found
-    # Note: SymSystem doesn't have these fields, so we store as a workaround
-    # The CLI will need to extract these from the original text
-    sym._sim_t_start = t_start
-    sym._sim_t_end = t_end
-    sym._sim_n_steps = n_steps
+    # These public attributes are used by the validator for trajectory tests
+    sym.sim_t_start = t_start
+    sym.sim_t_end = t_end
+    sym.sim_n_steps = n_steps
     
     # Cache original Antimony text for RoadRunner simulation
     sym.antimony_text = antimony_text
