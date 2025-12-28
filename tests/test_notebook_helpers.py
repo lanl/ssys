@@ -1,0 +1,456 @@
+"""Tests for notebook_helpers module."""
+
+import pytest
+import sympy as sp
+
+from ssys.notebook_helpers import (
+    _beautify_latex,
+    _antimony_to_latex_direct,
+    _is_monomial,
+    _get_term_sign,
+    _is_already_ssystem,
+    _is_already_gma,
+    parse_antimony_odes,
+    latex_factor_map,
+    _expand_exps_through_factors,
+    product_expr,
+    _simplify_exponent_content,
+)
+from ssys.recaster import SymSystem, RecastResult, RecastStatus
+
+
+class TestBeautifyLatex:
+    """Tests for LaTeX beautification."""
+
+    def test_greek_letters_converted(self):
+        """Test that Greek letter names become LaTeX symbols."""
+        result = _beautify_latex("alpha + beta")
+        assert r"\alpha" in result
+        assert r"\beta" in result
+
+    def test_greek_with_subscript(self):
+        """Test Greek letters with subscripts."""
+        result = _beautify_latex("gamma_rate")
+        assert r"\gamma_{rate}" in result
+
+    def test_greek_with_digit(self):
+        """Test Greek letters followed by digits."""
+        result = _beautify_latex("alpha1")
+        assert r"\alpha_{1}" in result
+
+    def test_compound_subscripts(self):
+        """Test compound subscript handling."""
+        result = _beautify_latex("S_in")
+        assert "S_{in}" in result
+
+    def test_single_letter_digit_subscript(self):
+        """Test single letter + digit subscripting."""
+        result = _beautify_latex("k1")
+        assert "k_{1}" in result
+
+    def test_eps_to_epsilon(self):
+        """Test eps → epsilon conversion."""
+        result = _beautify_latex("eps")
+        assert r"\epsilon" in result
+
+    def test_decimal_to_fraction(self):
+        """Test decimal exponent to fraction conversion."""
+        result = _beautify_latex("x^{0.5}")
+        assert "1/2" in result
+
+    def test_negative_fraction(self):
+        """Test negative decimal exponent."""
+        result = _beautify_latex("x^{-0.5}")
+        assert "-1/2" in result
+
+    def test_already_escaped_not_doubled(self):
+        """Test that already escaped Greek letters aren't doubled."""
+        result = _beautify_latex(r"\alpha")
+        # Should not become \\alpha or have doubled backslash
+        assert result.count(r"\alpha") == 1
+
+
+class TestAntimonyToLatexDirect:
+    """Tests for direct Antimony to LaTeX conversion."""
+
+    def test_simple_term(self):
+        """Test simple term conversion."""
+        result = _antimony_to_latex_direct("k*X")
+        assert "k" in result
+        assert "X" in result
+        # * should become space (implicit multiplication)
+        assert "*" not in result
+
+    def test_exponent_conversion(self):
+        """Test caret exponent to braced form."""
+        result = _antimony_to_latex_direct("X^2")
+        assert "X^{2}" in result
+
+    def test_negative_exponent(self):
+        """Test negative exponents."""
+        result = _antimony_to_latex_direct("X^-1")
+        assert "X^{-1}" in result
+
+    def test_decimal_exponent(self):
+        """Test decimal exponents."""
+        result = _antimony_to_latex_direct("X^0.5")
+        assert "^{" in result
+        assert "0.5" in result or "1/2" in result
+
+    def test_parenthesized_exponent(self):
+        """Test symbolic exponent in parentheses."""
+        result = _antimony_to_latex_direct("X^(a - 1)")
+        assert "^{a - 1}" in result
+
+    def test_multiplication_spacing(self):
+        """Test that * becomes space."""
+        result = _antimony_to_latex_direct("2*x*y")
+        assert "*" not in result
+
+    def test_preserves_structure(self):
+        """Test that expression structure is preserved."""
+        result = _antimony_to_latex_direct("a + b - c")
+        # Should have both + and -
+        assert "+" in result
+        assert "-" in result
+
+
+class TestSimplifyExponentContent:
+    """Tests for exponent content simplification."""
+
+    def test_integer_decimal_simplified(self):
+        """Test 1.0 → 1 simplification."""
+        result = _simplify_exponent_content("1.0")
+        assert result == "1"
+
+    def test_negative_integer_simplified(self):
+        """Test -2.0 → -2 simplification."""
+        result = _simplify_exponent_content("-2.0")
+        assert result == "-2"
+
+    def test_non_integer_preserved(self):
+        """Test that non-integers are preserved."""
+        result = _simplify_exponent_content("0.5")
+        assert "0.5" in result
+
+    def test_whitespace_stripped(self):
+        """Test that whitespace is stripped."""
+        result = _simplify_exponent_content("  a + b  ")
+        assert result == "a + b"
+
+
+class TestIsMonomial:
+    """Tests for monomial detection."""
+
+    def test_number_is_monomial(self):
+        """Test that a number is a monomial."""
+        assert _is_monomial(sp.Float(5.0)) is True
+
+    def test_symbol_is_monomial(self):
+        """Test that a symbol is a monomial."""
+        x = sp.Symbol("x")
+        assert _is_monomial(x) is True
+
+    def test_power_is_monomial(self):
+        """Test that x^2 is a monomial."""
+        x = sp.Symbol("x")
+        assert _is_monomial(x**2) is True
+
+    def test_product_is_monomial(self):
+        """Test that 3*x^2 is a monomial."""
+        x = sp.Symbol("x")
+        assert _is_monomial(3 * x**2) is True
+
+    def test_multi_var_product_is_monomial(self):
+        """Test that 2*x*y^3 is a monomial."""
+        x = sp.Symbol("x")
+        y = sp.Symbol("y")
+        assert _is_monomial(2 * x * y**3) is True
+
+    def test_sum_not_monomial(self):
+        """Test that x + y is not a monomial."""
+        x = sp.Symbol("x")
+        y = sp.Symbol("y")
+        assert _is_monomial(x + y) is False
+
+    def test_exp_not_monomial(self):
+        """Test that exp(x) is not a monomial."""
+        x = sp.Symbol("x")
+        assert _is_monomial(sp.exp(x)) is False
+
+
+class TestGetTermSign:
+    """Tests for term sign detection."""
+
+    def test_positive_number(self):
+        """Test positive number sign."""
+        assert _get_term_sign(sp.Float(5.0)) == 1
+
+    def test_negative_number(self):
+        """Test negative number sign."""
+        assert _get_term_sign(sp.Float(-3.0)) == -1
+
+    def test_positive_monomial(self):
+        """Test positive monomial."""
+        x = sp.Symbol("x")
+        assert _get_term_sign(2 * x) == 1
+
+    def test_negative_monomial(self):
+        """Test negative monomial."""
+        x = sp.Symbol("x")
+        assert _get_term_sign(-3 * x**2) == -1
+
+    def test_zero_is_positive(self):
+        """Test that zero is considered positive."""
+        assert _get_term_sign(sp.Float(0.0)) == 1
+
+
+class TestIsAlreadySSsystem:
+    """Tests for S-system detection."""
+
+    def test_canonical_ssystem(self):
+        """Test canonical S-system detection."""
+        X = sp.Symbol("X", positive=True)
+        a = sp.Symbol("a", positive=True)
+        b = sp.Symbol("b", positive=True)
+
+        # X' = a*X - b*X^2 (one pos, one neg monomial)
+        sym = SymSystem(
+            vars=[X],
+            params={"a": 1.0, "b": 0.1},
+            odes={X: a * X - b * X**2},
+            initials={X: 1.0},
+        )
+
+        assert _is_already_ssystem(sym) is True
+
+    def test_multi_term_not_ssystem(self):
+        """Test that 3+ terms is not S-system."""
+        X = sp.Symbol("X", positive=True)
+
+        # X' = X - X^2 - X^3 (two negative terms)
+        sym = SymSystem(
+            vars=[X],
+            params={},
+            odes={X: X - X**2 - X**3},
+            initials={X: 1.0},
+        )
+
+        assert _is_already_ssystem(sym) is False
+
+
+class TestIsAlreadyGMA:
+    """Tests for GMA detection."""
+
+    def test_all_monomials_is_gma(self):
+        """Test that system with all monomial terms is GMA."""
+        X = sp.Symbol("X", positive=True)
+
+        # X' = X + X^2 - X^3 (all monomials)
+        sym = SymSystem(
+            vars=[X],
+            params={},
+            odes={X: X + X**2 - X**3},
+            initials={X: 1.0},
+        )
+
+        assert _is_already_gma(sym) is True
+
+    def test_non_monomial_not_gma(self):
+        """Test that non-monomial term disqualifies GMA."""
+        X = sp.Symbol("X", positive=True)
+
+        # X' = exp(X) (not a monomial)
+        sym = SymSystem(
+            vars=[X],
+            params={},
+            odes={X: sp.exp(X)},
+            initials={X: 0.0},
+        )
+
+        assert _is_already_gma(sym) is False
+
+
+class TestParseAntimonyOdes:
+    """Tests for ODE extraction from Antimony text."""
+
+    def test_simple_ode(self):
+        """Test parsing simple ODE."""
+        text = "X' = -k*X"
+        odes = parse_antimony_odes(text)
+        assert len(odes) == 1
+        assert odes[0][0] == "X"
+        assert "-k*X" in odes[0][1]
+
+    def test_multiple_odes(self):
+        """Test parsing multiple ODEs."""
+        text = """
+        X' = -k*X
+        Y' = k*X - d*Y
+        """
+        odes = parse_antimony_odes(text)
+        assert len(odes) == 2
+        var_names = [o[0] for o in odes]
+        assert "X" in var_names
+        assert "Y" in var_names
+
+    def test_ode_with_semicolon(self):
+        """Test that semicolons are stripped."""
+        text = "X' = -k*X;"
+        odes = parse_antimony_odes(text)
+        assert len(odes) == 1
+        assert odes[0][1].strip() == "-k*X"
+
+    def test_comments_ignored(self):
+        """Test that comments are ignored."""
+        text = """
+        // This is a comment
+        X' = -k*X  // inline comment
+        """
+        odes = parse_antimony_odes(text)
+        assert len(odes) == 1
+
+    def test_empty_returns_empty(self):
+        """Test that empty text returns empty list."""
+        odes = parse_antimony_odes("")
+        assert len(odes) == 0
+
+    def test_no_odes_returns_empty(self):
+        """Test that text without ODEs returns empty list."""
+        text = "k = 0.5\nX = 1.0"
+        odes = parse_antimony_odes(text)
+        assert len(odes) == 0
+
+
+class TestLatexFactorMap:
+    """Tests for factor map LaTeX generation."""
+
+    def test_empty_factor_map(self):
+        """Test empty factor map output."""
+        X = sp.Symbol("X", positive=True)
+        rec = RecastResult(
+            status=RecastStatus.CANONICAL_SSYSTEM,
+            equations=[],
+            initials={X: 1.0},
+            variables=[X],
+            factor_map={},  # Empty
+        )
+
+        result = latex_factor_map(rec)
+        assert "No factorization" in result or "direct form" in result
+
+    def test_single_factor(self):
+        """Test single factor mapping."""
+        X = sp.Symbol("X", positive=True)
+        Z = sp.Symbol("Z_1", positive=True)
+
+        rec = RecastResult(
+            status=RecastStatus.CANONICAL_SSYSTEM,
+            equations=[],
+            initials={Z: 1.0},
+            variables=[Z],
+            factor_map={X: [Z]},
+        )
+
+        result = latex_factor_map(rec)
+        assert "aligned" in result
+        assert "X" in result
+        assert "Z" in result
+
+    def test_multiple_factors(self):
+        """Test multiple factor mapping (product)."""
+        X = sp.Symbol("X", positive=True)
+        Z1 = sp.Symbol("Z_1", positive=True)
+        Z2 = sp.Symbol("Z_2", positive=True)
+
+        rec = RecastResult(
+            status=RecastStatus.CANONICAL_SSYSTEM,
+            equations=[],
+            initials={Z1: 1.0, Z2: 1.0},
+            variables=[Z1, Z2],
+            factor_map={X: [Z1, Z2]},
+        )
+
+        result = latex_factor_map(rec)
+        assert "cdot" in result  # Product notation
+
+
+class TestExpandExpsThroughFactors:
+    """Tests for expanding exponents through factor map."""
+
+    def test_simple_expansion(self):
+        """Test simple expansion through factor map."""
+        X = sp.Symbol("X")
+        Z = sp.Symbol("Z_1")
+
+        exps = {X: 2.0}
+        factor_map = {X: [Z]}
+
+        result = _expand_exps_through_factors(exps, factor_map)
+
+        assert Z in result
+        assert result[Z] == 2.0
+        assert X not in result
+
+    def test_no_mapping_passes_through(self):
+        """Test that unmapped variables pass through."""
+        Y = sp.Symbol("Y")
+
+        exps = {Y: 3.0}
+        factor_map = {}
+
+        result = _expand_exps_through_factors(exps, factor_map)
+
+        assert Y in result
+        assert result[Y] == 3.0
+
+    def test_multiple_factors_split(self):
+        """Test that exponent is distributed to multiple factors."""
+        X = sp.Symbol("X")
+        Z1 = sp.Symbol("Z_1")
+        Z2 = sp.Symbol("Z_2")
+
+        exps = {X: 2.0}
+        factor_map = {X: [Z1, Z2]}
+
+        result = _expand_exps_through_factors(exps, factor_map)
+
+        # X^2 → Z1^2 * Z2^2 (each factor gets the exponent)
+        assert Z1 in result
+        assert Z2 in result
+        assert result[Z1] == 2.0
+        assert result[Z2] == 2.0
+
+
+class TestProductExpr:
+    """Tests for building product expressions."""
+
+    def test_simple_product(self):
+        """Test simple product."""
+        x = sp.Symbol("x", positive=True)
+        result = product_expr(2, {x: 3})
+        expected = 2 * x**3
+        assert sp.simplify(result - expected) == 0
+
+    def test_symbolic_coefficient(self):
+        """Test symbolic coefficient."""
+        x = sp.Symbol("x", positive=True)
+        k = sp.Symbol("k", positive=True)
+        result = product_expr(k, {x: 2})
+        expected = k * x**2
+        assert sp.simplify(result - expected) == 0
+
+    def test_zero_exponent_skipped(self):
+        """Test that zero exponents are skipped."""
+        x = sp.Symbol("x", positive=True)
+        result = product_expr(5, {x: 0})
+        assert result == 5
+
+    def test_empty_exponents(self):
+        """Test with no exponents."""
+        result = product_expr(3, {})
+        assert result == 3
+
+
+if __name__ == "__main__":
+    pytest.main([__file__, "-v"])

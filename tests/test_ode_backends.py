@@ -61,12 +61,11 @@ def test_roadrunner_backend_not_installed():
     assert "message" in result
 
 
-@pytest.mark.skipif(
-    True,  # Skip unless roadrunner actually installed
-    reason="Requires libRoadRunner installation",
-)
 def test_roadrunner_exp_decay():
     """Test roadrunner backend on exponential decay."""
+    # Skip if roadrunner not installed
+    pytest.importorskip("roadrunner", reason="Requires libRoadRunner installation")
+    
     antimony_text = """
     model exp_decay()
         species S;
