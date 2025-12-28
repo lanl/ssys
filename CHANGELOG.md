@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2025-12-28
+
+### Removed
+- Removed bespoke RK4 backend - RoadRunner (CVODE) is now the only ODE solver
+- Removed `--solver` CLI flag from `ssys-recast` and `recast_models.py`
+
+### Changed
+- Renamed `biomodels/` directory to `biomodels_batch/` for clarity
+
+### Maintenance
+- Added comprehensive unit tests (213 tests, 45% coverage)
+- Fixed all ruff lint errors
+- Added autonomy status detection and display
+
 ## [0.5.0] - 2025-12-27
 
 ### Added
@@ -107,7 +121,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - matplotlib >=3.7
 - nbformat >=5.9
 
-[Unreleased]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.0...main
+[Unreleased]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.1...main
+[0.5.1]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.0...v0.5.1
 [0.5.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.4.0...v0.5.0
 [0.4.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.3.0...v0.4.0
 [0.3.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.2.0...v0.3.0
