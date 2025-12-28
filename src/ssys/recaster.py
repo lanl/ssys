@@ -79,7 +79,7 @@ def _expand_function_calls(
 
             # Perform substitution: replace each param with corresponding arg
             expanded = body
-            for param, arg in zip(params, args):
+            for param, arg in zip(params, args, strict=False):
                 # Use word boundary replacement to avoid partial matches
                 # e.g., replacing 'x' shouldn't affect 'x1' or 'exp'
                 expanded = _substitute_param(expanded, param, arg)
@@ -426,7 +426,7 @@ def parse_antimony(text: str) -> ModelIR:
                     # Try direct float conversion
                     float(right)
                     is_simple_number = True
-                except:
+                except Exception:
                     # Not a simple number - it's an expression
                     pass
 
@@ -966,7 +966,7 @@ def _resolve_parameter_dependencies(ir: ModelIR) -> None:
             resolved[name] = val
 
     # Iteratively resolve dependencies
-    for iteration in range(max_iterations):
+    for _iteration in range(max_iterations):
         made_progress = False
 
         for name, expr_str in ir.param_exprs.items():
@@ -1013,7 +1013,7 @@ def build_sym_system(ir: ModelIR) -> SymSystem:
         nm: sp.symbols(nm, positive=True) for nm in sorted(ir.species)
     }
     param_syms: dict[str, sp.Symbol] = {}
-    for nm, val in ir.params.items():
+    for nm, _val in ir.params.items():
         if nm in var_syms:
             continue
         param_syms[nm] = sp.symbols(nm, positive=True)
@@ -1176,7 +1176,7 @@ def classify_system(sym: SymSystem) -> SystemClass:
     is_ssystem = True
     is_gma = True
 
-    for var, ode in sym.odes.items():
+    for _var, ode in sym.odes.items():
         terms = expand_to_terms(sp.expand(ode))
 
         # Separate into positive and negative monomial terms
@@ -1239,7 +1239,7 @@ def classify_result(result: RecastResult, mode: str = "simplified") -> SystemCla
     # If assignment rules exist and reference the clock state T, this is GMA_TIME_VARYING
     has_time_varying_coeffs = False
     if result.assignment_rules:
-        for rule_name, rule_expr in result.assignment_rules.items():
+        for _rule_name, rule_expr in result.assignment_rules.items():
             # Check if rule contains 'T' (clock state) as a standalone identifier
             # Use word boundary regex to match T but not words containing T (like "TIME")
             if re.search(r"\bT\b", str(rule_expr)):
@@ -1893,7 +1893,7 @@ def lift_rational_functions(
                     for n in range(2, 6):
                         if denom ** (-n) in new_ode.atoms():
                             new_ode = new_ode.replace(denom ** (-n), sp.Float(recip_val**n))
-                except:
+                except Exception:
                     pass  # If evaluation fails, leave it as is
             new_odes[var] = new_ode
 
@@ -1984,7 +1984,7 @@ def lift_rational_functions(
             # Y(0) = D(X(0))
             try:
                 Y_init = float(denom_at_0)
-            except:
+            except Exception:
                 Y_init = 1.0  # Fallback if evaluation fails
             new_initials[Y] = Y_init
 
@@ -2160,11 +2160,11 @@ def _build_composite_inverse_mappings(
 
     # Handle nested cases: if we have both Z_1 = exp(f(Z_2)) and Z_2 = log(Z)
     # Then we need to recognize that log(Z_1) should be expressed in terms of Z_2
-    for func1, aux1 in func_to_aux.items():
+    for func1, _aux1 in func_to_aux.items():
         if func1.func == sp.exp and func_to_offset.get(func1, 0.0) == 0:
             arg1 = func1.args[0]
             # Check if arg1 contains other auxiliaries
-            for func2, aux2 in func_to_aux.items():
+            for _func2, aux2 in func_to_aux.items():
                 if aux2 in arg1.free_symbols:
                     # arg1 contains aux2
                     # So aux1 = exp(expr(aux2))
@@ -3279,7 +3279,7 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
         offset = func_to_offset.get(func, 0.0)  # Use .get() to handle missing keys
         try:
             Z_init = float(func_at_0) + offset
-        except:
+        except Exception:
             Z_init = 1.0 + offset  # Fallback if evaluation fails
         new_initials[Z] = Z_init
 
@@ -3301,7 +3301,7 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
                 sqrt_at_0 = sqrt_at_0.subs(param_sym, sym.params[param_name])
         try:
             Z_init = float(sqrt_at_0)
-        except:
+        except Exception:
             Z_init = 1.0  # Fallback if evaluation fails
         new_initials[Z] = Z_init
 
@@ -3335,7 +3335,7 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
     # when sqrt(sum) expressions are present since they indicate complex time-dependent
     # models that don't benefit from recursive lifting.
     max_recursive_lifts = 0 if sqrt_to_aux else 1  # Disable for sqrt(sum) models
-    for recursive_iteration in range(max_recursive_lifts):
+    for _recursive_iteration in range(max_recursive_lifts):
         # Scan all ODEs for remaining composite functions
         has_composite = False
         all_new_functions = set()
@@ -3395,7 +3395,7 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
                 var_name = var.name if hasattr(var, "name") else str(var)
                 if var_name.startswith("Z_"):
                     try:
-                        old_index = int(var_name.split("_")[1])
+                        int(var_name.split("_")[1])
                         new_index = max_z_index + counter
                         new_var = sp.Symbol(f"Z_{new_index}", positive=True)
                         rename_map[var] = new_var
@@ -3539,7 +3539,7 @@ def _analyze_ode_terms(
                 # sp.Abs() doesn't evaluate for symbolic expressions like -J_2 → Abs(J_2)
                 # but -(-J_2) → J_2 works correctly
                 decay_terms.append((-coeff, exps))
-        except:
+        except Exception:
             continue
 
     return growth_terms, decay_terms
@@ -3599,21 +3599,21 @@ def _requires_gma(sym: SymSystem) -> bool:
     Check if system requires GMA format (cannot be exact canonical S-system).
     Returns True if any ODE has multiple terms with different exponent patterns.
     """
-    for var, ode in sym.odes.items():
+    for _var, ode in sym.odes.items():
         terms = expand_to_terms(sp.simplify(ode))
         growth_terms, decay_terms = _analyze_ode_terms(terms)
 
         # Check if multiple growth terms have different exponent patterns
         if len(growth_terms) > 1:
             first_exps = growth_terms[0][1]
-            for coeff, exps in growth_terms[1:]:
+            for _coeff, exps in growth_terms[1:]:
                 if not _exponents_match(first_exps, exps):
                     return True
 
         # Check if multiple decay terms have different exponent patterns
         if len(decay_terms) > 1:
             first_exps = decay_terms[0][1]
-            for coeff, exps in decay_terms[1:]:
+            for _coeff, exps in decay_terms[1:]:
                 if not _exponents_match(first_exps, exps):
                     return True
 
@@ -3637,7 +3637,7 @@ def _should_attempt_pool_construction(sym: SymSystem) -> tuple[bool, str | None]
     total_terms = 0
     max_terms_in_equation = 0
 
-    for var, ode in sym.odes.items():
+    for _var, ode in sym.odes.items():
         terms = expand_to_terms(sp.simplify(ode))
         n_terms = len([t for t in terms if t != 0])
 
@@ -3683,7 +3683,7 @@ def _validate_pool_result(result: RecastResult) -> tuple[bool, str | None]:
     min_exponent = 0.0
     for eq in result.equations:
         for exps_dict in [eq.growth[1], eq.decay[1]]:
-            for var, exp in exps_dict.items():
+            for _var, exp in exps_dict.items():
                 exp_val = float(exp) if not isinstance(exp, sp.Expr) else 0.0
                 if exp_val < min_exponent:
                     min_exponent = exp_val
@@ -4844,7 +4844,7 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
     lines.append("")
 
     # Identify auxiliary and original variables
-    aux_vars = [v for v in result.variables]
+    aux_vars = list(result.variables)
     orig_vars = sorted(result.factor_map.keys(), key=lambda s: s.name)
 
     # --- mapping: original → product of auxiliaries ---
@@ -5004,7 +5004,7 @@ def latex_odes(sym: "SymSystem") -> str:
     lines = []
     for v in sorted(sym.odes.keys(), key=lambda s: s.name):
         rhs = sp.simplify(sym.odes[v])
-        lines.append(r"\dot{%s} = %s" % (sp.latex(v), sp.latex(rhs)))
+        lines.append(rf"\dot{{{sp.latex(v)}}} = {sp.latex(rhs)}")
     return r"\\begin{aligned}" + r"\\\\\n".join(lines) + r"\\end{aligned}"
 
 

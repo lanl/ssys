@@ -339,7 +339,7 @@ class RecastValidator:
                         try:
                             expr = sp.sympify(expr_str)
                             mapping[orig_sym] = expr
-                        except:
+                        except Exception:
                             # If parsing fails, treat as single symbol
                             mapping[orig_sym] = sp.Symbol(expr_str)
 
@@ -366,7 +366,7 @@ class RecastValidator:
         recast_rules = self.recast_ir.assignment_rules
 
         # Get state variables (we don't want to treat state vars as auxiliaries)
-        state_vars = set(str(v) for v in self.recast_odes.keys())
+        state_vars = {str(v) for v in self.recast_odes.keys()}
 
         # Pattern for lifted auxiliary names: Y_N or similar
         lifted_aux_pattern = re.compile(r"^[YZ]_\d+$")
@@ -941,7 +941,7 @@ class RecastValidator:
                         # Strategy 3: Factor then simplify
                         try:
                             simp = sp.simplify(sp.factor(simp))
-                        except:
+                        except Exception:
                             pass  # Factor may fail on some expressions
 
                     if simp != 0:
@@ -1215,7 +1215,7 @@ class RecastValidator:
                     # Evaluate - use evalf() then convert to float
                     try:
                         aux_val = float(aux_def.subs(subs_dict).evalf())
-                    except:
+                    except Exception:
                         # Fallback: if still symbolic, use lambdify
                         aux_func = lambdify(list(aux_def.free_symbols), aux_def, modules="numpy")
                         aux_val = float(
@@ -1512,7 +1512,7 @@ class RecastValidator:
                     # Evaluate - use evalf() then convert to float
                     try:
                         aux_val = float(aux_def.subs(subs_dict).evalf())
-                    except:
+                    except Exception:
                         # Fallback: if still symbolic, use lambdify
                         aux_func = lambdify(list(aux_def.free_symbols), aux_def, modules="numpy")
                         aux_val = float(
@@ -1631,7 +1631,6 @@ class RecastValidator:
         """
         try:
             # Use @SIM metadata from original model if available
-            t_start_use = self.orig_ir.sim_t_start if self.orig_ir.sim_t_start is not None else 0.0
             t_end_use = self.orig_ir.sim_t_end if self.orig_ir.sim_t_end is not None else t_end
             # N_STEPS is the number of time intervals (steps), so we need N_STEPS+1 output points
             # This matches notebook_helpers.py: np.linspace(t0, t1, n_steps+1)
@@ -1647,8 +1646,8 @@ class RecastValidator:
             param_values = dict(self.recast_ir.params)
 
             # Build ODE functions for both systems
-            all_symbols = list(recast_vars_ordered)
-            param_symbols = [self.canonical_symbols[name] for name in sorted(param_values.keys())]
+            list(recast_vars_ordered)
+            [self.canonical_symbols[name] for name in sorted(param_values.keys())]
 
             # Check for time symbol
             all_ode_symbols = set()
@@ -1721,7 +1720,7 @@ class RecastValidator:
 
                 t_common = t_orig
                 Z_interp = np.zeros((len(t_common), len(recast_vars_ordered)))
-                for j, var in enumerate(recast_vars_ordered):
+                for j, _var in enumerate(recast_vars_ordered):
                     f = interp1d(t_recast, Z_recast[:, j], kind="linear", fill_value="extrapolate")
                     Z_interp[:, j] = f(t_common)
                 Z_recast = Z_interp
@@ -1985,7 +1984,7 @@ class RecastValidator:
 
                 try:
                     y0[var_name] = float(aux_def.subs(subs_dict).evalf())
-                except:
+                except Exception:
                     y0[var_name] = 1.0  # Fallback
             else:
                 # PRIORITY 4: Unknown variable - default
@@ -2061,7 +2060,7 @@ class RecastValidator:
                 if all_symbols and factor_indices:
                     # Fast path: compute product directly using indices
                     prod = np.ones(n_points)
-                    for idx, exp in zip(factor_indices, factor_exponents):
+                    for idx, exp in zip(factor_indices, factor_exponents, strict=False):
                         prod *= Z_recast[:, idx] ** exp
                     X_reconstructed[:, i] = prod
                     continue

@@ -208,7 +208,7 @@ def latex_odes_from_sym(sym):
     lines = []
     for v in sorted(sym.odes.keys(), key=lambda s: s.name):
         rhs = sp.simplify(sym.odes[v])
-        lines.append(r"\dot{%s} &= %s" % (sp.latex(v), sp.latex(rhs)))
+        lines.append(rf"\dot{{{sp.latex(v)}}} &= {sp.latex(rhs)}")
     return "\\begin{aligned}\n" + " \\\\\n".join(lines) + "\n\\end{aligned}"
 
 
@@ -483,7 +483,7 @@ def latex_ssys_from_antimony(antimony_text):
 
 def _is_already_ssystem(sym):
     """Check if input is already in canonical S-system form."""
-    for var, ode in sym.odes.items():
+    for _var, ode in sym.odes.items():
         terms = []
         expanded = sp.expand(ode)
         if expanded.is_Add:
@@ -515,7 +515,7 @@ def _is_already_ssystem(sym):
 
 def _is_already_gma(sym):
     """Check if input is already in GMA form (all terms are monomials)."""
-    for var, ode in sym.odes.items():
+    for _var, ode in sym.odes.items():
         terms = []
         expanded = sp.expand(ode)
         if expanded.is_Add:
@@ -654,7 +654,7 @@ def load_and_report(
     # Recast the symbolic system (already parsed above using SBML-based parser)
     rec = ssys.recast_to_ssystem(sym, mode=mode)
 
-    params = dict(sym.params)
+    dict(sym.params)
 
     # Classify input and output
     input_class = classify_system(sym)

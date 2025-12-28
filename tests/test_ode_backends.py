@@ -16,7 +16,7 @@ def test_simulate_ode_interface():
         species S;
         S = 10;
         k = 0.1;
-        
+
         J0: S -> ; k * S;
     end
     """
@@ -72,7 +72,7 @@ def test_roadrunner_exp_decay():
         species S;
         S = 10;
         k = 0.1;
-        
+
         J0: S -> ; k * S;
     end
     """

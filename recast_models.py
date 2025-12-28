@@ -66,7 +66,7 @@ Examples:
     python recast_models.py test_models2 --mode canonical   # Use canonical mode
     python recast_models.py test_models3 --both             # Run both modes (for comparison)
     python recast_models.py pathological_models             # Known problematic cases
-    
+
 Model directories:
     test_models1/        Original test models (basic examples)
     test_models2/        Literature recasting examples from publications
