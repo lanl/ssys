@@ -15,6 +15,10 @@ from ssys.notebook_helpers import (
     _expand_exps_through_factors,
     product_expr,
     _simplify_exponent_content,
+    is_nonautonomous,
+    was_nonautonomous,
+    find_clock_variable,
+    get_autonomy_label,
 )
 from ssys.recaster import SymSystem, RecastResult, RecastStatus
 
@@ -450,6 +454,263 @@ class TestProductExpr:
         """Test with no exponents."""
         result = product_expr(3, {})
         assert result == 3
+
+
+class TestIsNonautonomous:
+    """Tests for explicit time dependence detection."""
+
+    def test_time_symbol_detected(self):
+        """Test that 'time' symbol is detected."""
+        X = sp.Symbol("X", positive=True)
+        time_sym = sp.Symbol("time")
+
+        sym = SymSystem(
+            vars=[X],
+            params={},
+            odes={X: -X + time_sym},  # X' = -X + time
+            initials={X: 1.0},
+        )
+
+        assert is_nonautonomous(sym) is True
+
+    def test_no_time_is_autonomous(self):
+        """Test autonomous system detection."""
+        X = sp.Symbol("X", positive=True)
+
+        sym = SymSystem(
+            vars=[X],
+            params={},
+            odes={X: -X},  # X' = -X
+            initials={X: 1.0},
+        )
+
+        assert is_nonautonomous(sym) is False
+
+    def test_time_in_complex_expression(self):
+        """Test time in complex expression."""
+        X = sp.Symbol("X", positive=True)
+        time_sym = sp.Symbol("time")
+        k = sp.Symbol("k", positive=True)
+
+        sym = SymSystem(
+            vars=[X],
+            params={"k": 0.1},
+            odes={X: k * sp.sin(time_sym) * X},
+            initials={X: 1.0},
+        )
+
+        assert is_nonautonomous(sym) is True
+
+    def test_multiple_odes_one_with_time(self):
+        """Test multiple ODEs, one with time."""
+        X = sp.Symbol("X", positive=True)
+        Y = sp.Symbol("Y", positive=True)
+        time_sym = sp.Symbol("time")
+
+        sym = SymSystem(
+            vars=[X, Y],
+            params={},
+            odes={X: -X, Y: time_sym * Y},
+            initials={X: 1.0, Y: 1.0},
+        )
+
+        assert is_nonautonomous(sym) is True
+
+
+class TestFindClockVariable:
+    """Tests for clock variable detection."""
+
+    def test_clock_detected(self):
+        """Test ODE = 1 detected as clock."""
+        t = sp.Symbol("t", positive=True)
+        X = sp.Symbol("X", positive=True)
+
+        sym = SymSystem(
+            vars=[t, X],
+            params={},
+            odes={t: sp.Integer(1), X: -X * t},  # t' = 1, X' = -X*t
+            initials={t: 0.0, X: 1.0},
+        )
+
+        result = find_clock_variable(sym)
+        assert result == "t"
+
+    def test_no_clock_returns_none(self):
+        """Test no clock variable returns None."""
+        X = sp.Symbol("X", positive=True)
+        Y = sp.Symbol("Y", positive=True)
+
+        sym = SymSystem(
+            vars=[X, Y],
+            params={},
+            odes={X: -X, Y: X - Y},
+            initials={X: 1.0, Y: 0.0},
+        )
+
+        result = find_clock_variable(sym)
+        assert result is None
+
+    def test_ode_equals_constant_not_one(self):
+        """Test that ODE = 2 (not 1) is not clock."""
+        Z = sp.Symbol("Z", positive=True)
+        X = sp.Symbol("X", positive=True)
+
+        sym = SymSystem(
+            vars=[Z, X],
+            params={},
+            odes={Z: sp.Integer(2), X: -X},  # Z' = 2 (not clock)
+            initials={Z: 0.0, X: 1.0},
+        )
+
+        result = find_clock_variable(sym)
+        assert result is None
+
+    def test_clock_with_float_one(self):
+        """Test that ODE = 1.0 is also detected."""
+        t = sp.Symbol("t", positive=True)
+
+        sym = SymSystem(
+            vars=[t],
+            params={},
+            odes={t: sp.Float(1.0)},
+            initials={t: 0.0},
+        )
+
+        result = find_clock_variable(sym)
+        assert result == "t"
+
+
+class TestWasNonautonomous:
+    """Tests for detecting systems with time dependence (explicit or lifted)."""
+
+    def test_explicit_time_detected(self):
+        """Test explicit time detected."""
+        X = sp.Symbol("X", positive=True)
+        time_sym = sp.Symbol("time")
+
+        sym = SymSystem(
+            vars=[X],
+            params={},
+            odes={X: time_sym * X},
+            initials={X: 1.0},
+        )
+
+        assert was_nonautonomous(sym) is True
+
+    def test_clock_variable_detected(self):
+        """Test clock variable detected as lifted nonautonomous."""
+        t = sp.Symbol("t", positive=True)
+        X = sp.Symbol("X", positive=True)
+
+        sym = SymSystem(
+            vars=[t, X],
+            params={},
+            odes={t: sp.Integer(1), X: -X * t},
+            initials={t: 0.0, X: 1.0},
+        )
+
+        assert was_nonautonomous(sym) is True
+
+    def test_pure_autonomous_not_detected(self):
+        """Test pure autonomous system."""
+        X = sp.Symbol("X", positive=True)
+        Y = sp.Symbol("Y", positive=True)
+
+        sym = SymSystem(
+            vars=[X, Y],
+            params={},
+            odes={X: -X * Y, Y: X * Y - Y},
+            initials={X: 1.0, Y: 0.5},
+        )
+
+        assert was_nonautonomous(sym) is False
+
+
+class TestGetAutonomyLabel:
+    """Tests for autonomy label generation."""
+
+    def test_pure_autonomous(self):
+        """Test pure autonomous system label."""
+        X = sp.Symbol("X", positive=True)
+
+        sym = SymSystem(
+            vars=[X],
+            params={},
+            odes={X: -X},
+            initials={X: 1.0},
+        )
+
+        label, clock = get_autonomy_label(sym)
+        assert label == "autonomous"
+        assert clock is None
+
+    def test_nonautonomous(self):
+        """Test nonautonomous system label."""
+        X = sp.Symbol("X", positive=True)
+        time_sym = sp.Symbol("time")
+
+        sym = SymSystem(
+            vars=[X],
+            params={},
+            odes={X: time_sym * X},
+            initials={X: 1.0},
+        )
+
+        label, clock = get_autonomy_label(sym)
+        assert label == "nonautonomous"
+        assert clock is None
+
+    def test_lifted_as_recast(self):
+        """Test lifted system when is_recast=True."""
+        t = sp.Symbol("t", positive=True)
+        X = sp.Symbol("X", positive=True)
+
+        sym = SymSystem(
+            vars=[t, X],
+            params={},
+            odes={t: sp.Integer(1), X: -X},
+            initials={t: 0.0, X: 1.0},
+        )
+
+        label, clock = get_autonomy_label(sym, is_recast=True)
+        assert label == "autonomous, lifted"
+        assert clock == "t"
+
+    def test_lifted_when_orig_was_nonautonomous(self):
+        """Test lifted when original was nonautonomous."""
+        t = sp.Symbol("t", positive=True)
+        X = sp.Symbol("X", positive=True)
+
+        sym = SymSystem(
+            vars=[t, X],
+            params={},
+            odes={t: sp.Integer(1), X: -X},
+            initials={t: 0.0, X: 1.0},
+        )
+
+        label, clock = get_autonomy_label(
+            sym, is_recast=False, orig_was_nonautonomous=True
+        )
+        assert label == "autonomous, lifted"
+        assert clock == "t"
+
+    def test_clock_not_lifted_if_pure_autonomous_context(self):
+        """Test clock in pure autonomous context isn't marked lifted."""
+        t = sp.Symbol("t", positive=True)
+
+        sym = SymSystem(
+            vars=[t],
+            params={},
+            odes={t: sp.Integer(1)},
+            initials={t: 0.0},
+        )
+
+        # Without recast or orig_nonautonomous flag, just autonomous
+        label, clock = get_autonomy_label(
+            sym, is_recast=False, orig_was_nonautonomous=False
+        )
+        assert label == "autonomous"
+        assert clock is None
 
 
 if __name__ == "__main__":
