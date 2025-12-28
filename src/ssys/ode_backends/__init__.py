@@ -8,4 +8,4 @@ Provides a unified interface for different ODE solvers:
 
 from .interface import simulate_ode
 
-__all__ = ['simulate_ode']
+__all__ = ["simulate_ode"]

@@ -2,8 +2,10 @@
 Unified interface for ODE solver backends.
 """
 
-from typing import Dict, Optional, Any
+from typing import Any
+
 import numpy as np
+
 from ..recaster import ModelIR
 
 
@@ -12,13 +14,13 @@ def simulate_ode(
     t0: float,
     t_end: float,
     n_points: int,
-    y0_override: Optional[Dict[str, float]] = None,
+    y0_override: dict[str, float] | None = None,
     backend: str = "roadrunner",
-    options: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
+    options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """
     Simulate an ODE system using the specified backend.
-    
+
     Args:
         model_ir: Parsed model intermediate representation
         t0: Start time
@@ -27,7 +29,7 @@ def simulate_ode(
         y0_override: Optional initial conditions override
         backend: Solver backend ('roadrunner' or 'rk4')
         options: Backend-specific options
-        
+
     Returns:
         Dictionary containing:
             - t: Time array (n_points,)
@@ -39,13 +41,12 @@ def simulate_ode(
     """
     if options is None:
         options = {}
-    
+
     if backend == "roadrunner":
         try:
             from .roadrunner_backend import simulate_with_roadrunner
-            return simulate_with_roadrunner(
-                model_ir, t0, t_end, n_points, y0_override, options
-            )
+
+            return simulate_with_roadrunner(model_ir, t0, t_end, n_points, y0_override, options)
         except ImportError as e:
             # libRoadRunner not available - fail explicitly, no fallback
             return {
@@ -54,14 +55,11 @@ def simulate_ode(
                 "state_names": [],
                 "success": False,
                 "message": f"libRoadRunner not available: {e}",
-                "integrator_stats": {}
+                "integrator_stats": {},
             }
     elif backend == "rk4":
         from .rk4_backend import simulate_with_rk4
-        return simulate_with_rk4(
-            model_ir, t0, t_end, n_points, y0_override, options
-        )
+
+        return simulate_with_rk4(model_ir, t0, t_end, n_points, y0_override, options)
     else:
-        raise ValueError(
-            f"Unknown backend: {backend}. Choose 'roadrunner' or 'rk4'."
-        )
+        raise ValueError(f"Unknown backend: {backend}. Choose 'roadrunner' or 'rk4'.")
