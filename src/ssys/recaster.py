@@ -917,7 +917,14 @@ def _parse_sbml_document(doc, source: str = "<unknown>") -> 'SymSystem':
             params[cid] = cval
     
     # Simplify ODEs
-    simplified_odes = {var: sp.simplify(ode) for var, ode in odes.items()}
+    # CRITICAL: Do NOT use sp.simplify() here - it combines separate fractions
+    # over a common denominator, which corrupts the term structure needed for
+    # lift_rational_functions() to identify individual denominators.
+    # Example: A/(1+x^4) + B/(1+a^2) becomes (A*(1+a^2) + B*(1+x^4))/((1+x^4)*(1+a^2))
+    # This causes incorrect lifting where all terms get divided by the PRODUCT
+    # of denominators instead of their individual denominators.
+    # See: McMillen2002 regression bug (December 2025)
+    simplified_odes = dict(odes)
     
     return SymSystem(
         vars=vars_list,
