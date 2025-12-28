@@ -1575,7 +1575,9 @@ class RecastValidator:
             # Use @SIM metadata from original model if available
             t_start_use = self.orig_ir.sim_t_start if self.orig_ir.sim_t_start is not None else 0.0
             t_end_use = self.orig_ir.sim_t_end if self.orig_ir.sim_t_end is not None else t_end
-            n_points_use = self.orig_ir.sim_n_steps if self.orig_ir.sim_n_steps is not None else n_points
+            # N_STEPS is the number of time intervals (steps), so we need N_STEPS+1 output points
+            # This matches notebook_helpers.py: np.linspace(t0, t1, n_steps+1)
+            n_points_use = (self.orig_ir.sim_n_steps + 1) if self.orig_ir.sim_n_steps is not None else n_points
             
             # Get initial conditions from models
             orig_vars_ordered = sorted(self.orig_odes.keys(), key=str)
@@ -1887,6 +1889,9 @@ class RecastValidator:
         Reconstruct original variables from recast simulation.
         
         Applies mapping Φ(Z) to get X values.
+        
+        Uses index-based multiplication (like notebook_helpers.py) instead of
+        lambdify to avoid symbol identity mismatch issues.
         """
         n_points = len(t_array)
         n_orig = len(orig_vars)
@@ -1895,21 +1900,88 @@ class RecastValidator:
         # Build reconstruction functions
         recast_var_names = [str(v) for v in recast_vars]
         
+        # Build name-to-index mapping for fast lookup
+        name_to_idx = {name: idx for idx, name in enumerate(recast_var_names)}
+        
         for i, orig_var in enumerate(orig_vars):
             mapping_expr = self.mapping[orig_var]
             
             # If mapping is identity, just copy
             if mapping_expr == orig_var:
                 var_name = str(orig_var)
-                if var_name in recast_var_names:
-                    j = recast_var_names.index(var_name)
+                if var_name in name_to_idx:
+                    j = name_to_idx[var_name]
                     X_reconstructed[:, i] = Z_recast[:, j]
                 continue
             
-            # Build lambdified function for mapping
+            # Check if mapping is a simple product of variables (common case)
+            # This handles X = Z_1 * Z_2 * Z_3 type mappings without lambdify
+            if mapping_expr.is_Mul:
+                # Extract factors - check if all are symbols or powers of symbols
+                all_symbols = True
+                factor_indices = []
+                factor_exponents = []
+                
+                for factor in mapping_expr.args:
+                    if isinstance(factor, sp.Symbol):
+                        factor_name = str(factor)
+                        if factor_name in name_to_idx:
+                            factor_indices.append(name_to_idx[factor_name])
+                            factor_exponents.append(1)
+                        else:
+                            all_symbols = False
+                            break
+                    elif isinstance(factor, sp.Pow):
+                        base, exp = factor.args
+                        if isinstance(base, sp.Symbol) and str(base) in name_to_idx:
+                            factor_indices.append(name_to_idx[str(base)])
+                            factor_exponents.append(float(exp))
+                        else:
+                            all_symbols = False
+                            break
+                    elif factor.is_number:
+                        # Numeric coefficient - will be handled by lambdify fallback
+                        all_symbols = False
+                        break
+                    else:
+                        all_symbols = False
+                        break
+                
+                if all_symbols and factor_indices:
+                    # Fast path: compute product directly using indices
+                    prod = np.ones(n_points)
+                    for idx, exp in zip(factor_indices, factor_exponents):
+                        prod *= Z_recast[:, idx] ** exp
+                    X_reconstructed[:, i] = prod
+                    continue
+            
+            # Check if mapping is a single symbol
+            if isinstance(mapping_expr, sp.Symbol):
+                sym_name = str(mapping_expr)
+                if sym_name in name_to_idx:
+                    X_reconstructed[:, i] = Z_recast[:, name_to_idx[sym_name]]
+                    continue
+            
+            # Fallback: use lambdify for complex expressions
+            # Substitute symbols in mapping_expr with canonical recast_vars symbols
+            # to ensure name matching works correctly
+            subs_dict = {}
+            for sym in mapping_expr.free_symbols:
+                sym_name = str(sym)
+                if sym_name in name_to_idx:
+                    # Find the actual symbol object from recast_vars
+                    actual_sym = recast_vars[name_to_idx[sym_name]]
+                    if sym is not actual_sym:
+                        subs_dict[sym] = actual_sym
+            
+            if subs_dict:
+                mapping_expr_fixed = mapping_expr.subs(subs_dict)
+            else:
+                mapping_expr_fixed = mapping_expr
+            
             func = lambdify(
                 list(recast_vars) + [sp.Symbol(k) for k in sorted(param_values.keys())],
-                mapping_expr,
+                mapping_expr_fixed,
                 modules='numpy'
             )
             
