@@ -7,11 +7,11 @@ model central_t_S_system()
   // Canonical S-system
   X1' = 1                                  // = 1 - 0
   X2' = 2*X1 - 2*c                         // = (2)*X1^1 - (2*c)*X1^0
-  X3' = (nu+1)*c * X2^(-1) * X3            // production
-       - (nu+1)   * X1 * X2^(-1) * X3      // loss
+  X3' = (nu+1)*c * X2^(-1) * X3 - (nu+1) * X1 * X2^(-1) * X3;
 
   // ICs matching t=0
-  X1 = c
-  X2 = nu
-  X3 = gamma((nu+1)/2) / (sqrt(nu*pi) * gamma(nu/2))
+  // gamma((nu+1)/2) / (sqrt(nu*pi) * gamma(nu/2)) for nu=8 ≈ 0.386
+  X1 = c;
+  X2 = nu;
+  X3 = 0.386;
 end// @SIM T_START=0 T_END=20 N_STEPS=400

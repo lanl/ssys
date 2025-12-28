@@ -1,4 +1,4 @@
-model 27_spiral_SSystem_exact()
+model spiral_SSystem_exact_27()
 
   // Exact S-system recast of:
   //   t' = 1

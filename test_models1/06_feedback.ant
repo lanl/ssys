@@ -7,8 +7,8 @@
 
 model feedback()
   // initial conditions
-  X_1 = 0
-  X_2 = 0
+  X_1 = 0.001
+  X_2 = 0.001
 
   // parameters
   a = 1

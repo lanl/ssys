@@ -15,9 +15,9 @@ model Dreisigmeyer2008_LacOperon_Lactose_uM
   compartment cell = 1;
 
   // State variables (µM)
-  species l in cell;   // internal lactose (µM)
-  species a in cell;   // allolactose (µM)
-  species z in cell;   // β-galactosidase (µM)
+  species l in cell;
+  species a in cell;
+  species z in cell;
 
   // External lactose (constant input; µM)
   // Original example: 1.0 mM -> 1000 µM
@@ -28,24 +28,24 @@ model Dreisigmeyer2008_LacOperon_Lactose_uM
   // -----------------------------
 
   // Growth dilution
-  const growth_rate = 0.02;    // min^-1
+  const growth_rate = 0.02;
 
   // Permease transport
-  const alpha = 600.0;         // min^-1
-  const phi   = 0.5;           // dimensionless
+  const alpha = 600.0;
+  const phi   = 0.5;
 
   // Michaelis constants / saturation constants (µM)
   // Original K_i = 5.0e5 nM -> 500 µM
   const K_i   = 500.0;
 
   // β-galactosidase lactose metabolism
-  const beta  = 2.85e4;        // min^-1
-  const nu    = 0.468;         // dimensionless
+  const beta  = 2.85e4;
+  const nu    = 0.468;
   // Original K_m_l = 2.53 mM -> 2530 µM
   const K_m_l = 2530.0;
 
   // β-galactosidase allolactose metabolism
-  const delta = 2.30e4;        // min^-1
+  const delta = 2.30e4;
   // Original K_m_a = 1.2 mM -> 1200 µM
   const K_m_a = 1200.0;
 
@@ -63,19 +63,13 @@ model Dreisigmeyer2008_LacOperon_Lactose_uM
   // -----------------------------
 
   // Internal lactose l (µM)
-  l' =  alpha * z * (l_ext - phi*l) / (K_i + l + l_ext)
-        - beta * z * l / ((1 + a/K_m_a) * (K_m_l + l))
-        - growth_rate * l;
+  l' =  alpha * z * (l_ext - phi*l) / (K_i + l + l_ext) - beta * z * l / ((1 + a/K_m_a) * (K_m_l + l)) - growth_rate * l;
 
   // Allolactose a (µM)
-  a' =  nu * beta * z * l / ((1 + a/K_m_a) * (K_m_l + l))
-        - delta * z * a / ((1 + l/K_m_l) * (K_m_a + a))
-        - growth_rate * a;
+  a' =  nu * beta * z * l / ((1 + a/K_m_a) * (K_m_l + l)) - delta * z * a / ((1 + l/K_m_l) * (K_m_a + a)) - growth_rate * a;
 
   // β-galactosidase z (µM)
-  z' =  c * growth_rate
-        + eps * growth_rate * a^n_Hill / (K_z^n_Hill + a^n_Hill)
-        - growth_rate * z;
+  z' =  c * growth_rate + eps * growth_rate * a^n_Hill / (K_z^n_Hill + a^n_Hill) - growth_rate * z;
 
   // -----------------------------
   // Initial conditions (µM)

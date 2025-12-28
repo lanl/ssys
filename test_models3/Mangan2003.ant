@@ -35,33 +35,30 @@ model ManganAlon2003_CoherentFFL_AND
   compartment cell = 1;
 
   // Species (state variables)
-  species Y in cell;   // intermediate TF
-  species Z in cell;   // target gene product
+  species Y in cell;
+  species Z in cell;
 
   // Input transcription factor X (treated as constant stimulus Sx)
-  const X = 1;         // X = 1 for ON step, X = 0 for OFF step
+  const X = 1;
 
   // Parameters (Fig. 4 parameter set)
-  const B_y   = 0;      // basal production of Y
-  const b_1   = 1;      // max production rate factor for Y
-  const b_2   = 1;      // max production rate factor for Z
-  const a_1   = 1;      // degradation+dilution rate of Y
-  const a_2   = 1;      // degradation+dilution rate of Z
-  const H     = 2;      // Hill coefficient
-  const K_xy  = 0.5;    // activation threshold of Y by X
-  const K_xz  = 0.5;    // activation threshold of Z by X
-  const K_yz  = 0.5;    // activation threshold of Z by Y
+  const B_y   = 0;
+  const b_1   = 1;
+  const b_2   = 1;
+  const a_1   = 1;
+  const a_2   = 1;
+  const H     = 2;
+  const K_xy  = 0.5;
+  const K_xz  = 0.5;
+  const K_yz  = 0.5;
 
   // ODEs (Hill activation inlined: f(u, K) = u^H / (K^H + u^H))
   
   // Y: activated by X, with basal production B_y
-  Y' = B_y
-       + b_1 * X^H / (K_xy^H + X^H)
-       - a_1 * Y;
+  Y' = B_y + b_1 * X^H / (K_xy^H + X^H) - a_1 * Y;
 
   // Z: AND gate of X and Y (product of two Hill activations)
-  Z' = b_2 * (X^H / (K_xz^H + X^H)) * (Y^H / (K_yz^H + Y^H))
-       - a_2 * Z;
+  Z' = b_2 * (X^H / (K_xz^H + X^H)) * (Y^H / (K_yz^H + Y^H)) - a_2 * Z;
 
   // Initial conditions
   // Not fixed in the paper; natural choice is near-zero expression

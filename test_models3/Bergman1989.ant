@@ -49,18 +49,18 @@ model Bergman1989_MinimalGlucoseModel
   compartment plasma = 1;
 
   // Species: state variables
-  species G in plasma;   // plasma glucose (mg/dL)
-  species X in plasma;   // remote insulin effect (min^-1)
-  species I in plasma;   // plasma insulin (µU/mL)
+  species G in plasma;
+  species X in plasma;
+  species I in plasma;
 
   // Basal (fasting) levels
-  const G_b = 90;        // mg/dL
-  const I_b = 10;        // µU/mL
+  const G_b = 90;
+  const I_b = 10;
 
   // Minimal model parameters
-  const p_1 = 0.021;     // min^-1   (glucose effectiveness, S_G)
-  const p_2 = 0.025;     // min^-1   (remote insulin decay rate)
-  const p_3 = 1.25e-5;   // min^-2*(µU/mL)^-1 (insulin action gain)
+  const p_1 = 0.021;
+  const p_2 = 0.025;
+  const p_3 = 1.25e-5;
 
   // ODEs
   // Glucose dynamics: deviation from basal (G - G_b)
@@ -75,9 +75,9 @@ model Bergman1989_MinimalGlucoseModel
   I' = 0;
 
   // Initial conditions
-  G = 180;   // mg/dL, post-bolus level
-  X = 0.01;  // min^-1, small initial remote effect (must be >0 for S-system recasting)
-  I = I_b;    // µU/mL, basal insulin
+  G = 180;
+  X = 0.01;
+  I = I_b;
 
 end
 // @SIM T_START=0 T_END=200 N_STEPS=400

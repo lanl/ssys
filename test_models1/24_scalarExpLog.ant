@@ -1,10 +1,10 @@
-model 24_scalarExpLog_scaled()
+model m_24_scalarExpLog_scaled()
 
   // One-dimensional ODE with slowed dynamics
   species Z;
 
   // Time-scale parameter (dimension 1/time)
-  k = 0.04   // pick ~0.04–0.05; this moves blow-up from ~0.9 out to ~20
+  k = 0.04
 
   // Dynamics: Z' = k * exp[(log Z)^2]
   Z' = k * exp((log(Z))^2);

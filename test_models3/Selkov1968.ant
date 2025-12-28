@@ -14,11 +14,11 @@
 model Selkov_1968()
 
   // Species (dimensionless concentrations)
-  species x, y;    // x ~ ADP, y ~ F6P (as in glycolytic interpretations)
+  species x, y;
 
   // Parameters
-  a = 0.08;        // dimensionless feedback parameter
-  b = 0.6;         // dimensionless input parameter
+  a = 0.08;
+  b = 0.6;
 
   // Dynamics (using prime notation for ssys parser)
   x' = -x + a*y + x^2*y;

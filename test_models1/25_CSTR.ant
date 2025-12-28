@@ -1,7 +1,7 @@
-model 25_CSTR_original_from_SSystem()
+model m_25_CSTR_original_from_SSystem()
 
   // Parameters
-  A   = 1;      // example values; can be symbolic
+  A   = 1;
   B   = 1;
   a   = 0.5;
   b   = 1;

@@ -40,20 +40,20 @@ model WeberRaymondMunsky2018_Model2_LambdaA
   // Note: 'pi' is a built-in constant in Antimony, no need to define it
 
   // Base transition rates k_ij(0)
-  const k_12_0  = 3;      // k_12(0)
-  const k_23_0  = -0.4;   // k_23(0) (will be shifted by input)
-  const k_21_0  = 2.5;    // k_21(0)
-  const k_32_0  = 1;      // k_32(0)
+  const k_12_0  = 3;
+  const k_23_0  = -0.4;
+  const k_21_0  = 2.5;
+  const k_32_0  = 1;
 
   // Transcription and degradation parameters
-  const k_r_2   = 9;      // transcription rate in state S_2
-  const k_r_3   = 2;      // transcription rate in state S_3
-  const beta    = 1;      // input coupling strength
-  const gam     = 0.8;    // mRNA degradation rate (renamed from gamma, reserved)
+  const k_r_2   = 9;
+  const k_r_3   = 2;
+  const beta    = 1;
+  const gam     = 0.8;
 
   // Smooth approximation parameters
-  const k_steep = 5.0;    // steepness of sigmoid transitions
-  const eps_k   = 0.01;   // smoothing parameter for ReLU
+  const k_steep = 5.0;
+  const eps_k   = 0.01;
 
   // Time-dependent input Y_1(t)
   // Smooth approximation of time window 5 < t < 70 using tanh sigmoids
@@ -63,9 +63,9 @@ model WeberRaymondMunsky2018_Model2_LambdaA
   Y_1   := (1 - cos(2*pi*time/30)) * H_on * H_off;
 
   // Effective transition rates
-  k_12 := k_12_0;               // constant
-  k_21 := k_21_0;               // constant
-  k_32 := k_32_0;               // constant
+  k_12 := k_12_0;
+  k_21 := k_21_0;
+  k_32 := k_32_0;
 
   // k_23(t) = max(0, k_23_0 + beta*Y_1(t)) via smooth ReLU approximation
   k_23_raw := k_23_0 + beta*Y_1;

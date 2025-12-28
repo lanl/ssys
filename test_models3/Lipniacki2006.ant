@@ -30,14 +30,14 @@ model Lipniacki2006_Autorepression_2D
   compartment cell = 1;
 
   // State variables
-  species x in cell;   // scaled mRNA
-  species y in cell;   // scaled protein
+  species x in cell;
+  species y in cell;
 
   // Parameters (dimensionless, from example in the paper)
-  const n = 1.0;       // number of gene copies
-  const c = 6.0;       // composite parameter (activation vs inactivation)
-  const b = 3.0;       // composite parameter (feedback strength)
-  const r = 0.2;       // protein vs mRNA time-scale ratio
+  const n = 1.0;
+  const c = 6.0;
+  const b = 3.0;
+  const r = 0.2;
 
   // ODEs: deterministic limit of auto-repressive gene
   x' = -x + n*c / (c + b*y);

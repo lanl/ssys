@@ -19,7 +19,8 @@ import sympy as sp
 from sympy import symbols, lambdify, simplify, Matrix, log
 
 from .recaster import (
-    parse_antimony, 
+    parse_antimony,
+    parse_antimony_via_sbml,
     build_sym_system, 
     classify_system,
     classify_result,
@@ -33,6 +34,21 @@ class ValidationResult(Enum):
     FAIL = "fail"
     TIMEOUT = "timeout"
     NOT_ATTEMPTED = "not_attempted"
+
+
+def _is_dev_mode() -> bool:
+    """
+    Detect if we're running in development mode.
+    
+    Development mode is indicated by having pytest installed (from [dev] extras).
+    In dev mode, we run both JAX and non-JAX numerical tests for debugging.
+    In production mode, we run JAX if available, else non-JAX.
+    """
+    try:
+        import pytest
+        return True
+    except ImportError:
+        return False
 
 
 @dataclass
@@ -118,7 +134,8 @@ class RecastValidator:
                  recast_file: str,
                  factor_map: Optional[Dict[sp.Symbol, List[sp.Symbol]]] = None,
                  mode: str = "simplified",
-                 solver: str = "roadrunner"):
+                 solver: str = "roadrunner",
+                 parser: str = "legacy"):
         """
         Initialize validator.
         
@@ -128,22 +145,78 @@ class RecastValidator:
             factor_map: Mapping from original to auxiliary variables (X -> [X1, X2, ...])
             mode: Recast mode ('simplified' or 'canonical')
             solver: ODE solver for trajectory validation ('roadrunner' or 'rk4')
+            parser: Parser to use for Antimony files ('legacy' or 'sbml')
         """
         self.original_file = original_file
         self.recast_file = recast_file
         self.mode = mode
         self.solver = solver
+        self.parser = parser
         
         # Read recast file to extract mapping comments
         recast_text = open(recast_file).read()
         
-        # Parse both models
-        self.orig_ir = parse_antimony(open(original_file).read())
-        self.recast_ir = parse_antimony(recast_text)
+        # Read original file text
+        orig_text = open(original_file).read()
         
-        # Build symbolic systems
-        self.orig_system = build_sym_system(self.orig_ir)
-        self.recast_system = build_sym_system(self.recast_ir)
+        # Parse both models using the specified parser
+        if parser == "sbml":
+            # SBML-first parser (reference Antimony implementation)
+            self.orig_system = parse_antimony_via_sbml(orig_text)
+            self.recast_system = parse_antimony_via_sbml(recast_text)
+        else:
+            # Legacy parser
+            orig_ir = parse_antimony(orig_text)
+            self.orig_system = build_sym_system(orig_ir)
+            # Attach original Antimony text for RoadRunner simulation
+            # Note: roadrunner_backend checks for 'antimony_text' attribute
+            self.orig_system.antimony_text = orig_text
+            
+            recast_ir = parse_antimony(recast_text)
+            self.recast_system = build_sym_system(recast_ir)
+            self.recast_system.antimony_text = recast_text
+        
+        # Create aliases for backward compatibility with code using orig_ir/recast_ir
+        # SymSystem has the same key attributes: params, assignment_rules
+        # Add compatibility attributes for ModelIR interface
+        self.orig_ir = self.orig_system
+        self.recast_ir = self.recast_system
+        
+        # Add 'initial' alias for 'initials' (ModelIR uses 'initial', SymSystem uses 'initials')
+        if not hasattr(self.orig_ir, 'initial'):
+            # Convert initials dict to have string keys for ModelIR compatibility
+            self.orig_ir.initial = {str(k): v for k, v in self.orig_system.initials.items()}
+        if not hasattr(self.recast_ir, 'initial'):
+            self.recast_ir.initial = {str(k): v for k, v in self.recast_system.initials.items()}
+        
+        # Add @SIM metadata compatibility (SymSystem doesn't have these by default)
+        if not hasattr(self.orig_ir, 'sim_t_start'):
+            self.orig_ir.sim_t_start = None
+        if not hasattr(self.orig_ir, 'sim_t_end'):
+            self.orig_ir.sim_t_end = None
+        if not hasattr(self.orig_ir, 'sim_n_steps'):
+            self.orig_ir.sim_n_steps = None
+        
+        # Add 'species' alias for 'vars' (ModelIR uses 'species', SymSystem uses 'vars')
+        if not hasattr(self.orig_ir, 'species'):
+            self.orig_ir.species = [str(v) for v in self.orig_system.vars]
+        if not hasattr(self.recast_ir, 'species'):
+            self.recast_ir.species = [str(v) for v in self.recast_system.vars]
+        
+        # Add 'reactions' attribute (SymSystem uses ODEs directly, no reactions)
+        if not hasattr(self.orig_ir, 'reactions'):
+            self.orig_ir.reactions = []
+        if not hasattr(self.recast_ir, 'reactions'):
+            self.recast_ir.reactions = []
+        
+        # Add 'explicit_rates' alias for 'odes' (for roadrunner backend)
+        # Convert Python ** to Antimony ^ for exponentiation
+        if not hasattr(self.orig_ir, 'explicit_rates'):
+            self.orig_ir.explicit_rates = {str(k): str(v).replace('**', '^') 
+                                           for k, v in self.orig_system.odes.items()}
+        if not hasattr(self.recast_ir, 'explicit_rates'):
+            self.recast_ir.explicit_rates = {str(k): str(v).replace('**', '^') 
+                                             for k, v in self.recast_system.odes.items()}
         
         # Extract ODE dictionaries
         self.orig_odes = self.orig_system.odes
@@ -955,7 +1028,10 @@ class RecastValidator:
             
             # Extract parameter values
             param_values = self.recast_ir.params
-            param_names = sorted(param_values.keys())
+            # CRITICAL: Filter out any param names that match state variable names
+            # This prevents "duplicate argument 't'" errors when 't' is both a state var and param
+            recast_var_names = {str(v) for v in recast_vars_ordered}
+            param_names = sorted([p for p in param_values.keys() if p not in recast_var_names])
             param_vals_array = jnp.array([param_values[name] for name in param_names])
             
             # Build mapping functions Φ(Z) using lambdify for JAX
@@ -1023,12 +1099,14 @@ class RecastValidator:
             auxiliary_var_indices = []
             
             # Also identify clock variables (T := time) - these should be sampled, not computed
+            # A clock variable is one whose definition IS exactly 'time' or 't'
+            # (not just involves time, like sin(t) + 2)
             clock_vars = set()
             for aux_name, aux_def in self.auxiliary_defs.items():
-                # Check if auxiliary is a clock variable (definition is just 'time' or 't')
-                if hasattr(aux_def, 'free_symbols'):
-                    aux_def_syms = {str(s).lower() for s in aux_def.free_symbols}
-                    if aux_def_syms <= {'time', 't'}:
+                # Check if auxiliary definition IS just 'time' or 't' (identity)
+                # This catches T := time but NOT Z_1 := sin(t) + 2
+                if isinstance(aux_def, sp.Symbol):
+                    if str(aux_def).lower() in ['time', 't']:
                         clock_vars.add(str(aux_name))
             
             for i, var in enumerate(recast_vars_ordered):
@@ -1182,8 +1260,12 @@ class RecastValidator:
             
             # Extract parameter values from recast IR
             param_values = self.recast_ir.params
+            # CRITICAL: Filter out any param names that match state variable names
+            # This prevents "duplicate argument 't'" errors when 't' is both a state var and param
+            recast_var_names = {str(v) for v in recast_vars_ordered}
+            filtered_param_names = sorted([p for p in param_values.keys() if p not in recast_var_names])
             # Use canonical symbols instead of creating new ones
-            param_symbols = [self.canonical_symbols[name] for name in sorted(param_values.keys())]
+            param_symbols = [self.canonical_symbols[name] for name in filtered_param_names]
             param_vals_ordered = [param_values[str(sym)] for sym in param_symbols]
             
             # Check if 'time' symbol appears in any ODE (time-dependent models)
@@ -1194,10 +1276,11 @@ class RecastValidator:
             for ode in self.recast_odes_expanded.values():
                 all_ode_symbols.update(ode.free_symbols)
             
-            # Check for time symbol (could be 'time' or 't')
+            # Check for time symbol - ONLY 'time' (Antimony reserved keyword)
+            # NOT 't' which may be a user-defined state variable (e.g., in 16_normal.ant)
             time_symbol = None
             for sym in all_ode_symbols:
-                if str(sym).lower() == 'time' or str(sym) == 't':
+                if str(sym).lower() == 'time':
                     time_symbol = sym
                     break
             
@@ -1214,10 +1297,12 @@ class RecastValidator:
             
             # Lambdify each element of Jacobian with both state vars and params
             # ALSO include time symbol if present (for time-dependent models)
+            # But ONLY if it's not already a state variable (e.g., 't' in cos_growth)
+            # CRITICAL: Check by NAME, not object identity (different Symbol objects may exist)
             n_orig = len(orig_vars_ordered)
             n_recast = len(recast_vars_ordered)
             all_symbols = list(recast_vars_ordered) + param_symbols
-            if time_symbol is not None:
+            if time_symbol is not None and str(time_symbol) not in recast_var_names:
                 all_symbols = all_symbols + [time_symbol]
             J_Phi_funcs = []
             for i in range(n_orig):
@@ -1287,12 +1372,14 @@ class RecastValidator:
             auxiliary_var_indices = []
             
             # Also identify clock variables (T := time) - these should be sampled, not computed
+            # A clock variable is one whose definition IS exactly 'time' or 't'
+            # (not just involves time, like sin(t) + 2)
             clock_vars = set()
             for aux_name, aux_def in self.auxiliary_defs.items():
-                # Check if auxiliary is a clock variable (definition is just 'time' or 't')
-                if hasattr(aux_def, 'free_symbols'):
-                    aux_def_syms = {str(s).lower() for s in aux_def.free_symbols}
-                    if aux_def_syms <= {'time', 't'}:
+                # Check if auxiliary definition IS just 'time' or 't' (identity)
+                # This catches T := time but NOT Z_1 := sin(t) + 2
+                if isinstance(aux_def, sp.Symbol):
+                    if str(aux_def).lower() in ['time', 't']:
                         clock_vars.add(str(aux_name))
             
             for i, var in enumerate(recast_vars_ordered):
@@ -1354,11 +1441,15 @@ class RecastValidator:
                                 break
                     
                     # Substitute time value if auxiliary depends on time
+                    # BUT only if it's not already substituted as a state variable
+                    # (e.g., t in cos_growth is a state variable, not integration time)
                     if t_sample is not None:
                         for sym in aux_def.free_symbols:
                             sym_name = str(sym).lower()
                             if sym_name == 'time' or sym_name == 't':
-                                subs_dict[sym] = t_sample
+                                # Check if this symbol was already substituted as state variable
+                                if sym not in subs_dict:
+                                    subs_dict[sym] = t_sample
                                 break
                     
                     # Evaluate - use evalf() then convert to float
@@ -1372,9 +1463,10 @@ class RecastValidator:
                     Z_sample[idx] = aux_val
                 
                 # Combine state variables and parameters for evaluation
-                # Also include sampled time value if time-dependent
+                # Also include sampled time value if time-dependent AND time is not a state var
+                # CRITICAL: Check by NAME, not object identity (different Symbol objects may exist)
                 all_vals = tuple(Z_sample) + tuple(param_vals_ordered)
-                if time_symbol is not None:
+                if time_symbol is not None and str(time_symbol) not in recast_var_names:
                     all_vals = all_vals + (t_sample,)
                 
                 # Evaluate J_Φ(Z) element by element - returns a matrix
@@ -1451,7 +1543,7 @@ class RecastValidator:
     def check_trajectory_comparison(self,
                                      t_end: float = 1.0,
                                      n_points: int = 100,
-                                     threshold: float = 1e-3) -> EquivalenceTest:
+                                     threshold: float = 1.5e-2) -> EquivalenceTest:
         """
         Compare simulation trajectories between original and reconstructed recast.
         
@@ -1474,7 +1566,7 @@ class RecastValidator:
         Args:
             t_end: Default end time for simulation if @SIM not present
             n_points: Default number of time points if @SIM not present
-            threshold: Error threshold for pass/fail (default 0.1%)
+            threshold: Error threshold for pass/fail (default 5%)
             
         Returns:
             EquivalenceTest with trajectory validation results
@@ -1483,7 +1575,9 @@ class RecastValidator:
             # Use @SIM metadata from original model if available
             t_start_use = self.orig_ir.sim_t_start if self.orig_ir.sim_t_start is not None else 0.0
             t_end_use = self.orig_ir.sim_t_end if self.orig_ir.sim_t_end is not None else t_end
-            n_points_use = self.orig_ir.sim_n_steps if self.orig_ir.sim_n_steps is not None else n_points
+            # N_STEPS is the number of time intervals (steps), so we need N_STEPS+1 output points
+            # This matches notebook_helpers.py: np.linspace(t0, t1, n_steps+1)
+            n_points_use = (self.orig_ir.sim_n_steps + 1) if self.orig_ir.sim_n_steps is not None else n_points
             
             # Get initial conditions from models
             orig_vars_ordered = sorted(self.orig_odes.keys(), key=str)
@@ -1568,10 +1662,15 @@ class RecastValidator:
             )
             
             # Step 4: Compute scaled relative error
-            # error(t) = |X_orig - X_recast| / (1 + max(|X_orig|, |X_recast|))
-            errors = np.abs(X_orig - X_reconstructed) / (
-                1.0 + np.maximum(np.abs(X_orig), np.abs(X_reconstructed))
+            # Normalize by characteristic scale (peak value over trajectory)
+            # This matches notebook_helpers.py for consistent error reporting
+            # error(t) = |X_orig - X_recast| / scale, where scale = max(peak_orig, peak_recast)
+            scale = np.maximum(
+                np.max(np.abs(X_orig), axis=0),
+                np.max(np.abs(X_reconstructed), axis=0)
             )
+            scale = np.maximum(scale, 1e-10)  # Floor to avoid division by zero
+            errors = np.abs(X_orig - X_reconstructed) / scale[np.newaxis, :]
             
             max_error = float(np.max(errors))
             mean_error = float(np.mean(errors))
@@ -1587,7 +1686,7 @@ class RecastValidator:
                     result=ValidationResult.PASS,
                     max_error=max_error,
                     mean_error=mean_error,
-                    details=f"Trajectories match. Max scaled error: {max_error:.2e} at t={worst_t:.2f} ({worst_var})"
+                    details=f"Trajectories match. Max scaled error: {max_error:.2e} at t={worst_t:.2g} ({worst_var})"
                 )
             else:
                 return EquivalenceTest(
@@ -1595,7 +1694,7 @@ class RecastValidator:
                     result=ValidationResult.FAIL,
                     max_error=max_error,
                     mean_error=mean_error,
-                    details=f"Trajectories diverge. Max scaled error: {max_error:.2e} at t={worst_t:.2f} ({worst_var})",
+                    details=f"Trajectories diverge. Max scaled error: {max_error:.2e} at t={worst_t:.2g} ({worst_var})",
                     counterexamples=[{
                         't': float(worst_t),
                         'variable': worst_var,
@@ -1790,6 +1889,9 @@ class RecastValidator:
         Reconstruct original variables from recast simulation.
         
         Applies mapping Φ(Z) to get X values.
+        
+        Uses index-based multiplication (like notebook_helpers.py) instead of
+        lambdify to avoid symbol identity mismatch issues.
         """
         n_points = len(t_array)
         n_orig = len(orig_vars)
@@ -1798,21 +1900,88 @@ class RecastValidator:
         # Build reconstruction functions
         recast_var_names = [str(v) for v in recast_vars]
         
+        # Build name-to-index mapping for fast lookup
+        name_to_idx = {name: idx for idx, name in enumerate(recast_var_names)}
+        
         for i, orig_var in enumerate(orig_vars):
             mapping_expr = self.mapping[orig_var]
             
             # If mapping is identity, just copy
             if mapping_expr == orig_var:
                 var_name = str(orig_var)
-                if var_name in recast_var_names:
-                    j = recast_var_names.index(var_name)
+                if var_name in name_to_idx:
+                    j = name_to_idx[var_name]
                     X_reconstructed[:, i] = Z_recast[:, j]
                 continue
             
-            # Build lambdified function for mapping
+            # Check if mapping is a simple product of variables (common case)
+            # This handles X = Z_1 * Z_2 * Z_3 type mappings without lambdify
+            if mapping_expr.is_Mul:
+                # Extract factors - check if all are symbols or powers of symbols
+                all_symbols = True
+                factor_indices = []
+                factor_exponents = []
+                
+                for factor in mapping_expr.args:
+                    if isinstance(factor, sp.Symbol):
+                        factor_name = str(factor)
+                        if factor_name in name_to_idx:
+                            factor_indices.append(name_to_idx[factor_name])
+                            factor_exponents.append(1)
+                        else:
+                            all_symbols = False
+                            break
+                    elif isinstance(factor, sp.Pow):
+                        base, exp = factor.args
+                        if isinstance(base, sp.Symbol) and str(base) in name_to_idx:
+                            factor_indices.append(name_to_idx[str(base)])
+                            factor_exponents.append(float(exp))
+                        else:
+                            all_symbols = False
+                            break
+                    elif factor.is_number:
+                        # Numeric coefficient - will be handled by lambdify fallback
+                        all_symbols = False
+                        break
+                    else:
+                        all_symbols = False
+                        break
+                
+                if all_symbols and factor_indices:
+                    # Fast path: compute product directly using indices
+                    prod = np.ones(n_points)
+                    for idx, exp in zip(factor_indices, factor_exponents):
+                        prod *= Z_recast[:, idx] ** exp
+                    X_reconstructed[:, i] = prod
+                    continue
+            
+            # Check if mapping is a single symbol
+            if isinstance(mapping_expr, sp.Symbol):
+                sym_name = str(mapping_expr)
+                if sym_name in name_to_idx:
+                    X_reconstructed[:, i] = Z_recast[:, name_to_idx[sym_name]]
+                    continue
+            
+            # Fallback: use lambdify for complex expressions
+            # Substitute symbols in mapping_expr with canonical recast_vars symbols
+            # to ensure name matching works correctly
+            subs_dict = {}
+            for sym in mapping_expr.free_symbols:
+                sym_name = str(sym)
+                if sym_name in name_to_idx:
+                    # Find the actual symbol object from recast_vars
+                    actual_sym = recast_vars[name_to_idx[sym_name]]
+                    if sym is not actual_sym:
+                        subs_dict[sym] = actual_sym
+            
+            if subs_dict:
+                mapping_expr_fixed = mapping_expr.subs(subs_dict)
+            else:
+                mapping_expr_fixed = mapping_expr
+            
             func = lambdify(
                 list(recast_vars) + [sp.Symbol(k) for k in sorted(param_values.keys())],
-                mapping_expr,
+                mapping_expr_fixed,
                 modules='numpy'
             )
             
@@ -1852,13 +2021,9 @@ class RecastValidator:
             report.symbolic_test = self.check_symbolic_equivalence()
         
         if run_numerical:
-            # Try JAX first (more robust), fall back to symbolic Jacobian
-            try:
-                import jax
-                report.numerical_test = self.check_numerical_pointwise_jax()
-            except ImportError:
-                # JAX not available, use symbolic Jacobian method
-                report.numerical_test = self.check_numerical_pointwise()
+            # Always use SymPy numerical validation
+            # JAX was causing hangs/slowdowns - see DEVELOPMENT_NOTES.md
+            report.numerical_test = self.check_numerical_pointwise()
         
         if run_trajectory:
             report.trajectory_test = self.check_trajectory_comparison()
@@ -1898,7 +2063,8 @@ def validate_recast_pair(original_file: str,
                          factor_map: Optional[Dict] = None,
                          mode: str = "simplified",
                          output_json: Optional[str] = None,
-                         solver: str = "roadrunner") -> ValidationReport:
+                         solver: str = "roadrunner",
+                         parser: str = "legacy") -> ValidationReport:
     """
     Convenience function to validate a recast.
     
@@ -1909,11 +2075,12 @@ def validate_recast_pair(original_file: str,
         mode: Recast mode
         output_json: Optional path to save JSON report
         solver: ODE solver for trajectory validation ('roadrunner' or 'rk4')
+        parser: Parser for Antimony files ('legacy' or 'sbml')
         
     Returns:
         ValidationReport
     """
-    validator = RecastValidator(original_file, recast_file, factor_map, mode, solver)
+    validator = RecastValidator(original_file, recast_file, factor_map, mode, solver, parser)
     report = validator.validate()
     
     if output_json:

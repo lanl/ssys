@@ -33,16 +33,16 @@ model Gardner2000_ToggleSwitch
   compartment cell = 1;
 
   // Species (repressor concentrations)
-  species R1 in cell;   // repressor 1
-  species R2 in cell;   // repressor 2
+  species R1 in cell;
+  species R2 in cell;
 
   // Parameters
-  const alpha_1 = 156.25;   // synthesis rate of R1
-  const alpha_2 = 15.6;     // synthesis rate of R2
-  const n_2     = 2.5;      // cooperativity of R2 repression
-  const n_1     = 1.0;      // cooperativity of R1 repression
-  const k_deg1  = 1.0;      // degradation/dilution of R1
-  const k_deg2  = 1.0;      // degradation/dilution of R2
+  const alpha_1 = 156.25;
+  const alpha_2 = 15.6;
+  const n_2     = 2.5;
+  const n_1     = 1.0;
+  const k_deg1  = 1.0;
+  const k_deg2  = 1.0;
 
   // ODEs: mutually repressive toggle
   R1' = alpha_1 / (1 + R2^n_2) - k_deg1 * R1;

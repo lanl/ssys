@@ -11,6 +11,7 @@ from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
 import ssys
 from ssys import parse_antimony, build_sym_system, recast_to_ssystem, ssystem_to_antimony
+from ssys.recaster import parse_antimony_via_sbml, _extract_sim_metadata
 
 
 def read_manifest(path: str) -> list[str]:
@@ -35,7 +36,8 @@ def read_manifest(path: str) -> list[str]:
 
 
 def recast_file(ant_path: str, out_dir: str, mode: str = "simplified", 
-                validate: bool = False, solver: str = "roadrunner") -> tuple[str, str, str, Optional[str]]:
+                validate: bool = False, solver: str = "roadrunner",
+                parser: str = "legacy") -> tuple[str, str, str, Optional[str]]:
     """
     Recast a single Antimony file to S-system form.
 
@@ -45,6 +47,9 @@ def recast_file(ant_path: str, out_dir: str, mode: str = "simplified",
         mode: Output mode ('simplified' or 'canonical')
         validate: Whether to run validation tests
         solver: ODE solver for validation ('roadrunner' or 'rk4')
+        parser: Parser to use ('legacy' or 'sbml')
+            - 'legacy': Hand-rolled regex parser (current behavior)
+            - 'sbml': RoadRunner → SBML → libSBML (reference Antimony parser)
 
     Returns:
         Tuple of (model_name, input_path, output_path, validation_json_path)
@@ -53,20 +58,45 @@ def recast_file(ant_path: str, out_dir: str, mode: str = "simplified",
     name = os.path.splitext(os.path.basename(ant_path))[0]
     txt = open(ant_path).read()
 
-    ir = parse_antimony(txt)
-    sym = build_sym_system(ir)
+    # Extract @SIM metadata FIRST (before any parsing)
+    # This works for both parser modes
+    t_start, t_end, n_steps = _extract_sim_metadata(txt)
+    
+    # Parse based on selected parser
+    if parser == "sbml":
+        # SBML-first: RoadRunner parses Antimony → SBML → libSBML extracts ODEs
+        sym = parse_antimony_via_sbml(txt)
+        # Get @SIM metadata from attached attributes (if available)
+        if hasattr(sym, '_sim_t_start') and sym._sim_t_start is not None:
+            t_start = sym._sim_t_start
+        if hasattr(sym, '_sim_t_end') and sym._sim_t_end is not None:
+            t_end = sym._sim_t_end
+        if hasattr(sym, '_sim_n_steps') and sym._sim_n_steps is not None:
+            n_steps = sym._sim_n_steps
+    else:
+        # Legacy: Hand-rolled regex parser
+        ir = parse_antimony(txt)
+        sym = build_sym_system(ir)
+        # Get @SIM metadata from ModelIR
+        if ir.sim_t_start is not None:
+            t_start = ir.sim_t_start
+        if ir.sim_t_end is not None:
+            t_end = ir.sim_t_end
+        if ir.sim_n_steps is not None:
+            n_steps = ir.sim_n_steps
+    
     rec = recast_to_ssystem(sym, mode=mode)
     out_text = ssystem_to_antimony(rec, model_name=f"{name}_recast", mode=mode)
     
     # Propagate @SIM metadata from input to recast output
     # This ensures notebook simulations use the same time parameters for both
     sim_parts = []
-    if ir.sim_t_start is not None:
-        sim_parts.append(f"T_START={ir.sim_t_start:g}")
-    if ir.sim_t_end is not None:
-        sim_parts.append(f"T_END={ir.sim_t_end:g}")
-    if ir.sim_n_steps is not None:
-        sim_parts.append(f"N_STEPS={ir.sim_n_steps}")
+    if t_start is not None:
+        sim_parts.append(f"T_START={t_start:g}")
+    if t_end is not None:
+        sim_parts.append(f"T_END={t_end:g}")
+    if n_steps is not None:
+        sim_parts.append(f"N_STEPS={n_steps}")
     if sim_parts:
         sim_line = "// @SIM " + " ".join(sim_parts) + "\n"
         out_text = out_text.rstrip() + "\n" + sim_line
@@ -80,9 +110,10 @@ def recast_file(ant_path: str, out_dir: str, mode: str = "simplified",
         from ssys.validator import validate_recast_pair
         validation_json_path = os.path.join(out_dir, f"{name}_validation.json")
         try:
-            validate_recast_pair(ant_path, out_path, mode=mode, 
+            validate_recast_pair(ant_path, out_path, mode=mode,
                                output_json=validation_json_path,
-                               solver=solver)
+                               solver=solver,
+                               parser=parser)
         except Exception as e:
             print(f"Warning: Validation failed for {name}: {e}", file=sys.stderr)
             validation_json_path = None
@@ -189,6 +220,12 @@ def main():
         help="ODE solver: 'roadrunner' (CVODE, default) or 'rk4'",
     )
     parser.add_argument(
+        "--parser",
+        choices=["legacy", "sbml"],
+        default="sbml",
+        help="Antimony parser: 'sbml' (RoadRunner reference parser, default) or 'legacy' (regex)",
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {ssys.__version__}",
@@ -204,7 +241,8 @@ def main():
 
     print(f"Processing {len(ant_files)} model(s)...")
     cases = [recast_file(ant, args.outdir, mode=args.mode, 
-                        validate=args.validate, solver=args.solver)
+                        validate=args.validate, solver=args.solver,
+                        parser=args.parser)
              for ant in ant_files]
     
     if args.validate:

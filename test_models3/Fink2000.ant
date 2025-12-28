@@ -31,42 +31,42 @@ model Fink2000_BK_CaWave_WellMixed
   compartment cyt = 1;
 
   // Species (state variables)
-  species Ca  in cyt;   // cytosolic Ca2+ (µM)
-  species IP3 in cyt;   // cytosolic InsP3 (µM)
-  species h   in cyt;   // IP3R inactivation variable
+  species Ca  in cyt;
+  species IP3 in cyt;
+  species h   in cyt;
 
   // -------------------------
   // Parameters (from Tables 2–4)
   // -------------------------
 
   // InsP3 production & degradation (Eqs. 1–2)
-  const J_0     = 20.86;   // effective InsP3 production rate amplitude (µM s^-1; lumped)
-  const k_0     = 1.188;   // decay of InsP3 production (s^-1)
-  const k_degr  = 0.14;    // InsP3 degradation rate (s^-1)
-  const IP3_0   = 0.16;    // basal InsP3 (µM)
+  const J_0     = 20.86;
+  const k_0     = 1.188;
+  const k_degr  = 0.14;
+  const IP3_0   = 0.16;
 
   // IP3R channel (Eq. 4)
-  const J_max   = 3500;    // max Ca2+ release rate (µM s^-1)
-  const K_IP3   = 0.8;     // InsP3 dissociation constant (µM)
-  const K_act   = 0.3;     // Ca2+ activation Kd (µM)
-  const K_inh   = 0.2;     // Ca2+ inhibition Kd (µM)
-  const k_on    = 2.7;     // Ca2+ on-rate at inhibition site (µM^-1 s^-1)
+  const J_max   = 3500;
+  const K_IP3   = 0.8;
+  const K_act   = 0.3;
+  const K_inh   = 0.2;
+  const k_on    = 2.7;
 
   // SERCA pump (Eq. 6)
-  const V_max   = 3.75;    // max SERCA uptake (µM s^-1)
-  const K_p     = 0.27;    // Ca2+ Kd for SERCA (µM)
+  const V_max   = 3.75;
+  const K_p     = 0.27;
 
   // ER leak (Eq. 7)
-  const L      = 0.1;     // leak constant (µM s^-1)
-  const Ca_ER  = 400;     // ER [Ca2+] (µM, treated constant)
+  const L      = 0.1;
+  const Ca_ER  = 400;
 
   // Effective ER density scaling (a = a0 * f; here f≈1 averaged)
-  const a      = 1.41;    // flux scaling factor
+  const a      = 1.41;
 
   // Plasma membrane extrusion (Eq. 9 → lumped)
-  const g_0    = 8.0;     // effective Ca2+ extrusion slope (s^-1)
-  const Ca_c   = 0.2;     // threshold for extrusion (µM)
-  const eps_pm = 0.01;    // smoothing parameter for ReLU approximation
+  const g_0    = 8.0;
+  const Ca_c   = 0.2;
+  const eps_pm = 0.01;
 
   // -------------------------
   // Helper functions
@@ -97,15 +97,13 @@ model Fink2000_BK_CaWave_WellMixed
   // -------------------------
 
   // Cytosolic InsP3
-  IP3' = J_prod_IP3
-         - k_degr * (IP3 - IP3_0);
+  IP3' = J_prod_IP3 - k_degr * (IP3 - IP3_0);
 
   // IP3R inactivation gate h (Eq. 5)
   h'   = k_on * (K_inh - (Ca + K_inh)*h);
 
   // Cytosolic Ca2+ (Eq. 3 without diffusion; buffers folded into a)
-  Ca'  = a * (J_channel - J_pump + J_leak)
-         - J_pm;
+  Ca'  = a * (J_channel - J_pump + J_leak) - J_pm;
 
   // -------------------------
   // Initial conditions

@@ -20,7 +20,7 @@ from pathlib import Path
 
 
 def run_mode(input_dir: str, mode: str, outdir: str, 
-             solver: str = "roadrunner") -> int:
+             solver: str = "roadrunner", parser: str = "sbml") -> int:
     """Run ssys-recaster for a specific mode."""
     manifest = f"{input_dir}/models.manifest"
     
@@ -34,6 +34,7 @@ def run_mode(input_dir: str, mode: str, outdir: str,
         "--outdir", outdir,
         "--mode", mode,
         "--solver", solver,
+        "--parser", parser,
         "--validate"
     ]
     
@@ -91,6 +92,12 @@ Model directories:
         default="roadrunner",
         help="ODE solver: 'roadrunner' (CVODE, default) or 'rk4'"
     )
+    parser.add_argument(
+        "--parser",
+        choices=["sbml", "legacy"],
+        default="sbml",
+        help="Antimony parser: 'sbml' (reference parser, default) or 'legacy' (regex)"
+    )
     args = parser.parse_args()
     
     # Normalize input path
@@ -109,14 +116,14 @@ Model directories:
         print("SIMPLIFIED MODE")
         print("-" * 60)
         ret1 = run_mode(input_dir, "simplified", 
-                        f"out_{base_name}_simplified", args.solver)
+                        f"out_{base_name}_simplified", args.solver, args.parser)
         
         print()
         print("-" * 60)
         print("CANONICAL MODE")
         print("-" * 60)
         ret2 = run_mode(input_dir, "canonical", 
-                        f"out_{base_name}_canonical", args.solver)
+                        f"out_{base_name}_canonical", args.solver, args.parser)
         
         print()
         print("=" * 60)
@@ -138,7 +145,7 @@ Model directories:
     else:
         # Single mode
         outdir = args.outdir or f"out_{base_name}"
-        ret = run_mode(input_dir, args.mode, outdir, args.solver)
+        ret = run_mode(input_dir, args.mode, outdir, args.solver, args.parser)
         if ret == 0:
             print(f"\nNotebook: {outdir}/recast_report.ipynb")
         sys.exit(ret)

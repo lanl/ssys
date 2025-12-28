@@ -458,6 +458,170 @@ def parse_antimony(text: str) -> ModelIR:
     return ir
 
 
+def _extract_sim_metadata(text: str) -> Tuple[Optional[float], Optional[float], Optional[int]]:
+    """
+    Extract @SIM metadata from Antimony comments.
+    
+    Format: // @SIM T_START=0 T_END=100 N_STEPS=500
+    
+    Args:
+        text: Antimony text to scan for @SIM metadata
+    
+    Returns:
+        Tuple of (t_start, t_end, n_steps), any of which may be None if not found
+    """
+    t_start = None
+    t_end = None
+    n_steps = None
+    
+    sim_marker_pattern = re.compile(r'@SIM\b')
+    key_value_pattern = re.compile(r'(\w+)\s*=\s*([0-9.eE+-]+)')
+    
+    for line in text.splitlines():
+        if '//' in line:
+            comment_part = line.split('//', 1)[1]
+            if sim_marker_pattern.search(comment_part):
+                for match in key_value_pattern.finditer(comment_part):
+                    key = match.group(1).upper()
+                    value = match.group(2)
+                    if key == 'T_START':
+                        try:
+                            t_start = float(value)
+                        except ValueError:
+                            pass
+                    elif key == 'T_END':
+                        try:
+                            t_end = float(value)
+                        except ValueError:
+                            pass
+                    elif key == 'N_STEPS':
+                        try:
+                            n_steps = int(float(value))
+                        except ValueError:
+                            pass
+    
+    return t_start, t_end, n_steps
+
+
+def _preprocess_antimony_text(text: str) -> str:
+    """
+    Preprocess Antimony text before passing to libantimony.
+    
+    Currently a no-op - we require input .ant files to use standard Antimony syntax:
+    - Use backslash \\ for line continuation (NOT implicit continuation)
+    - Use `function name(x) expr end` for function definitions (NOT `name(x) := expr`)
+    
+    This function exists as a hook for future preprocessing needs.
+    """
+    return text
+
+
+def parse_antimony_via_sbml(antimony_text: str) -> 'SymSystem':
+    """
+    Parse Antimony text using the Antimony library (SBML-first approach).
+    
+    Pipeline: Antimony text → antimony lib → SBML string → libSBML → SymSystem
+    
+    This replaces the fragile hand-rolled parse_antimony() + build_sym_system()
+    with the reference Antimony parser, ensuring all valid Antimony syntax is handled.
+    
+    Args:
+        antimony_text: Antimony model text
+    
+    Returns:
+        SymSystem ready for recasting
+    
+    Raises:
+        ImportError: If antimony is not installed
+        ValueError: If Antimony cannot be parsed
+    """
+    try:
+        import antimony
+    except ImportError:
+        raise ImportError(
+            "antimony is required for SBML-first parsing. "
+            "Install with: pip install antimony"
+        )
+    
+    # Extract @SIM metadata BEFORE conversion (comments are lost in SBML)
+    t_start, t_end, n_steps = _extract_sim_metadata(antimony_text)
+    
+    # CRITICAL: Preprocess to join multi-line statements
+    # libantimony requires complete statements on single lines
+    preprocessed_text = _preprocess_antimony_text(antimony_text)
+    
+    # Use antimony library to parse Antimony and convert to SBML
+    try:
+        # Clear any previous models
+        antimony.clearPreviousLoads()
+        
+        # Load the preprocessed Antimony string
+        result = antimony.loadAntimonyString(preprocessed_text)
+        if result == -1:
+            error_msg = antimony.getLastError()
+            raise ValueError(f"Antimony parsing error: {error_msg}")
+        
+        # Get the module name (first/main module)
+        module_name = antimony.getMainModuleName()
+        if not module_name:
+            raise ValueError("No module found in Antimony text")
+        
+        # Convert to SBML
+        sbml_string = antimony.getSBMLString(module_name)
+        if not sbml_string:
+            error_msg = antimony.getLastError()
+            raise ValueError(f"SBML conversion failed: {error_msg}")
+    except Exception as e:
+        if "Antimony parsing error" in str(e) or "SBML conversion" in str(e):
+            raise
+        raise ValueError(f"Antimony library failed: {e}")
+    
+    # Parse SBML string using existing infrastructure
+    sym = parse_sbml_from_string(sbml_string)
+    
+    # Attach simulation metadata if found
+    # These public attributes are used by the validator for trajectory tests
+    sym.sim_t_start = t_start
+    sym.sim_t_end = t_end
+    sym.sim_n_steps = n_steps
+    
+    # Cache original Antimony text for RoadRunner simulation
+    sym.antimony_text = antimony_text
+
+    return sym
+
+
+def parse_sbml_from_string(sbml_string: str) -> 'SymSystem':
+    """
+    Parse an SBML string and return a SymSystem for recasting.
+    
+    This is the string-input variant of parse_sbml(), used by parse_antimony_via_sbml().
+    
+    Args:
+        sbml_string: SBML model as string
+    
+    Returns:
+        SymSystem ready for recasting
+    
+    Raises:
+        ImportError: If python-libsbml is not installed
+        ValueError: If SBML cannot be parsed or has no model
+    """
+    try:
+        import libsbml
+    except ImportError:
+        raise ImportError(
+            "python-libsbml is required for SBML parsing. "
+            "Install with: pip install python-libsbml"
+        )
+    
+    # Read SBML from string
+    doc = libsbml.readSBMLFromString(sbml_string)
+    
+    # Delegate to shared implementation
+    return _parse_sbml_document(doc, source="<string>")
+
+
 def parse_sbml(sbml_path: str) -> 'SymSystem':
     """
     Parse an SBML file and return a SymSystem for recasting.
@@ -492,6 +656,23 @@ def parse_sbml(sbml_path: str) -> 'SymSystem':
     # Read SBML file
     doc = libsbml.readSBML(sbml_path)
     
+    # Delegate to shared implementation
+    return _parse_sbml_document(doc, source=sbml_path)
+
+
+def _parse_sbml_document(doc, source: str = "<unknown>") -> 'SymSystem':
+    """
+    Shared implementation for parsing an SBML document.
+    
+    Args:
+        doc: libsbml.SBMLDocument object
+        source: Description of source for error messages
+    
+    Returns:
+        SymSystem ready for recasting
+    """
+    import libsbml
+    
     # Check for errors
     if doc.getNumErrors() > 0:
         errors = []
@@ -500,11 +681,11 @@ def parse_sbml(sbml_path: str) -> 'SymSystem':
             if err.getSeverity() >= libsbml.LIBSBML_SEV_ERROR:
                 errors.append(err.getMessage())
         if errors:
-            raise ValueError(f"SBML parsing errors: {'; '.join(errors)}")
+            raise ValueError(f"SBML parsing errors in {source}: {'; '.join(errors)}")
     
     model = doc.getModel()
     if model is None:
-        raise ValueError(f"No model found in SBML file: {sbml_path}")
+        raise ValueError(f"No model found in SBML source: {source}")
     
     # ========================================================================
     # STEP 1: Extract species information
@@ -616,7 +797,7 @@ def parse_sbml(sbml_path: str) -> 'SymSystem':
         # Parse rate expression
         try:
             rate_expr = sp.sympify(formula_str, locals=all_syms)
-        except Exception as e:
+        except Exception:
             # Skip reactions with unparseable rate laws
             continue
         
@@ -660,11 +841,69 @@ def parse_sbml(sbml_path: str) -> 'SymSystem':
                     pass
     
     # ========================================================================
+    # STEP 6a: Handle assignment rules (V_1 := expression)
+    # ========================================================================
+    # Assignment rules define algebraic relationships, not ODEs
+    # They are used for quantities that can be computed from other quantities
+    assignment_rules: Dict[str, str] = {}
+    for i in range(model.getNumRules()):
+        rule = model.getRule(i)
+        
+        if rule.getTypeCode() == libsbml.SBML_ASSIGNMENT_RULE:
+            var_id = rule.getVariable()
+            formula_str = libsbml.formulaToString(rule.getMath())
+            # Store as string for SymSystem (will be parsed later if needed)
+            assignment_rules[var_id] = formula_str
+    
+    # ========================================================================
+    # STEP 6b: Handle InitialAssignments (parameter expressions for ICs)
+    # ========================================================================
+    # In SBML, InitialAssignments allow ICs to be set via formulas like I = I_b
+    # or parameter expressions like gamma_rate = 1/7
+    # We need to evaluate these formulas to get numeric initial conditions
+    #
+    # NOTE: When Antimony converts "gamma_rate = 1/7" to SBML, it creates:
+    #   1. A parameter element (value may be unset or 0)
+    #   2. An InitialAssignment that defines the actual value
+    # So we MUST process InitialAssignments for parameters, not just species
+    for i in range(model.getNumInitialAssignments()):
+        ia = model.getInitialAssignment(i)
+        var_id = ia.getSymbol()
+        formula_str = libsbml.formulaToString(ia.getMath())
+        
+        if var_id in species_info:
+            try:
+                # Evaluate the formula with known parameters
+                init_expr = sp.sympify(formula_str, locals=all_syms)
+                # Substitute parameter values using correct symbols from all_syms
+                for param_name, param_val in params.items():
+                    if param_name in all_syms:
+                        init_expr = init_expr.subs(all_syms[param_name], param_val)
+                # Update the species initial value
+                species_info[var_id]['init'] = float(init_expr)
+            except Exception:
+                pass  # Keep default if evaluation fails
+        
+        elif var_id in params:
+            # Handle parameter expressions like gamma_rate = 1/7
+            try:
+                # Evaluate the formula
+                init_expr = sp.sympify(formula_str, locals=all_syms)
+                # Substitute known parameter values
+                for param_name, param_val in params.items():
+                    if param_name != var_id and param_name in all_syms:
+                        init_expr = init_expr.subs(all_syms[param_name], param_val)
+                # Update the parameter value
+                params[var_id] = float(init_expr)
+            except Exception:
+                pass  # Keep default if evaluation fails
+
+    # ========================================================================
     # STEP 7: Build SymSystem
     # ========================================================================
     # Variables (floating species with ODEs)
     vars_list = list(odes.keys())
-    
+
     # Initial conditions
     initials: Dict[sp.Symbol, float] = {}
     for sid, info in species_info.items():
@@ -677,13 +916,21 @@ def parse_sbml(sbml_path: str) -> 'SymSystem':
             params[cid] = cval
     
     # Simplify ODEs
-    simplified_odes = {var: sp.simplify(ode) for var, ode in odes.items()}
+    # CRITICAL: Do NOT use sp.simplify() here - it combines separate fractions
+    # over a common denominator, which corrupts the term structure needed for
+    # lift_rational_functions() to identify individual denominators.
+    # Example: A/(1+x^4) + B/(1+a^2) becomes (A*(1+a^2) + B*(1+x^4))/((1+x^4)*(1+a^2))
+    # This causes incorrect lifting where all terms get divided by the PRODUCT
+    # of denominators instead of their individual denominators.
+    # See: McMillen2002 regression bug (December 2025)
+    simplified_odes = dict(odes)
     
     return SymSystem(
         vars=vars_list,
         params=params,
         odes=simplified_odes,
-        initials=initials
+        initials=initials,
+        assignment_rules=assignment_rules
     )
 
 
@@ -963,13 +1210,9 @@ def classify_result(result: RecastResult, mode: str = "simplified") -> SystemCla
     has_time_varying_coeffs = False
     if result.assignment_rules:
         for rule_name, rule_expr in result.assignment_rules.items():
-            # Check if rule contains 'T' (clock state) - case sensitive
-            # This indicates time-varying coefficients via assignment rules
-            if ' T ' in f' {rule_expr} ' or rule_expr.startswith('T ') or \
-               rule_expr.endswith(' T') or rule_expr == 'T' or \
-               '(T)' in rule_expr or '(T-' in rule_expr or '(T+' in rule_expr or \
-               '*T' in rule_expr or 'T*' in rule_expr or '/T' in rule_expr or \
-               'T/' in rule_expr or '^T' in rule_expr or 'T^' in rule_expr:
+            # Check if rule contains 'T' (clock state) as a standalone identifier
+            # Use word boundary regex to match T but not words containing T (like "TIME")
+            if re.search(r'\bT\b', str(rule_expr)):
                 has_time_varying_coeffs = True
                 break
     
@@ -3830,7 +4073,17 @@ def _pool_ssystem_recast(sym: 'SymSystem', mode: str = "simplified") -> 'RecastR
 
         # 4) mapping X = ∏_j V_j and initial consistency at t=0
         factor_map[Xi] = list(V_list)
-        xi0 = float(new_initials.get(Xi, 1.0))
+        # Match by name to avoid symbol identity mismatch (SBML parser vs pool vars)
+        # Also check params as fallback (SBML parser may put species ICs in params)
+        xi0 = 1.0
+        for s, v in new_initials.items():
+            if hasattr(s, 'name') and s.name == Xi.name:
+                xi0 = float(v)
+                break
+        else:
+            # Fallback: SBML parser may put species IC in params dict
+            if Xi.name in sym.params:
+                xi0 = float(sym.params[Xi.name])
         
         # Set initial conditions for pool auxiliaries
         if V_list:
@@ -4155,6 +4408,17 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast",
         lines.append("// ========================================================================")
         lines.append("")
     
+    # --- Parameters (copied from original model) ---
+    if result.params:
+        lines.append("// Parameters (from original model)")
+        for param_name in sorted(result.params.keys()):
+            # Skip parameters that are actually assignment rules (they're computed, not constants)
+            if result.assignment_rules and param_name in result.assignment_rules:
+                continue
+            param_val = result.params[param_name]
+            lines.append(f"{param_name} = {param_val:g};")
+        lines.append("")
+
     # --- Assignment rules from original model (time-dependent quantities) ---
     if result.assignment_rules:
         lines.append("// Assignment rules (from original model)")
@@ -4162,7 +4426,7 @@ def gma_to_antimony(result: RecastResult, model_name: str = "recast",
             expr = result.assignment_rules[var_name]
             lines.append(f"{var_name} := {expr};")
         lines.append("")
-    
+
     # Initial assignments - handle both Symbol and tuple keys
     # Skip variables that are assignment rules (they don't have ICs)
     def _init_sort_key(kv):
@@ -4347,11 +4611,16 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         lines.append("")
     
     # --- Parameters ---
-    if result.params:
+    # IMPORTANT: Filter out original variable names - they're species, not parameters
+    # The SBML parser may include "X = 10" as a parameter when X is really a species IC
+    original_var_names = {orig.name for orig in result.factor_map.keys()} if result.factor_map else set()
+    param_names_to_output = [n for n in sorted(result.params.keys()) if n not in original_var_names]
+    
+    if param_names_to_output:
         lines.append("// ========================================================================")
         lines.append("// PARAMETERS (copied from original)")
         lines.append("// ========================================================================")
-        for param_name in sorted(result.params.keys()):
+        for param_name in param_names_to_output:
             param_val = result.params[param_name]
             lines.append(f"{param_name} = {param_val:g};")
         lines.append("")

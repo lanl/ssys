@@ -1,4 +1,4 @@
-model 25_CSTR_SSystem_exact()
+model CSTR_SSystem_exact_25()
 
   // Parameters (same symbols as original)
   A   = 1;
@@ -31,20 +31,16 @@ model 25_CSTR_SSystem_exact()
   X4' = 2*B*X5*X6*X3^(-1) - B*X1*X2*X5*X6*X3^(-1);
 
   // dX5/dt = C X5 / (X7^2 X8^2) - (1 + b) X3 X4 X5 /(X7^2 X8^2)
-  X5' = C*X5*X7^(-2)*X8^(-2)
-      - (1 + b)*X3*X4*X5*X7^(-2)*X8^(-2);
+  X5' = C*X5*X7^(-2)*X8^(-2) - (1 + b)*X3*X4*X5*X7^(-2)*X8^(-2);
 
   // dX6/dt = 2 B X5 X6^2 / (X7^2 X8^2) - B X1 X2 X5 X6^2 / (X7^2 X8^2)
-  X6' = 2*B*X5*X6^2*X7^(-2)*X8^(-2)
-      - B*X1*X2*X5*X6^2*X7^(-2)*X8^(-2);
+  X6' = 2*B*X5*X6^2*X7^(-2)*X8^(-2) - B*X1*X2*X5*X6^2*X7^(-2)*X8^(-2);
 
   // dX7/dt = (C / c)/X8 - [(1 + b) / c] X3 X4 / X8
-  X7' = (C/c)*X8^(-1)
-      - ((1 + b)/c)*X3*X4*X8^(-1);
+  X7' = (C/c)*X8^(-1) - ((1 + b)/c)*X3*X4*X8^(-1);
 
   // dX8/dt = (2 B / c) X5 X6 / X7 - (B / c) X1 X2 X5 X6 / X7
-  X8' = (2*B/c)*X5*X6*X7^(-1)
-      - (B/c)*X1*X2*X5*X6*X7^(-1);
+  X8' = (2*B/c)*X5*X6*X7^(-1) - (B/c)*X1*X2*X5*X6*X7^(-1);
 
   // Initial conditions (as given)
   X1 = 1;

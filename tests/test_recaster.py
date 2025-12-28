@@ -1,7 +1,12 @@
 """Tests for core recasting functionality."""
 
+import re
+from pathlib import Path
+
 import pytest
 import sympy as sp
+
+import ssys
 
 from ssys import (
     parse_antimony,
@@ -213,6 +218,29 @@ class TestEdgeCases:
         # Should create auxiliary for constant
         X = sp.Symbol("X", positive=True)
         assert X in rec.factor_map
+
+
+class TestVersionConsistency:
+    """Tests for version consistency between pyproject.toml and __init__.py."""
+
+    def test_version_matches_pyproject(self):
+        """Verify version in pyproject.toml matches __version__ in ssys."""
+        # Read version from pyproject.toml using regex (works with Python 3.10+)
+        pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
+        pyproject_text = pyproject_path.read_text()
+        
+        # Extract version from pyproject.toml
+        match = re.search(r'^version\s*=\s*"([^"]+)"', pyproject_text, re.MULTILINE)
+        assert match is not None, "Could not find version in pyproject.toml"
+        pyproject_version = match.group(1)
+        
+        # Compare with ssys.__version__
+        init_version = ssys.__version__
+        
+        assert pyproject_version == init_version, (
+            f"Version mismatch: pyproject.toml has '{pyproject_version}', "
+            f"ssys.__version__ has '{init_version}'"
+        )
 
 
 if __name__ == "__main__":

@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2025-12-27
+
+### Added
+- SBML-first parser architecture using reference Antimony library
+- New `parse_antimony_via_sbml()` function for robust Antimony parsing
+- Support for SBML `InitialAssignment` elements for parameter-dependent initial conditions
+- All 118 test model files now parse correctly with standard Antimony library
+
+### Changed
+- Core dependencies now include `libroadrunner`, `antimony`, and `python-libsbml`
+- Validator uses SBML-first parser for both original and recast files
+
+### Fixed
+- Fixed handling of symbolic expressions in S-system recasting
+- Improved handling of rational functions and composite functions
+- Corrected parameter substitution in direct S-system recasting
+- Updated auxiliary variable naming process
+- Enhanced Antimony output generation for complex expressions
+- Fixed semicolon placement issues in Antimony parser
+- Fixed reserved name conflicts (e.g., `gamma` → `gamma_rate`)
+
 ## [0.4.0] - 2025-11-21
 
 ### Changed
@@ -86,17 +107,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - matplotlib >=3.7
 - nbformat >=5.9
 
-[Unreleased]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.4.0...main
+[Unreleased]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.0...main
+[0.5.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.4.0...v0.5.0
 [0.4.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.3.0...v0.4.0
 [0.3.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.2.0...v0.3.0
 [0.2.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.1.0...v0.2.0
 [0.1.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/tags/v0.1.0
-
-## [Unreleased]
-
-### Fixed
-- Fixed handling of symbolic expressions in S-system recasting
-- Improved handling of rational functions and composite functions
-- Corrected parameter substitution in direct S-system recasting
-- Updated auxiliary variable naming process
-- Enhanced Antimony output generation for complex expressions

@@ -26,8 +26,8 @@ model Ozbudak2004_LacOperon_Simplified
   compartment cell = 1;
 
   // State variables
-  species x in cell;   // intracellular TMG (scaled)
-  species y in cell;   // LacY expression (scaled)
+  species x in cell;
+  species y in cell;
 
   // Parameters (from fits to Ozbudak et al. SI, for G = 0, T ≈ 30 mM)
   //
@@ -47,14 +47,14 @@ model Ozbudak2004_LacOperon_Simplified
 
   // Effective inhibition function from LacI, after eliminating R:
   //   1 + R/R0 = 1 + (rho - 1)/(1 + x^2)
-  inhib(x) := 1 + (rho - 1)/(1 + x^2);
+  inhib := 1 + (rho - 1)/(1 + x^2);
 
   // ODEs
   // Intracellular TMG
   x' = beta * y - x;
 
   // LacY (permease) expression
-  y' = alpha / inhib(x) - y;
+  y' = alpha / inhib - y;
 
   // Initial conditions corresponding to an "uninduced" state:
   //   x(0) = 0 (no internal TMG)
