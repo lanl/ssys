@@ -17,7 +17,7 @@ ssys/
     recaster.py           # Core library: parse → ODE → recast → Antimony
     validator.py          # Mathematical correctness validation
     notebook_helpers.py   # Jupyter notebook generation utilities
-    ode_backends/         # ODE solver backends (RoadRunner, RK4)
+    ode_backends/         # ODE solver backend (RoadRunner/CVODE)
   test_models1/           # 29 core test models
   test_models2a/          # Literature models (passing)
   test_models2b/          # Literature models (advanced)
@@ -99,9 +99,6 @@ ssys-recast --manifest test_models1/models.manifest \
 - `--parser`: Antimony parser to use (default: `sbml`)
   - `sbml`: SBML-based parser (recommended, uses reference Antimony implementation)
   - `legacy`: Hand-rolled parser (deprecated)
-- `--solver`: ODE solver for trajectory validation
-  - `roadrunner`: RoadRunner/CVODE (default, recommended)
-  - `rk4`: Fixed-step 4th-order Runge-Kutta
 - `--validate`: Run mathematical correctness validation on each recast
 
 ### Manifest Format
@@ -175,7 +172,6 @@ python recast_models.py <directory> [options]
 Options:
 - `--parser {sbml,legacy}`: Parser to use (default: sbml)
 - `--mode {simplified,canonical}`: Output mode (default: simplified)
-- `--solver {roadrunner,rk4}`: ODE solver (default: roadrunner)
 
 ### Test Model Sets
 
