@@ -824,8 +824,8 @@ class TestSIMMetadataEmission:
 
         assert "@SIM" not in output
 
-    def test_sim_metadata_position_before_end(self):
-        """Test that @SIM appears just before 'end' statement."""
+    def test_sim_metadata_position_after_end(self):
+        """Test that @SIM appears after 'end' statement (file-level metadata)."""
         Z = sp.Symbol("Z_1", positive=True)
 
         eq = SSysEquation(
@@ -851,7 +851,7 @@ class TestSIMMetadataEmission:
         end_pos = output.rfind("end")
         
         assert sim_pos > 0
-        assert end_pos > sim_pos  # @SIM should come before end
+        assert sim_pos > end_pos  # @SIM should come AFTER end (file-level metadata)
 
 
 if __name__ == "__main__":

@@ -4647,13 +4647,14 @@ def gma_to_antimony(
         else:
             lines.append(f"{eq.var.name}' = {production} - ({degradation});")
 
-    # Add @SIM metadata if available
+    lines.append("end")
+
+    # Add @SIM metadata AFTER end (file-level metadata, not model content)
     sim_lines = _format_sim_metadata_lines(result)
     if sim_lines:
         lines.append("")
         lines.extend(sim_lines)
 
-    lines.append("end")
     # Convert ** to ^ for valid Antimony syntax
     return _sympy_to_antimony_syntax("\n".join(lines))
 
@@ -4983,13 +4984,14 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
             h = product_to_antimony(eq.decay[0], h_exps)
             lines.append(f"{eq.var.name}' = {g} - {h};")
 
-    # Add @SIM metadata if available
+    lines.append("end")
+
+    # Add @SIM metadata AFTER end (file-level metadata, not model content)
     sim_lines = _format_sim_metadata_lines(result)
     if sim_lines:
         lines.append("")
         lines.extend(sim_lines)
 
-    lines.append("end")
     # Convert ** to ^ for valid Antimony syntax
     return _sympy_to_antimony_syntax("\n".join(lines))
 
