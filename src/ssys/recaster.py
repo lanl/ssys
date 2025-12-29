@@ -4493,7 +4493,13 @@ def _format_factor(factor: sp.Expr) -> str:
             else:
                 exp_str = f"{exp_val:g}"
         else:
-            exp_str = str(exp)
+            # Symbolic exponent - wrap in parentheses if it's a sum/difference
+            # CRITICAL: Without parentheses, (T+a)^-C-1 parses as (T+a)^(-C) - 1
+            # instead of (T+a)^(-C-1), completely corrupting the equation
+            if exp.is_Add:
+                exp_str = f"({exp})"
+            else:
+                exp_str = str(exp)
 
         return f"{base_str}^{exp_str}"
 
