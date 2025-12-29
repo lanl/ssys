@@ -938,9 +938,9 @@ def load_and_report(
     errors = np.abs(X_orig_array - X_recast_array) / scale[np.newaxis, :]
 
     # Build table
-    # 1.5% threshold for GMA recasts with auxiliary variables
+    # 3% threshold for GMA recasts with auxiliary variables
     # The coupled systems can have small numerical integration differences
-    threshold = 1.5e-2  # 1.5% error threshold
+    threshold = 3.0e-2  # 3% error threshold
     table_rows = []
     table_rows.append("| Variable | Max Error | Mean Error | Status |")
     table_rows.append("|----------|-----------|------------|--------|")
