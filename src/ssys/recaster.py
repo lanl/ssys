@@ -2040,13 +2040,20 @@ def lift_rational_functions(
 
         # Compute initial conditions for auxiliaries
         new_initials = dict(sym.initials)
+        
+        # Build name-based lookup for initial conditions to handle symbol object mismatch
+        # (Different Symbol objects with same name won't match in dict lookup)
+        initials_by_name = {str(k): v for k, v in sym.initials.items() if isinstance(k, sp.Symbol)}
+        
         for denom, Y in denom_to_aux.items():
             # Evaluate denominator at t=0
             denom_at_0 = denom
-            # First substitute state variables
+            # First substitute state variables - use name-based lookup
             for var in sym.vars:
                 if var in denom.free_symbols:
-                    denom_at_0 = denom_at_0.subs(var, sym.initials.get(var, 1.0))
+                    var_name = str(var)
+                    ic_value = initials_by_name.get(var_name, 1.0)
+                    denom_at_0 = denom_at_0.subs(var, ic_value)
             # Then substitute parameters - use actual symbols from expression
             for param_sym in denom_at_0.free_symbols:
                 param_name = param_sym.name
@@ -4823,8 +4830,9 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         lines.append("//       This prevents numerical instability from negative exponents")
         lines.append("//       while maintaining dynamics qualitatively equivalent to zero ICs")
 
-    auxiliary_vars = set(result.variables)  # These are the Z_1, Z_2, ... variables
-    
+    # Build name-based lookup for state variables (handles symbol object mismatch)
+    state_var_names = {v.name for v in result.variables}
+
     # Build set of assignment rule variable names (these cannot have ICs)
     assignment_rule_vars = set(result.assignment_rules.keys()) if result.assignment_rules else set()
 
@@ -4845,8 +4853,9 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         # Skip variables with assignment rules (their value comes from the rule)
         if s.name in assignment_rule_vars:
             continue
-        # Only output ICs for auxiliary variables, NOT original variables or parameters
-        if s in auxiliary_vars and s.name not in result.params:
+        # Output ICs for ALL state variables (original + auxiliary), NOT parameters
+        # Use name-based matching to handle symbol object mismatch
+        if s.name in state_var_names and s.name not in result.params:
             # Check if we have a symbolic expression for this IC
             if s in result.initial_exprs:
                 # Use symbolic expression
