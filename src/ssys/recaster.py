@@ -3573,13 +3573,21 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
                     aux_to_func_with_offset[aux] = defn
 
     # Build symbolic IC expressions for auxiliary variables
-    # Z_1 = exp(b*A) is EXACT on the invariant manifold at t=0
-    # This avoids numeric rounding and makes the manifold relationship explicit
+    # CRITICAL: Only use symbolic ICs when they DON'T depend on state variables
+    # If an IC expression like Z_1 = exp(log(Z)^2) depends on state variable Z,
+    # we must output the numeric value because Z isn't defined until later in
+    # the Antimony output, causing initialization order dependency errors.
     new_initial_exprs = dict(sym.initial_exprs)  # Copy existing
+    state_var_names = {v.name for v in sym.vars}
     for aux_sym, aux_def in aux_to_func_with_offset.items():
-        # Store the symbolic definition as the IC expression
-        # Convert to Antimony syntax for output
-        new_initial_exprs[aux_sym] = _sympy_to_antimony_syntax(str(aux_def))
+        # Check if the definition depends on any state variables
+        def_free_names = {s.name for s in aux_def.free_symbols}
+        depends_on_state = bool(def_free_names & state_var_names)
+        
+        if not depends_on_state:
+            # Safe to use symbolic expression (only depends on params/constants)
+            new_initial_exprs[aux_sym] = _sympy_to_antimony_syntax(str(aux_def))
+        # else: use numeric value from new_initials (already computed above)
 
     # Return augmented system and auxiliary definitions
     return (
