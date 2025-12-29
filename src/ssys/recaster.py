@@ -4308,7 +4308,23 @@ def _pool_ssystem_recast(sym: "SymSystem", mode: str = "simplified") -> "RecastR
         """Expand original variables to pool variables and sum exponents."""
         expanded: dict[sp.Symbol, float] = {}
         for var, exp in exps.items():
-            exp_val = float(exp) if isinstance(exp, (int, float, sp.Expr)) else 1.0
+            # Handle different exponent types
+            if isinstance(exp, (int, float)):
+                exp_val = float(exp)
+            elif isinstance(exp, sp.Expr):
+                # Only convert to float if it's actually a number
+                if exp.is_number:
+                    try:
+                        exp_val = float(exp)
+                    except (TypeError, ValueError):
+                        exp_val = 1.0  # Fallback for un-evaluable
+                else:
+                    # Symbolic exponent (parameter) - treat as positive
+                    # to be conservative (won't trigger EPS_INIT)
+                    exp_val = 1.0
+            else:
+                exp_val = 1.0
+            
             if var in factor_map:
                 # Original var: expand via factor_map (e.g., x -> Z_1*Z_2)
                 for pool_var in factor_map[var]:
