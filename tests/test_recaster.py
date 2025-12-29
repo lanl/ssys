@@ -575,6 +575,90 @@ class TestSbmlParserIcHandling:
             f"Z_2 IC wrong: got {result.initials[Z_2]}, expected {Z_2_expected}"
 
 
+class TestSqrtSumIcComputation:
+    """Tests for sqrt(sum) auxiliary IC computation.
+    
+    Regression test for bug where sqrt(1 + Z2^2) with Z2(0)=0.01 produced
+    wrong auxiliary IC Z_1 ≈ 1.41421 (using fallback Z2=1) instead of
+    Z_1 ≈ 1.00005 (correct: sqrt(1 + 0.01^2)).
+    
+    Root cause: Symbol object identity mismatch in lift_composite_functions.
+    The symbols in sqrt_at_0.free_symbols were different Python objects from
+    those in sym.initials, causing the substitution to fail silently.
+    """
+
+    def test_sqrt_sum_auxiliary_ic(self):
+        """Test sqrt(sum) auxiliary uses correct IC from state variables."""
+        import math
+        from ssys.recaster import parse_antimony_via_sbml, recast_to_ssystem
+
+        # Model with sqrt(1 + Z2^2) term
+        text = """
+        model test
+        Z1 = 0.01
+        Z2 = 0.01
+        Z1' = Z2
+        Z2' = (1 + Z2^2)^(1/2) * (25 - time)^(-1)
+        end
+        """
+
+        sym = parse_antimony_via_sbml(text)
+        result = recast_to_ssystem(sym)
+
+        # sqrt(1 + 0.01^2) = sqrt(1.0001) ≈ 1.00005
+        expected_sqrt_ic = math.sqrt(1 + 0.01**2)
+
+        # Find auxiliary with IC close to expected value
+        found_correct_ic = False
+        for var, ic in result.initials.items():
+            var_name = var.name if hasattr(var, 'name') else str(var)
+            # Look for sqrt auxiliary (Z_n pattern, not original Z1/Z2)
+            if var_name.startswith('Z_') and '_' in var_name:
+                # Check if this is the sqrt auxiliary (IC ≈ 1.00005)
+                if abs(ic - expected_sqrt_ic) < 1e-6:
+                    found_correct_ic = True
+                    break
+                # Also check it's NOT using fallback value (≈1.41421)
+                wrong_ic = math.sqrt(2)  # sqrt(1+1^2) if Z2=1 fallback
+                assert abs(ic - wrong_ic) > 0.1, \
+                    f"sqrt aux {var_name} has wrong IC {ic} (Z2=1 fallback)"
+
+        assert found_correct_ic, \
+            f"No auxiliary with expected sqrt IC ≈ {expected_sqrt_ic}. " \
+            f"ICs: {[(str(k), v) for k, v in result.initials.items()]}"
+
+    def test_squared_lifting_ic(self):
+        """Test lift_squared_for_sqrt uses correct IC for u = X^2 + c."""
+        from ssys.recaster import SymSystem, lift_squared_for_sqrt
+        
+        X = sp.Symbol("X", positive=True)
+        
+        # Create minimal system with sqrt(X^2 + 1) pattern
+        # This triggers lift_squared_for_sqrt for u = X^2 + 1
+        sym = SymSystem(
+            vars=[X],
+            params={},
+            odes={X: sp.Integer(1)},  # X' = 1 (dummy ODE)
+            initials={X: 0.5},  # X(0) = 0.5
+        )
+        
+        # Create the sqrt expression and lift it
+        sqrt_expr = sp.sqrt(X**2 + 1)  # sqrt(X^2 + 1)
+        result = lift_squared_for_sqrt(sqrt_expr, aux_counter=1, sym=sym)
+        
+        assert result is not None, \
+            "lift_squared_for_sqrt should handle sqrt(X^2 + c)"
+
+        # u(0) = X(0)^2 + 1 = 0.5^2 + 1 = 1.25
+        expected_u_ic = 0.5**2 + 1.0
+
+        u_sym = result.new_vars[0]
+        actual_u_ic = float(result.new_initials[u_sym])
+
+        assert abs(actual_u_ic - expected_u_ic) < 1e-10, \
+            f"u IC wrong: {actual_u_ic}, expected {expected_u_ic}"
+
+
 class TestVersionConsistency:
     """Tests for version consistency between pyproject.toml and __init__.py."""
 
