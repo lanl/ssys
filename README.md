@@ -1,6 +1,6 @@
 # ODE → S‑System Recast (Antimony → Antimony)
 
-**Version:** v0.5.2
+**Version:** v0.5.3
 **Date:** 2025-12-28
 
 This toolkit converts ordinary differential equation (ODE) models written in **Antimony** into **S‑System** or **GMA** form and writes the result back to Antimony. It provides both a **Python library** and a **command-line interface** for batch processing models and generating **Jupyter notebook** verification reports.

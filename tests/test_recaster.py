@@ -446,7 +446,7 @@ class TestEpsInitMetadata:
 
 class TestSbmlParserIcHandling:
     """Tests for SBML parser initial condition handling.
-    
+
     When libSBML parses Antimony via SBML conversion, species initial
     conditions may end up in the params dict instead of the initials dict.
     These tests ensure the recaster handles this correctly.
@@ -458,7 +458,7 @@ class TestSbmlParserIcHandling:
 
         X = sp.Symbol("X", positive=True)
         KM = sp.Symbol("KM", positive=True)
-        
+
         # Simulate SBML parser behavior: species IC in params, not initials
         # When SBML parser puts ICs in params, initials is empty or missing
         sym = SymSystem(
@@ -467,9 +467,9 @@ class TestSbmlParserIcHandling:
             odes={X: 1 / (KM + X)},  # ODE with rational term
             initials={},  # Empty - SBML puts species ICs in params
         )
-        
+
         result, aux_defs = lift_rational_functions(sym)
-        
+
         # Y_1 = KM + X should have IC = 1.0 + 0.5 = 1.5
         Y_1 = sp.Symbol("Y_1", positive=True)
         assert Y_1 in result.initials
@@ -481,7 +481,7 @@ class TestSbmlParserIcHandling:
 
         X = sp.Symbol("X", positive=True)
         KM = sp.Symbol("KM", positive=True)
-        
+
         # Simulate SBML parser behavior: species IC in params
         sym = SymSystem(
             vars=[X],
@@ -489,10 +489,10 @@ class TestSbmlParserIcHandling:
             odes={X: 1 / (KM + X)},
             initials={},  # Empty initials - all ICs in params
         )
-        
+
         result = recast_to_ssystem(sym)
         output = ssystem_to_antimony(result, model_name="test")
-        
+
         # X = 0.5 should appear in output
         assert "X = 0.5" in output
 
@@ -510,10 +510,10 @@ class TestSbmlParserIcHandling:
         X = 0.5
         end
         """
-        
+
         sym = parse_antimony_via_sbml(text)
         result = recast_to_ssystem(sym)
-        
+
         # Should have auxiliary Y_1 = KM + X with IC = 0.5 + 0.5 = 1.0
         Y_1 = sp.Symbol("Y_1", positive=True)
         if Y_1 in result.initials:
@@ -521,20 +521,21 @@ class TestSbmlParserIcHandling:
 
     def test_composite_function_ic_from_params(self):
         """Test that composite function auxiliaries use ICs from params.
-        
+
         Regression test for bug where exp(log(Z)^2) with Z=2 produced
         wrong auxiliary ICs: Z_1=1, Z_2=0 (using Z=1 default) instead of
         Z_1≈1.617, Z_2≈0.693 (using Z=2 from params).
-        
+
         Root cause: lift_composite_functions was only checking initials dict,
         but SBML parser puts species ICs in params dict.
         """
         import math
+
         from ssys.recaster import SymSystem, lift_composite_functions
 
         Z = sp.Symbol("Z", positive=True)
         k = sp.Symbol("k", positive=True)
-        
+
         # Simulate SBML parser behavior: Z=2 in params, not initials
         # ODE: Z' = k * exp(log(Z)^2)
         sym = SymSystem(
@@ -543,14 +544,14 @@ class TestSbmlParserIcHandling:
             odes={Z: k * sp.exp(sp.log(Z)**2)},
             initials={},  # Empty - SBML puts species ICs in params
         )
-        
+
         result, aux_defs = lift_composite_functions(sym)
-        
+
         # Compute expected values
         Z_init = 2.0
         Z_2_expected = math.log(Z_init)  # ln(2) ≈ 0.693
         Z_1_expected = math.exp(Z_2_expected**2)  # exp((ln(2))^2) ≈ 1.617
-        
+
         # Find auxiliaries by their definitions
         Z_1 = None  # exp(log(Z)^2)
         Z_2 = None  # log(Z)
@@ -560,15 +561,15 @@ class TestSbmlParserIcHandling:
                 Z_2 = aux
             elif "exp" in defn_str:
                 Z_1 = aux
-        
+
         # Check auxiliaries were created
         assert Z_1 is not None, "Z_1 (exp(log(Z)^2)) auxiliary not found"
         assert Z_2 is not None, "Z_2 (log(Z)) auxiliary not found"
-        
+
         # Check ICs are computed correctly from Z=2 (not Z=1 default)
         assert Z_1 in result.initials, f"Z_1 ({Z_1}) not in initials"
         assert Z_2 in result.initials, f"Z_2 ({Z_2}) not in initials"
-        
+
         assert abs(result.initials[Z_1] - Z_1_expected) < 1e-6, \
             f"Z_1 IC wrong: got {result.initials[Z_1]}, expected {Z_1_expected}"
         assert abs(result.initials[Z_2] - Z_2_expected) < 1e-6, \
@@ -577,11 +578,11 @@ class TestSbmlParserIcHandling:
 
 class TestSqrtSumIcComputation:
     """Tests for sqrt(sum) auxiliary IC computation.
-    
+
     Regression test for bug where sqrt(1 + Z2^2) with Z2(0)=0.01 produced
     wrong auxiliary IC Z_1 ≈ 1.41421 (using fallback Z2=1) instead of
     Z_1 ≈ 1.00005 (correct: sqrt(1 + 0.01^2)).
-    
+
     Root cause: Symbol object identity mismatch in lift_composite_functions.
     The symbols in sqrt_at_0.free_symbols were different Python objects from
     those in sym.initials, causing the substitution to fail silently.
@@ -590,6 +591,7 @@ class TestSqrtSumIcComputation:
     def test_sqrt_sum_auxiliary_ic(self):
         """Test sqrt(sum) auxiliary uses correct IC from state variables."""
         import math
+
         from ssys.recaster import parse_antimony_via_sbml, recast_to_ssystem
 
         # Model with sqrt(1 + Z2^2) term
@@ -630,9 +632,9 @@ class TestSqrtSumIcComputation:
     def test_squared_lifting_ic(self):
         """Test lift_squared_for_sqrt uses correct IC for u = X^2 + c."""
         from ssys.recaster import SymSystem, lift_squared_for_sqrt
-        
+
         X = sp.Symbol("X", positive=True)
-        
+
         # Create minimal system with sqrt(X^2 + 1) pattern
         # This triggers lift_squared_for_sqrt for u = X^2 + 1
         sym = SymSystem(
@@ -641,11 +643,11 @@ class TestSqrtSumIcComputation:
             odes={X: sp.Integer(1)},  # X' = 1 (dummy ODE)
             initials={X: 0.5},  # X(0) = 0.5
         )
-        
+
         # Create the sqrt expression and lift it
         sqrt_expr = sp.sqrt(X**2 + 1)  # sqrt(X^2 + 1)
         result = lift_squared_for_sqrt(sqrt_expr, aux_counter=1, sym=sym)
-        
+
         assert result is not None, \
             "lift_squared_for_sqrt should handle sqrt(X^2 + c)"
 
@@ -661,12 +663,12 @@ class TestSqrtSumIcComputation:
 
 class TestEpsInitFactorMapExpansion:
     """Tests for EPS_INIT factor_map expansion fix.
-    
+
     Regression test for bug where vars_with_neg_exp was computed from
     intermediate exponents BEFORE factor_map expansion. This caused
     variables to incorrectly get EPS_INIT when their negative exponents
     actually cancel out after expansion.
-    
+
     Example: if z = Z_5*Z_6*Z_7 and exponent dict has {z:1, Z_5:-1, Z_7:-1}
       After expansion: Z_5^1*Z_6^1*Z_7^1*Z_5^-1*Z_7^-1 = Z_6^1
       So Z_5 and Z_7 don't actually appear with negative exponents!
@@ -690,32 +692,30 @@ class TestEpsInitFactorMapExpansion:
         z = 0
         end
         """
-        
+
         sym = parse_antimony_via_sbml(text)
         result = recast_to_ssystem(sym)
-        
+
         # z maps to Z_5*Z_6*Z_7 (3 terms in z' equation)
         # The z^1 in Z_6's growth expands to Z_5*Z_6*Z_7
         # Combined with Z_5^-1 and Z_7^-1, this cancels out
         # So Z_5 should get 0.0 (original z IC), NOT 1e-6 (EPS_INIT)
-        
+
         # Look up Z_5 by name (symbol object identity may differ)
         initials_by_name = {k.name: v for k, v in result.initials.items()}
-        
+
         # Z_5 should have IC = 0.0, NOT EPS_INIT (1e-6)
         assert "Z_5" in initials_by_name, \
             f"Z_5 not found in initials: {list(initials_by_name.keys())}"
         z5_ic = initials_by_name["Z_5"]
-        
+
         # Should be exactly 0.0, not EPS_INIT (1e-6)
         assert z5_ic == 0.0, \
             f"Z_5 IC should be 0.0 (canceling negatives), got {z5_ic}"
 
     def test_true_negative_exponent_gets_eps_init(self):
         """Test variables with TRUE negative exponents get EPS_INIT."""
-        from ssys.recaster import (
-            parse_antimony_via_sbml, recast_to_ssystem, EPS_INIT
-        )
+        from ssys.recaster import EPS_INIT, parse_antimony_via_sbml, recast_to_ssystem
 
         # Same model - Z_1 should get EPS_INIT because it has
         # true negative exponents that don't cancel
@@ -732,16 +732,16 @@ class TestEpsInitFactorMapExpansion:
         z = 0
         end
         """
-        
+
         sym = parse_antimony_via_sbml(text)
         result = recast_to_ssystem(sym)
-        
+
         # Z_1's decay has Z_2^-1 which doesn't cancel
         # So Z_1 should get EPS_INIT (x=0 and Z_1 has neg exp)
-        
+
         # Look up Z_1 by name (symbol object identity may differ)
         initials_by_name = {k.name: v for k, v in result.initials.items()}
-        
+
         # Z_1 should have EPS_INIT (true negative exponent)
         assert "Z_1" in initials_by_name
         z1_ic = initials_by_name["Z_1"]
@@ -751,7 +751,7 @@ class TestEpsInitFactorMapExpansion:
 
 class TestSymbolicExponents:
     """Tests for handling symbolic exponents in pool construction.
-    
+
     Regression test for bug where expand_exponents_via_factor_map failed
     with TypeError when exponents were symbolic expressions (parameters)
     rather than numeric values. isinstance(exp, sp.Expr) matched all SymPy
@@ -775,10 +775,10 @@ class TestSymbolicExponents:
         """
 
         sym = parse_antimony_via_sbml(text)
-        
+
         # This should NOT raise TypeError
         result = recast_to_ssystem(sym)
-        
+
         # Should succeed and produce valid output
         assert result is not None
         assert len(result.variables) > 0
@@ -793,7 +793,7 @@ class TestSymbolicExponents:
         // X regulated by Y with Hill kinetics
         X' = V_max * Y^h / (K^h + Y^h) - d * X
         Y' = X - d * Y
-        
+
         V_max = 10.0
         K = 1.0
         h = 2.0
@@ -804,10 +804,10 @@ class TestSymbolicExponents:
         """
 
         sym = parse_antimony_via_sbml(text)
-        
+
         # This should NOT raise TypeError
         result = recast_to_ssystem(sym)
-        
+
         assert result is not None
         assert len(result.variables) > 0
 

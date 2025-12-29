@@ -781,7 +781,7 @@ class RecastValidator:
         # CRITICAL: Also collect ALL free symbols from ALL expressions
         # This ensures auxiliary variables (Z_1, etc.) that appear in ODEs are canonicalized
         # even if they weren't already in the keys or params
-        all_expr_symbols = set()
+        all_expr_symbols: set[str] = set()
         for ode in self.orig_odes.values():
             all_expr_symbols.update(s.name for s in ode.free_symbols)
         for ode in self.recast_odes.values():
@@ -890,21 +890,21 @@ class RecastValidator:
             # KEY FIX: We must find the ACTUAL 'time' symbol object that appears in
             # f_orig_at_Phi.free_symbols, not a different Symbol object with the same name.
             # SymPy's .subs() matches by object identity, not by name.
-            
+
             # Step 1: Find clock variable T in recast_state_vars
             clock_var = None
             for rv in self.recast_state_vars:
                 if str(rv) == "T":
                     clock_var = rv
                     break
-            
+
             # Step 2: If clock exists, find 'time' symbol in f_orig_at_Phi and substitute
             if clock_var is not None:
                 # Collect all free symbols from f_orig_at_Phi (it's a Matrix)
                 all_free_symbols = set()
                 for component in f_orig_at_Phi:
                     all_free_symbols.update(component.free_symbols)
-                
+
                 # Find the actual 'time' symbol by name
                 for sym in all_free_symbols:
                     if str(sym).lower() == "time":
@@ -935,7 +935,7 @@ class RecastValidator:
                 # because we already substituted time→T in f_orig_at_Phi
                 if aux_name not in orig_var_names and aux_name in recast_vars_by_name:
                     actual_aux_sym = recast_vars_by_name[aux_name]
-                    
+
                     # Check if this is a clock variable (definition is just 'time')
                     # Skip it - we handle time→T substitution separately above
                     if isinstance(aux_def, sp.Symbol) and str(aux_def).lower() == "time":

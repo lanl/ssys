@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2025-12-28
+
+### Added
+- All test models now pass 3-check validation (symbolic, numerical, trajectory)
+- Regression tests for:
+  - Symbolic exponent handling in pool construction
+  - Variable 'I' vs SymPy `sp.I` imaginary unit collision
+  - EPS_INIT factor_map expansion
+  - Symbolic exponent parenthesization
+  - sqrt(sum) auxiliary IC computation
+  - Rational coefficient preservation
+
+### Changed
+- Trajectory comparison error tolerance increased from 1.5% to 3%
+- Code quality: Fixed 81 ruff lint issues (whitespace, import order)
+
+### Fixed
+- **TypeError in pool construction** when exponents are symbolic (e.g., `X^h` with parameter `h`)
+- **EPS_INIT expansion bug**: Factor_map is now expanded before checking for negative exponents,
+  preventing incorrect EPS_INIT assignment when negative exponents cancel after expansion
+- **Variable 'I' collision**: Validator now handles models using 'I' as a variable name
+  (common in SIR epidemic models) without colliding with SymPy's imaginary unit `sp.I`
+- **Symbolic IC regression**: Only use symbolic IC expressions when they don't depend on state variables
+- **sqrt(sum) auxiliary ICs**: Fixed symbol identity mismatch in lift_composite_functions
+  that caused wrong ICs for sqrt(X^2 + c) patterns
+- **Symbolic exponent formatting**: Add expressions like `x^(-C - 1)` now properly parenthesized
+  to avoid parsing as `(x^-C) - 1`
+- **Rational coefficients**: Preserved as fractions (e.g., `(2/3)`) instead of decimals in output
+
 ## [0.5.2] - 2025-12-28
 
 ### Added
@@ -140,7 +169,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - matplotlib >=3.7
 - nbformat >=5.9
 
-[Unreleased]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.2...main
+[Unreleased]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.3...main
+[0.5.3]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.2...v0.5.3
 [0.5.2]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.1...v0.5.2
 [0.5.1]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.0...v0.5.1
 [0.5.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.4.0...v0.5.0

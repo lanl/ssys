@@ -234,7 +234,7 @@ class TestRecastValidatorEdgeCases:
 
 class TestVariableICollisionWithSpI:
     """Tests for variable 'I' collision with SymPy's imaginary unit sp.I.
-    
+
     Regression test for bug where sympify('I') returns sp.I (imaginary unit),
     which has empty free_symbols. When a model uses variable 'I' (e.g., for
     infected population in epidemic models), the validator's _canonicalize_symbols()
@@ -251,7 +251,7 @@ class TestVariableICollisionWithSpI:
             S' = -beta*S*I
             I' = beta*S*I - gamma*I
             R' = gamma*I
-            
+
             beta = 0.3
             gamma = 0.1
             S = 0.99

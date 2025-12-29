@@ -28,7 +28,7 @@ from ssys.recaster import (
     ssystem_to_antimony,
 )
 
-__version__ = "0.5.2"
+__version__ = "0.5.3"
 
 __all__ = [
     "ModelIR",

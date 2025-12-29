@@ -117,7 +117,7 @@ class TestProductToAntimony:
 
     def test_symbolic_add_exponent_parenthesized(self):
         """Test that symbolic Add exponents are parenthesized to avoid ambiguity.
-        
+
         Bug regression test for d741354:
         Without parentheses, x^-C - 1 parses as (x^-C) - 1 (subtraction)
         instead of x^(-C-1) (exponent).
@@ -133,7 +133,7 @@ class TestProductToAntimony:
 
     def test_symbolic_simple_exponent_not_over_parenthesized(self):
         """Test that simple symbolic exponents don't get unnecessary parentheses.
-        
+
         For exponents that are just a symbol or symbol*constant,
         no parentheses are needed: x^C is fine, doesn't need x^(C).
         """
@@ -149,7 +149,7 @@ class TestProductToAntimony:
 
     def test_symbolic_negative_exponent_not_over_parenthesized(self):
         """Test that negated symbolic exponents without sums don't get parentheses.
-        
+
         For -C (just a negated symbol, represented as Mul(-1, C), not Add),
         parentheses are not needed: x^-C is unambiguous.
         """
@@ -177,13 +177,13 @@ class TestProductToAntimony:
     def test_rational_coefficient_various_fractions(self):
         """Test various rational coefficients are preserved as fractions."""
         x = sp.Symbol("x", positive=True)
-        
+
         # Test 2/3
         coeff = sp.Rational(2, 3)
         exps = {x: 1.0}
         result = product_to_antimony(coeff, exps)
         assert "(2/3)" in result
-        
+
         # Test 3/7
         coeff = sp.Rational(3, 7)
         result = product_to_antimony(coeff, exps)
@@ -701,7 +701,7 @@ class TestSIMMetadataEmission:
         )
 
         lines = _format_sim_metadata_lines(result)
-        
+
         assert len(lines) >= 1
         # First line should be the @SIM comment
         assert "@SIM" in lines[0]
@@ -727,7 +727,7 @@ class TestSIMMetadataEmission:
         )
 
         lines = _format_sim_metadata_lines(result)
-        
+
         assert len(lines) >= 1
         assert "@SIM" in lines[0]
         assert "T_START=0" in lines[0]
@@ -748,7 +748,7 @@ class TestSIMMetadataEmission:
         )
 
         lines = _format_sim_metadata_lines(result)
-        
+
         # Should return empty list when no metadata
         assert lines == []
 
@@ -933,7 +933,7 @@ class TestSIMMetadataEmission:
         # Find positions
         sim_pos = output.find("@SIM")
         end_pos = output.rfind("end")
-        
+
         assert sim_pos > 0
         assert sim_pos > end_pos  # @SIM should come AFTER end (file-level metadata)
 

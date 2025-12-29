@@ -258,7 +258,7 @@ def _format_sim_metadata_lines(result: "RecastResult") -> list[str]:
     Returns list of lines to append before 'end' in output.
     """
     lines = []
-    
+
     # Build @SIM line with all available metadata
     sim_parts = []
     if result.sim_t_start is not None:
@@ -269,13 +269,13 @@ def _format_sim_metadata_lines(result: "RecastResult") -> list[str]:
         sim_parts.append(f"N_STEPS={result.sim_n_steps}")
     if result.eps_init is not None:
         sim_parts.append(f"EPS_INIT={result.eps_init:g}")
-    
+
     if sim_parts:
         lines.append(f"// @SIM {' '.join(sim_parts)}")
         # Add note about zero IC replacement if eps_init was used
         if result.eps_init is not None:
             lines.append("// Note: Zero-valued initial conditions are replaced with EPS_INIT during recasting.")
-    
+
     return lines
 
 
@@ -1209,7 +1209,7 @@ def classify_system(sym: SymSystem) -> SystemClass:
         for rule_name in sym.assignment_rules:
             if rule_name not in all_syms:
                 all_syms[rule_name] = sp.Symbol(rule_name, positive=True)
-        
+
         # Parse assignment rules into sympy expressions
         for rule_name, rule_str in sym.assignment_rules.items():
             try:
@@ -1218,7 +1218,7 @@ def classify_system(sym: SymSystem) -> SystemClass:
                 rule_subs[rule_sym] = rule_expr
             except Exception:
                 pass
-        
+
         # Expand nested rules (A may reference B)
         for _ in range(10):
             changed = False
@@ -1229,7 +1229,7 @@ def classify_system(sym: SymSystem) -> SystemClass:
                     changed = True
             if not changed:
                 break
-        
+
         # CRITICAL: Also create a name-based lookup for substitution
         # because ODEs may use different symbol objects with same name
         name_to_expr = {sym.name: expr for sym, expr in rule_subs.items()}
@@ -2040,7 +2040,7 @@ def lift_rational_functions(
 
         # Compute initial conditions for auxiliaries
         new_initials = dict(sym.initials)
-        
+
         # Build name-based lookup for initial conditions to handle symbol object mismatch
         # (Different Symbol objects with same name won't match in dict lookup)
         # CRITICAL: SBML parser may put species ICs in params instead of initials
@@ -2053,7 +2053,7 @@ def lift_rational_functions(
         for k, v in sym.initials.items():
             if isinstance(k, sp.Symbol):
                 initials_by_name[str(k)] = v
-        
+
         for denom, Y in denom_to_aux.items():
             # Evaluate denominator at t=0
             denom_at_0 = denom
@@ -3112,7 +3112,7 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
     # functions - they become state variables with coupled oscillator ODEs (classical S-system approach).
     # This follows Savageau 1987: all functions are lifted to autonomous state variables.
     assignment_rules: dict[str, str] = dict(sym.assignment_rules)  # Copy existing rules
-    
+
     # NOTE: time_only_functions and time_only_aux are now UNUSED - all functions get ODEs
 
     # Handle sin/cos pairs (state-dependent only) - create BOTH auxiliaries even if only one appears
@@ -3169,7 +3169,7 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
     # Handle sin/cos pairs with coupled derivatives
     # CRITICAL: Create time symbol with positive=True to match SBML parser
     time_sym = sp.Symbol("time", positive=True)
-    
+
     for arg, funcs_dict2 in sin_cos_pairs.items():
         sin_func = funcs_dict2.get("sin", sp.sin(arg))
         cos_func = funcs_dict2.get("cos", sp.cos(arg))
@@ -3399,7 +3399,7 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
     for s, v in sym.initials.items():
         if hasattr(s, 'name'):
             initials_by_name[s.name] = v
-    
+
     for sqrt_expr, Z in sqrt_to_aux.items():
         # Evaluate sqrt at t=0
         sqrt_at_0 = sqrt_expr
@@ -3583,7 +3583,7 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
         # Check if the definition depends on any state variables
         def_free_names = {s.name for s in aux_def.free_symbols}
         depends_on_state = bool(def_free_names & state_var_names)
-        
+
         if not depends_on_state:
             # Safe to use symbolic expression (only depends on params/constants)
             new_initial_exprs[aux_sym] = _sympy_to_antimony_syntax(str(aux_def))
@@ -3970,17 +3970,17 @@ def recast_to_ssystem(sym: "SymSystem", mode: str = "simplified") -> "RecastResu
     result.sim_t_start = sym.sim_t_start
     result.sim_t_end = sym.sim_t_end
     result.sim_n_steps = sym.sim_n_steps
-    
+
     # CRITICAL: If any IC was perturbed to EPS_INIT (for zero approximation),
     # we must record the EPS_INIT value used in the output for reproducibility.
     # Check if any IC is approximately equal to EPS_INIT.
     eps_init_used = sym.eps_init if sym.eps_init is not None else EPS_INIT
     ic_was_perturbed = any(
-        abs(v - eps_init_used) < 1e-12 
-        for v in result.initials.values() 
+        abs(v - eps_init_used) < 1e-12
+        for v in result.initials.values()
         if isinstance(v, (int, float))
     )
-    
+
     if ic_was_perturbed:
         # Record the actual EPS_INIT value used
         result.eps_init = eps_init_used
@@ -4303,7 +4303,7 @@ def _pool_ssystem_recast(sym: "SymSystem", mode: str = "simplified") -> "RecastR
     # Example: if z = Z_5*Z_6*Z_7 and an exponent dict has {z: 1, Z_5: -1, Z_7: -1}
     #   After expansion: Z_5^1 * Z_6^1 * Z_7^1 * Z_5^-1 * Z_7^-1 = Z_6^1
     #   So Z_5 and Z_7 don't actually appear with negative exponents after expansion!
-    
+
     def expand_exponents_via_factor_map(exps: dict) -> dict:
         """Expand original variables to pool variables and sum exponents."""
         expanded: dict[sp.Symbol, float] = {}
@@ -4324,7 +4324,7 @@ def _pool_ssystem_recast(sym: "SymSystem", mode: str = "simplified") -> "RecastR
                     exp_val = 1.0
             else:
                 exp_val = 1.0
-            
+
             if var in factor_map:
                 # Original var: expand via factor_map (e.g., x -> Z_1*Z_2)
                 for pool_var in factor_map[var]:
@@ -4333,7 +4333,7 @@ def _pool_ssystem_recast(sym: "SymSystem", mode: str = "simplified") -> "RecastR
                 # Already a pool var or parameter
                 expanded[var] = expanded.get(var, 0.0) + exp_val
         return expanded
-    
+
     vars_with_neg_exp = set()
     for eq in new_equations:
         # Check growth exponents (expanded)
@@ -4958,7 +4958,7 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
 
     # Track which state variables have been output
     output_state_vars = set()
-    
+
     for s, v in sorted(result.initials.items(), key=_init_sort_key):
         # Skip tuple keys (compartment info, const params) - only process Symbol keys
         if not hasattr(s, "name"):
@@ -4977,7 +4977,7 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
                 # Use numeric value
                 lines.append(f"{s.name} = {float(v):g};")
             output_state_vars.add(s.name)
-    
+
     # CRITICAL: SBML parser may put species ICs in params instead of initials
     # Check for any state variables whose ICs were not output from initials
     for var_name in sorted(state_var_names):
@@ -4985,7 +4985,7 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
             # Check if IC is in params
             if var_name in result.params:
                 lines.append(f"{var_name} = {result.params[var_name]:g};")
-    
+
     lines.append("")
 
     # --- Assignment rules to reconstruct original variables ---
