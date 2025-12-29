@@ -115,6 +115,41 @@ class TestProductToAntimony:
         result = product_to_antimony(coeff, exps)
         assert "-1" in result
 
+    def test_rational_coefficient_preserved_as_fraction(self):
+        """Test that rational coefficients are preserved as fractions, not decimals."""
+        x = sp.Symbol("x", positive=True)
+        coeff = sp.Rational(1, 6)  # 1/6
+        exps = {x: 3.0}
+        result = product_to_antimony(coeff, exps)
+        # Should contain (1/6), not 0.166667
+        assert "(1/6)" in result
+        assert "0.16" not in result
+
+    def test_rational_coefficient_various_fractions(self):
+        """Test various rational coefficients are preserved as fractions."""
+        x = sp.Symbol("x", positive=True)
+        
+        # Test 2/3
+        coeff = sp.Rational(2, 3)
+        exps = {x: 1.0}
+        result = product_to_antimony(coeff, exps)
+        assert "(2/3)" in result
+        
+        # Test 3/7
+        coeff = sp.Rational(3, 7)
+        result = product_to_antimony(coeff, exps)
+        assert "(3/7)" in result
+
+    def test_rational_coefficient_integer_stays_integer(self):
+        """Test that rationals with denominator 1 stay as integers."""
+        x = sp.Symbol("x", positive=True)
+        coeff = sp.Rational(5, 1)  # 5/1 = 5
+        exps = {x: 2.0}
+        result = product_to_antimony(coeff, exps)
+        # Should be "5*x^2", not "(5/1)*x^2"
+        assert "5*x" in result or result.startswith("5")
+        assert "/1" not in result
+
 
 class TestSystemClassification:
     """Tests for system classification."""
