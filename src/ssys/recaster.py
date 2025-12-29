@@ -2043,7 +2043,16 @@ def lift_rational_functions(
         
         # Build name-based lookup for initial conditions to handle symbol object mismatch
         # (Different Symbol objects with same name won't match in dict lookup)
-        initials_by_name = {str(k): v for k, v in sym.initials.items() if isinstance(k, sp.Symbol)}
+        # CRITICAL: SBML parser may put species ICs in params instead of initials
+        # So we check BOTH sources, with initials taking precedence
+        initials_by_name = {}
+        # First add params (lower priority)
+        for k, v in sym.params.items():
+            initials_by_name[k] = v
+        # Then add initials (higher priority - overwrites params)
+        for k, v in sym.initials.items():
+            if isinstance(k, sp.Symbol):
+                initials_by_name[str(k)] = v
         
         for denom, Y in denom_to_aux.items():
             # Evaluate denominator at t=0
@@ -4846,6 +4855,9 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         else:
             return str(k)
 
+    # Track which state variables have been output
+    output_state_vars = set()
+    
     for s, v in sorted(result.initials.items(), key=_init_sort_key):
         # Skip tuple keys (compartment info, const params) - only process Symbol keys
         if not hasattr(s, "name"):
@@ -4853,9 +4865,9 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         # Skip variables with assignment rules (their value comes from the rule)
         if s.name in assignment_rule_vars:
             continue
-        # Output ICs for ALL state variables (original + auxiliary), NOT parameters
+        # Output ICs for state variables
         # Use name-based matching to handle symbol object mismatch
-        if s.name in state_var_names and s.name not in result.params:
+        if s.name in state_var_names:
             # Check if we have a symbolic expression for this IC
             if s in result.initial_exprs:
                 # Use symbolic expression
@@ -4863,6 +4875,16 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
             else:
                 # Use numeric value
                 lines.append(f"{s.name} = {float(v):g};")
+            output_state_vars.add(s.name)
+    
+    # CRITICAL: SBML parser may put species ICs in params instead of initials
+    # Check for any state variables whose ICs were not output from initials
+    for var_name in sorted(state_var_names):
+        if var_name not in output_state_vars and var_name not in assignment_rule_vars:
+            # Check if IC is in params
+            if var_name in result.params:
+                lines.append(f"{var_name} = {result.params[var_name]:g};")
+    
     lines.append("")
 
     # --- Assignment rules to reconstruct original variables ---
