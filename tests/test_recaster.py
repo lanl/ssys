@@ -659,6 +659,96 @@ class TestSqrtSumIcComputation:
             f"u IC wrong: {actual_u_ic}, expected {expected_u_ic}"
 
 
+class TestEpsInitFactorMapExpansion:
+    """Tests for EPS_INIT factor_map expansion fix.
+    
+    Regression test for bug where vars_with_neg_exp was computed from
+    intermediate exponents BEFORE factor_map expansion. This caused
+    variables to incorrectly get EPS_INIT when their negative exponents
+    actually cancel out after expansion.
+    
+    Example: if z = Z_5*Z_6*Z_7 and exponent dict has {z:1, Z_5:-1, Z_7:-1}
+      After expansion: Z_5^1*Z_6^1*Z_7^1*Z_5^-1*Z_7^-1 = Z_6^1
+      So Z_5 and Z_7 don't actually appear with negative exponents!
+    """
+
+    def test_canceling_negative_exponents_get_zero_ic(self):
+        """Test variables with canceling negative exponents get zero IC."""
+        from ssys.recaster import parse_antimony_via_sbml, recast_to_ssystem
+
+        # Rössler-band model where z's pool terms cancel
+        text = """
+        model test
+        x' = -y - z
+        y' = a*y + x
+        z' = b*z - c*z + x*z
+        a = 0.343
+        b = 1.82
+        c = 9.75
+        x = 0
+        y = 1
+        z = 0
+        end
+        """
+        
+        sym = parse_antimony_via_sbml(text)
+        result = recast_to_ssystem(sym)
+        
+        # z maps to Z_5*Z_6*Z_7 (3 terms in z' equation)
+        # The z^1 in Z_6's growth expands to Z_5*Z_6*Z_7
+        # Combined with Z_5^-1 and Z_7^-1, this cancels out
+        # So Z_5 should get 0.0 (original z IC), NOT 1e-6 (EPS_INIT)
+        
+        # Look up Z_5 by name (symbol object identity may differ)
+        initials_by_name = {k.name: v for k, v in result.initials.items()}
+        
+        # Z_5 should have IC = 0.0, NOT EPS_INIT (1e-6)
+        assert "Z_5" in initials_by_name, \
+            f"Z_5 not found in initials: {list(initials_by_name.keys())}"
+        z5_ic = initials_by_name["Z_5"]
+        
+        # Should be exactly 0.0, not EPS_INIT (1e-6)
+        assert z5_ic == 0.0, \
+            f"Z_5 IC should be 0.0 (canceling negatives), got {z5_ic}"
+
+    def test_true_negative_exponent_gets_eps_init(self):
+        """Test variables with TRUE negative exponents get EPS_INIT."""
+        from ssys.recaster import (
+            parse_antimony_via_sbml, recast_to_ssystem, EPS_INIT
+        )
+
+        # Same model - Z_1 should get EPS_INIT because it has
+        # true negative exponents that don't cancel
+        text = """
+        model test
+        x' = -y - z
+        y' = a*y + x
+        z' = b*z - c*z + x*z
+        a = 0.343
+        b = 1.82
+        c = 9.75
+        x = 0
+        y = 1
+        z = 0
+        end
+        """
+        
+        sym = parse_antimony_via_sbml(text)
+        result = recast_to_ssystem(sym)
+        
+        # Z_1's decay has Z_2^-1 which doesn't cancel
+        # So Z_1 should get EPS_INIT (x=0 and Z_1 has neg exp)
+        
+        # Look up Z_1 by name (symbol object identity may differ)
+        initials_by_name = {k.name: v for k, v in result.initials.items()}
+        
+        # Z_1 should have EPS_INIT (true negative exponent)
+        assert "Z_1" in initials_by_name
+        z1_ic = initials_by_name["Z_1"]
+        assert abs(z1_ic - EPS_INIT) < 1e-12, \
+            f"Z_1 IC should be EPS_INIT ({EPS_INIT}), got {z1_ic}"
+
+
 class TestVersionConsistency:
     """Tests for version consistency between pyproject.toml and __init__.py."""
 
