@@ -4295,17 +4295,41 @@ def _pool_ssystem_recast(sym: "SymSystem", mode: str = "simplified") -> "RecastR
                 for Vj in V_list[1:]:
                     new_initials.setdefault(Vj, 1.0)
 
-    # 5) Detect which variables have negative exponents
+    # 5) Detect which variables have negative exponents AFTER factor_map expansion
+    # The exponent dict may contain original vars (x, y, z) that get expanded via factor_map.
+    # We must expand the factor_map to get the TRUE final exponents before deciding which
+    # variables need EPS_INIT for division-by-zero protection.
+    #
+    # Example: if z = Z_5*Z_6*Z_7 and an exponent dict has {z: 1, Z_5: -1, Z_7: -1}
+    #   After expansion: Z_5^1 * Z_6^1 * Z_7^1 * Z_5^-1 * Z_7^-1 = Z_6^1
+    #   So Z_5 and Z_7 don't actually appear with negative exponents after expansion!
+    
+    def expand_exponents_via_factor_map(exps: dict) -> dict:
+        """Expand original variables to pool variables and sum exponents."""
+        expanded: dict[sp.Symbol, float] = {}
+        for var, exp in exps.items():
+            exp_val = float(exp) if isinstance(exp, (int, float, sp.Expr)) else 1.0
+            if var in factor_map:
+                # Original var: expand via factor_map (e.g., x -> Z_1*Z_2)
+                for pool_var in factor_map[var]:
+                    expanded[pool_var] = expanded.get(pool_var, 0.0) + exp_val
+            else:
+                # Already a pool var or parameter
+                expanded[var] = expanded.get(var, 0.0) + exp_val
+        return expanded
+    
     vars_with_neg_exp = set()
     for eq in new_equations:
-        # Check growth exponents
-        for var, exp in eq.growth[1].items():
+        # Check growth exponents (expanded)
+        expanded_growth = expand_exponents_via_factor_map(eq.growth[1])
+        for var, exp in expanded_growth.items():
             if isinstance(exp, (int, float)) and exp < 0:
                 vars_with_neg_exp.add(var)
             elif isinstance(exp, sp.Expr) and exp.is_number and float(exp) < 0:
                 vars_with_neg_exp.add(var)
-        # Check decay exponents
-        for var, exp in eq.decay[1].items():
+        # Check decay exponents (expanded)
+        expanded_decay = expand_exponents_via_factor_map(eq.decay[1])
+        for var, exp in expanded_decay.items():
             if isinstance(exp, (int, float)) and exp < 0:
                 vars_with_neg_exp.add(var)
             elif isinstance(exp, sp.Expr) and exp.is_number and float(exp) < 0:
