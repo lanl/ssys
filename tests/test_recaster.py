@@ -444,6 +444,82 @@ class TestEpsInitMetadata:
         assert result is not None  # Should not crash
 
 
+class TestSbmlParserIcHandling:
+    """Tests for SBML parser initial condition handling.
+    
+    When libSBML parses Antimony via SBML conversion, species initial
+    conditions may end up in the params dict instead of the initials dict.
+    These tests ensure the recaster handles this correctly.
+    """
+
+    def test_species_ic_in_params_used_for_auxiliary_ic(self):
+        """Test that species ICs in params are used for auxiliary IC."""
+        from ssys.recaster import SymSystem, lift_rational_functions
+
+        X = sp.Symbol("X", positive=True)
+        KM = sp.Symbol("KM", positive=True)
+        
+        # Simulate SBML parser behavior: species IC in params, not initials
+        # When SBML parser puts ICs in params, initials is empty or missing
+        sym = SymSystem(
+            vars=[X],
+            params={"X": 0.5, "KM": 1.0},  # X IC is in params!
+            odes={X: 1 / (KM + X)},  # ODE with rational term
+            initials={},  # Empty - SBML puts species ICs in params
+        )
+        
+        result, aux_defs = lift_rational_functions(sym)
+        
+        # Y_1 = KM + X should have IC = 1.0 + 0.5 = 1.5
+        Y_1 = sp.Symbol("Y_1", positive=True)
+        assert Y_1 in result.initials
+        assert abs(result.initials[Y_1] - 1.5) < 1e-10
+
+    def test_species_ic_output_from_params(self):
+        """Test that species ICs from params appear in Antimony output."""
+        from ssys.recaster import SymSystem, recast_to_ssystem, ssystem_to_antimony
+
+        X = sp.Symbol("X", positive=True)
+        KM = sp.Symbol("KM", positive=True)
+        
+        # Simulate SBML parser behavior: species IC in params
+        sym = SymSystem(
+            vars=[X],
+            params={"X": 0.5, "KM": 1.0},  # X IC is in params!
+            odes={X: 1 / (KM + X)},
+            initials={},  # Empty initials - all ICs in params
+        )
+        
+        result = recast_to_ssystem(sym)
+        output = ssystem_to_antimony(result, model_name="test")
+        
+        # X = 0.5 should appear in output
+        assert "X = 0.5" in output
+
+    def test_mm_to_gma_initial_conditions(self):
+        """Test Michaelis-Menten to GMA recasting has correct ICs."""
+        from ssys.recaster import parse_antimony_via_sbml, recast_to_ssystem
+
+        # Simplified MM model similar to MS2007_MM_to_GMA.ant
+        text = """
+        model test
+        X' = Vmax/(KM + X) - k*X
+        Vmax = 1.0
+        KM = 0.5
+        k = 0.1
+        X = 0.5
+        end
+        """
+        
+        sym = parse_antimony_via_sbml(text)
+        result = recast_to_ssystem(sym)
+        
+        # Should have auxiliary Y_1 = KM + X with IC = 0.5 + 0.5 = 1.0
+        Y_1 = sp.Symbol("Y_1", positive=True)
+        if Y_1 in result.initials:
+            assert abs(result.initials[Y_1] - 1.0) < 1e-10
+
+
 class TestVersionConsistency:
     """Tests for version consistency between pyproject.toml and __init__.py."""
 
