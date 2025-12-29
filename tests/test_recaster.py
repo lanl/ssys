@@ -519,6 +519,61 @@ class TestSbmlParserIcHandling:
         if Y_1 in result.initials:
             assert abs(result.initials[Y_1] - 1.0) < 1e-10
 
+    def test_composite_function_ic_from_params(self):
+        """Test that composite function auxiliaries use ICs from params.
+        
+        Regression test for bug where exp(log(Z)^2) with Z=2 produced
+        wrong auxiliary ICs: Z_1=1, Z_2=0 (using Z=1 default) instead of
+        Z_1≈1.617, Z_2≈0.693 (using Z=2 from params).
+        
+        Root cause: lift_composite_functions was only checking initials dict,
+        but SBML parser puts species ICs in params dict.
+        """
+        import math
+        from ssys.recaster import SymSystem, lift_composite_functions
+
+        Z = sp.Symbol("Z", positive=True)
+        k = sp.Symbol("k", positive=True)
+        
+        # Simulate SBML parser behavior: Z=2 in params, not initials
+        # ODE: Z' = k * exp(log(Z)^2)
+        sym = SymSystem(
+            vars=[Z],
+            params={"k": 0.001, "Z": 2.0},  # Z IC is in params!
+            odes={Z: k * sp.exp(sp.log(Z)**2)},
+            initials={},  # Empty - SBML puts species ICs in params
+        )
+        
+        result, aux_defs = lift_composite_functions(sym)
+        
+        # Compute expected values
+        Z_init = 2.0
+        Z_2_expected = math.log(Z_init)  # ln(2) ≈ 0.693
+        Z_1_expected = math.exp(Z_2_expected**2)  # exp((ln(2))^2) ≈ 1.617
+        
+        # Find auxiliaries by their definitions
+        Z_1 = None  # exp(log(Z)^2)
+        Z_2 = None  # log(Z)
+        for aux, defn in aux_defs.items():
+            defn_str = str(defn)
+            if "log(Z)" in defn_str and "exp" not in defn_str:
+                Z_2 = aux
+            elif "exp" in defn_str:
+                Z_1 = aux
+        
+        # Check auxiliaries were created
+        assert Z_1 is not None, "Z_1 (exp(log(Z)^2)) auxiliary not found"
+        assert Z_2 is not None, "Z_2 (log(Z)) auxiliary not found"
+        
+        # Check ICs are computed correctly from Z=2 (not Z=1 default)
+        assert Z_1 in result.initials, f"Z_1 ({Z_1}) not in initials"
+        assert Z_2 in result.initials, f"Z_2 ({Z_2}) not in initials"
+        
+        assert abs(result.initials[Z_1] - Z_1_expected) < 1e-6, \
+            f"Z_1 IC wrong: got {result.initials[Z_1]}, expected {Z_1_expected}"
+        assert abs(result.initials[Z_2] - Z_2_expected) < 1e-6, \
+            f"Z_2 IC wrong: got {result.initials[Z_2]}, expected {Z_2_expected}"
+
 
 class TestVersionConsistency:
     """Tests for version consistency between pyproject.toml and __init__.py."""
