@@ -749,6 +749,69 @@ class TestEpsInitFactorMapExpansion:
             f"Z_1 IC should be EPS_INIT ({EPS_INIT}), got {z1_ic}"
 
 
+class TestSymbolicExponents:
+    """Tests for handling symbolic exponents in pool construction.
+    
+    Regression test for bug where expand_exponents_via_factor_map failed
+    with TypeError when exponents were symbolic expressions (parameters)
+    rather than numeric values. isinstance(exp, sp.Expr) matched all SymPy
+    expressions including symbolic ones like 'h', but float(exp) failed.
+    """
+
+    def test_symbolic_exponent_in_pool_construction(self):
+        """Test pool construction handles symbolic exponents without crashing."""
+        from ssys.recaster import parse_antimony_via_sbml, recast_to_ssystem
+
+        # Model with symbolic exponent 'h' (Hill coefficient)
+        # This caused TypeError before the fix because float(h) fails
+        text = """
+        model test
+        X' = k * X^h - d * X
+        k = 1.0
+        d = 0.5
+        h = 2.0
+        X = 1.0
+        end
+        """
+
+        sym = parse_antimony_via_sbml(text)
+        
+        # This should NOT raise TypeError
+        result = recast_to_ssystem(sym)
+        
+        # Should succeed and produce valid output
+        assert result is not None
+        assert len(result.variables) > 0
+
+    def test_symbolic_exponent_in_complex_model(self):
+        """Test symbolic exponents in realistic model (bistable gene switch)."""
+        from ssys.recaster import parse_antimony_via_sbml, recast_to_ssystem
+
+        # Simplified bistable gene model with Hill function
+        text = """
+        model test
+        // X regulated by Y with Hill kinetics
+        X' = V_max * Y^h / (K^h + Y^h) - d * X
+        Y' = X - d * Y
+        
+        V_max = 10.0
+        K = 1.0
+        h = 2.0
+        d = 0.5
+        X = 1.0
+        Y = 1.0
+        end
+        """
+
+        sym = parse_antimony_via_sbml(text)
+        
+        # This should NOT raise TypeError
+        result = recast_to_ssystem(sym)
+        
+        assert result is not None
+        assert len(result.variables) > 0
+
+
 class TestVersionConsistency:
     """Tests for version consistency between pyproject.toml and __init__.py."""
 
