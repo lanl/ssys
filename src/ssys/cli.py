@@ -68,40 +68,24 @@ def recast_file(
     if parser == "sbml":
         # SBML-first: RoadRunner parses Antimony → SBML → libSBML extracts ODEs
         sym = parse_antimony_via_sbml(txt)
-        # Get @SIM metadata from attached attributes (if available)
-        if hasattr(sym, "_sim_t_start") and sym._sim_t_start is not None:
-            t_start = sym._sim_t_start
-        if hasattr(sym, "_sim_t_end") and sym._sim_t_end is not None:
-            t_end = sym._sim_t_end
-        if hasattr(sym, "_sim_n_steps") and sym._sim_n_steps is not None:
-            n_steps = sym._sim_n_steps
     else:
         # Legacy: Hand-rolled regex parser
         ir = parse_antimony(txt)
         sym = build_sym_system(ir)
-        # Get @SIM metadata from ModelIR
-        if ir.sim_t_start is not None:
-            t_start = ir.sim_t_start
-        if ir.sim_t_end is not None:
-            t_end = ir.sim_t_end
-        if ir.sim_n_steps is not None:
-            n_steps = ir.sim_n_steps
+
+    # Set @SIM metadata on sym so recast_to_ssystem can propagate it
+    # This ensures the recast output includes proper simulation parameters
+    sym.sim_t_start = t_start
+    sym.sim_t_end = t_end
+    sym.sim_n_steps = n_steps
+    sym.eps_init = eps_init
 
     rec = recast_to_ssystem(sym, mode=mode)
     out_text = ssystem_to_antimony(rec, model_name=f"{name}_recast", mode=mode)
 
-    # Propagate @SIM metadata from input to recast output
-    # This ensures notebook simulations use the same time parameters for both
-    sim_parts = []
-    if t_start is not None:
-        sim_parts.append(f"T_START={t_start:g}")
-    if t_end is not None:
-        sim_parts.append(f"T_END={t_end:g}")
-    if n_steps is not None:
-        sim_parts.append(f"N_STEPS={n_steps}")
-    if sim_parts:
-        sim_line = "// @SIM " + " ".join(sim_parts) + "\n"
-        out_text = out_text.rstrip() + "\n" + sim_line
+    # NOTE: @SIM metadata is now handled by ssystem_to_antimony() in recaster.py
+    # It outputs the @SIM line inside the model block (before 'end'), which is cleaner
+    # and includes EPS_INIT information when relevant.
 
     out_path = os.path.join(out_dir, f"{name}_recast.ant")
     with open(out_path, "w") as f:
