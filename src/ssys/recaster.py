@@ -4439,6 +4439,11 @@ def _format_factor(factor: sp.Expr) -> str:
     """Format a single factor from a coefficient."""
     # Pure number
     if factor.is_Number:
+        # Check if it's a rational number with non-trivial denominator - keep as fraction
+        # This preserves exact values like 1/6 instead of 0.166667
+        if isinstance(factor, sp.Rational) and factor.q != 1:
+            # Format as (p/q) for Antimony - parentheses ensure correct precedence
+            return f"({factor.p}/{factor.q})"
         val = float(factor)
         if val == int(val):
             return str(int(val))
