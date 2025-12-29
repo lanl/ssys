@@ -3937,7 +3937,23 @@ def recast_to_ssystem(sym: "SymSystem", mode: str = "simplified") -> "RecastResu
     result.sim_t_start = sym.sim_t_start
     result.sim_t_end = sym.sim_t_end
     result.sim_n_steps = sym.sim_n_steps
-    result.eps_init = sym.eps_init
+    
+    # CRITICAL: If any IC was perturbed to EPS_INIT (for zero approximation),
+    # we must record the EPS_INIT value used in the output for reproducibility.
+    # Check if any IC is approximately equal to EPS_INIT.
+    eps_init_used = sym.eps_init if sym.eps_init is not None else EPS_INIT
+    ic_was_perturbed = any(
+        abs(v - eps_init_used) < 1e-12 
+        for v in result.initials.values() 
+        if isinstance(v, (int, float))
+    )
+    
+    if ic_was_perturbed:
+        # Record the actual EPS_INIT value used
+        result.eps_init = eps_init_used
+    else:
+        # No perturbation - only propagate user-specified value
+        result.eps_init = sym.eps_init
 
     return result
 
