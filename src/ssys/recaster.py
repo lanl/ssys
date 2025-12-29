@@ -3367,9 +3367,12 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
         time_sym = sp.Symbol("time")
         func_at_0 = func_at_0.subs(time_sym, 0)
         # Then substitute state variables
+        # CRITICAL: Check BOTH initials AND params - SBML parser puts species ICs in params
         for var in sym.vars:
             if var in func_at_0.free_symbols:
-                func_at_0 = func_at_0.subs(var, sym.initials.get(var, 1.0))
+                # Try initials first, then params (using var.name for params dict)
+                init_val = sym.initials.get(var, sym.params.get(var.name, 1.0))
+                func_at_0 = func_at_0.subs(var, init_val)
         # Then substitute parameters - use actual symbols from expression
         for param_sym in func_at_0.free_symbols:
             param_name = param_sym.name
