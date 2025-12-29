@@ -232,5 +232,93 @@ class TestRecastValidatorEdgeCases:
         assert validator is not None
 
 
+class TestTimeDependentValidation:
+    """Tests for time-dependent model validation with clock variables."""
+
+    def test_time_dependent_symbolic_validation(self, tmp_path):
+        """Test symbolic validation of time-dependent model with clock.
+
+        This tests the fix for S1987_E1_bessel where:
+        - Original model uses 'time' in ODEs
+        - Recast model uses clock variable T with T' = 1
+        - Lifted auxiliary Y_1 := T + 1 represents (time + 1)
+
+        The validator must:
+        1. Substitute time -> T in the original ODEs
+        2. Substitute Y_1 -> T + 1 for lifted auxiliaries
+        3. Skip clock variable T := time (avoid circular substitution)
+        """
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            // Simple time-dependent decay
+            X' = -X / (time + 1)
+            X = 1.0
+        """)
+
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+            // ============================================================
+            // AUXILIARY DEFINITIONS (for lifted variables)
+            // ============================================================
+            // T := time
+            // Y_1 := T + 1
+            // ============================================================
+
+            T' = 1
+            Y_1' = 1
+            X' = -X / Y_1
+
+            T = 0
+            Y_1 = 1
+            X = 1.0
+            end
+        """)
+
+        validator = RecastValidator(str(original), str(recast))
+        result = validator.check_symbolic_equivalence(timeout=10.0)
+
+        assert result is not None
+        assert result.name == "symbolic_equivalence"
+        assert result.result == ValidationResult.PASS, \
+            f"Symbolic test failed: {result.details}"
+
+    def test_time_dependent_numerical_validation(self, tmp_path):
+        """Test numerical validation passes for time-dependent models."""
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            X' = -X / (time + 1)
+            X = 1.0
+        """)
+
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+            // ============================================================
+            // AUXILIARY DEFINITIONS (for lifted variables)
+            // ============================================================
+            // T := time
+            // Y_1 := T + 1
+            // ============================================================
+
+            T' = 1
+            Y_1' = 1
+            X' = -X / Y_1
+
+            T = 0
+            Y_1 = 1
+            X = 1.0
+            end
+        """)
+
+        validator = RecastValidator(str(original), str(recast))
+        result = validator.check_numerical_pointwise(n_samples=100)
+
+        assert result is not None
+        assert result.name == "numerical_pointwise"
+        assert result.result == ValidationResult.PASS, \
+            f"Numerical test failed: {result.details}"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

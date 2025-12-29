@@ -862,6 +862,35 @@ class RecastValidator:
                 [self.orig_odes[v].subs(self.mapping) for v in orig_vars_ordered]
             )
 
+            # CRITICAL: For time-dependent models, substitute time → T in f_orig_at_Phi
+            # The recast model uses clock variable T (with T' = 1, T(0) = 0) instead of 'time'
+            # Auxiliary Y_1 = T + 1 corresponds to original denominator (time + 1)
+            # Without this substitution, we get mixed T/time terms that don't cancel
+            #
+            # KEY FIX: We must find the ACTUAL 'time' symbol object that appears in
+            # f_orig_at_Phi.free_symbols, not a different Symbol object with the same name.
+            # SymPy's .subs() matches by object identity, not by name.
+            
+            # Step 1: Find clock variable T in recast_state_vars
+            clock_var = None
+            for rv in self.recast_state_vars:
+                if str(rv) == "T":
+                    clock_var = rv
+                    break
+            
+            # Step 2: If clock exists, find 'time' symbol in f_orig_at_Phi and substitute
+            if clock_var is not None:
+                # Collect all free symbols from f_orig_at_Phi (it's a Matrix)
+                all_free_symbols = set()
+                for component in f_orig_at_Phi:
+                    all_free_symbols.update(component.free_symbols)
+                
+                # Find the actual 'time' symbol by name
+                for sym in all_free_symbols:
+                    if str(sym).lower() == "time":
+                        f_orig_at_Phi = f_orig_at_Phi.subs(sym, clock_var)
+                        break
+
             # Compute difference Δ = J_Φ · f_recast - f_orig(Φ(Z))
             Delta = lhs - f_orig_at_Phi
 
@@ -882,8 +911,15 @@ class RecastValidator:
             for aux_sym, aux_def in self.auxiliary_defs.items():
                 aux_name = str(aux_sym)
                 # Only substitute if this is truly an auxiliary (not an original variable)
+                # SKIP clock variables (T := time) - they don't need substitution in Delta
+                # because we already substituted time→T in f_orig_at_Phi
                 if aux_name not in orig_var_names and aux_name in recast_vars_by_name:
                     actual_aux_sym = recast_vars_by_name[aux_name]
+                    
+                    # Check if this is a clock variable (definition is just 'time')
+                    # Skip it - we handle time→T substitution separately above
+                    if isinstance(aux_def, sp.Symbol) and str(aux_def).lower() == "time":
+                        continue
 
                     # Substitute symbols in definition to match recast ODE symbols
                     # This includes both state variables AND parameters

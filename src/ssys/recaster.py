@@ -251,6 +251,34 @@ def _sympy_to_antimony_syntax(expr_str: str) -> str:
     return result
 
 
+def _format_sim_metadata_lines(result: "RecastResult") -> list[str]:
+    """
+    Format @SIM metadata as Antimony comment lines.
+
+    Returns list of lines to append before 'end' in output.
+    """
+    lines = []
+    
+    # Build @SIM line with all available metadata
+    sim_parts = []
+    if result.sim_t_start is not None:
+        sim_parts.append(f"T_START={result.sim_t_start:g}")
+    if result.sim_t_end is not None:
+        sim_parts.append(f"T_END={result.sim_t_end:g}")
+    if result.sim_n_steps is not None:
+        sim_parts.append(f"N_STEPS={result.sim_n_steps}")
+    if result.eps_init is not None:
+        sim_parts.append(f"EPS_INIT={result.eps_init:g}")
+    
+    if sim_parts:
+        lines.append(f"// @SIM {' '.join(sim_parts)}")
+        # Add note about zero IC replacement if eps_init was used
+        if result.eps_init is not None:
+            lines.append("// Note: Zero-valued initial conditions are replaced with EPS_INIT during recasting.")
+    
+    return lines
+
+
 def parse_antimony(text: str) -> ModelIR:
     ir = ModelIR()
     ir.antimony_text = text  # Cache original text for RoadRunner
@@ -1151,20 +1179,74 @@ class RecastResult:
     assignment_rules: dict[str, str] = field(
         default_factory=dict
     )  # Assignment rules from original model
+    # Simulation metadata (propagated from input)
+    sim_t_start: float | None = None
+    sim_t_end: float | None = None
+    sim_n_steps: int | None = None
+    eps_init: float | None = None
 
 
 def classify_system(sym: SymSystem) -> SystemClass:
     """
     Classify a SymSystem based on its structure.
 
+    IMPORTANT: Expands assignment rules before classification to ensure
+    hidden complexity (rational functions, time-dependence) is detected.
+
     Returns:
         SystemClass enum indicating the system type
     """
+    # Build substitution map for assignment rules
+    # This reveals hidden complexity like rational functions or time-dependence
+    rule_subs = {}
+    if sym.assignment_rules:
+        # Build symbol map for parsing - include rule names as symbols
+        all_syms = {s.name: s for s in sym.vars}
+        for param_name in sym.params:
+            all_syms[param_name] = sp.Symbol(param_name, positive=True)
+        all_syms["time"] = sp.Symbol("time", positive=True)
+        # Pre-create symbols for all rule names
+        for rule_name in sym.assignment_rules:
+            if rule_name not in all_syms:
+                all_syms[rule_name] = sp.Symbol(rule_name, positive=True)
+        
+        # Parse assignment rules into sympy expressions
+        for rule_name, rule_str in sym.assignment_rules.items():
+            try:
+                rule_expr = sp.sympify(rule_str, locals=all_syms)
+                rule_sym = all_syms[rule_name]  # Use consistent symbol
+                rule_subs[rule_sym] = rule_expr
+            except Exception:
+                pass
+        
+        # Expand nested rules (A may reference B)
+        for _ in range(10):
+            changed = False
+            for rule_sym, rule_expr in list(rule_subs.items()):
+                new_expr = rule_expr.subs(rule_subs)
+                if new_expr != rule_expr:
+                    rule_subs[rule_sym] = new_expr
+                    changed = True
+            if not changed:
+                break
+        
+        # CRITICAL: Also create a name-based lookup for substitution
+        # because ODEs may use different symbol objects with same name
+        name_to_expr = {sym.name: expr for sym, expr in rule_subs.items()}
+
     is_canonical = True
     is_ssystem = True
     is_gma = True
 
     for _var, ode in sym.odes.items():
+        # Expand assignment rules to reveal hidden structure
+        if rule_subs:
+            # First try direct substitution
+            ode = ode.subs(rule_subs)
+            # Also substitute by name (for symbol object mismatches)
+            for sym_in_ode in ode.free_symbols:
+                if sym_in_ode.name in name_to_expr:
+                    ode = ode.subs(sym_in_ode, name_to_expr[sym_in_ode.name])
         terms = expand_to_terms(sp.expand(ode))
 
         # Separate into positive and negative monomial terms
@@ -2718,7 +2800,8 @@ def lift_time_functions_to_autonomous(
     Returns:
         Tuple of (transformed SymSystem, auxiliary definitions, next aux counter)
     """
-    time_sym = sp.Symbol("time")
+    # CRITICAL: Create time symbol with positive=True to match SBML parser
+    time_sym = sp.Symbol("time", positive=True)
 
     # Build locals dict for sympify to avoid conflicts with SymPy reserved names
     # (e.g., Q, S, I, E, O, N are commonly used in biology but reserved in SymPy)
@@ -2732,17 +2815,22 @@ def lift_time_functions_to_autonomous(
         if rule_name not in sympify_locals:
             sympify_locals[rule_name] = sp.Symbol(rule_name, positive=True)
 
+    # Helper function to check if ODE contains any symbol named "time"
+    # (handles both Symbol("time") and Symbol("time", positive=True))
+    def _contains_time(expr: sp.Expr) -> bool:
+        return any(s.name == "time" for s in expr.free_symbols)
+
     # Check if system contains explicit time dependence
     has_time_dependence = False
     for var, ode in sym.odes.items():
-        if time_sym in ode.free_symbols:
+        if _contains_time(ode):
             has_time_dependence = True
             break
 
     # Also check assignment rules for time dependence
     for rule_name, rule_expr_str in sym.assignment_rules.items():
         rule_expr = sp.sympify(rule_expr_str, locals=sympify_locals)
-        if time_sym in rule_expr.free_symbols:
+        if _contains_time(rule_expr):
             has_time_dependence = True
             break
 
@@ -2755,9 +2843,14 @@ def lift_time_functions_to_autonomous(
         T = sp.Symbol("T", positive=True)
 
         # Substitute time → T in all ODEs
+        # Handle both Symbol("time") and Symbol("time", positive=True)
         new_odes: dict[sp.Symbol, sp.Expr] = {}
         for var, ode in sym.odes.items():
-            new_odes[var] = ode.subs(time_sym, T)
+            new_ode = ode
+            for s in list(ode.free_symbols):
+                if s.name == "time":
+                    new_ode = new_ode.subs(s, T)
+            new_odes[var] = new_ode
 
         # Substitute time → T in assignment rules
         new_assignment_rules: dict[str, str] = {}
@@ -2957,13 +3050,15 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
             state_dependent_functions.add(func)
 
     # Group functions by type and argument for coupled handling (sin/cos pairs)
-    # Only for state-dependent functions that need ODE lifting
+    # CLASSICAL S-SYSTEM: ALL functions get ODEs (including time-only)
+    # This follows Savageau 1987: sin(time), cos(time) become coupled oscillator state variables
     sin_cos_pairs: dict[
         sp.Expr, dict[str, sp.Expr]
     ] = {}  # arg -> {"sin": sin(arg), "cos": cos(arg)}
     other_functions = set()
 
-    for func in state_dependent_functions:
+    # Process ALL functions (time-only AND state-dependent) - all get ODEs
+    for func in all_functions:
         arg = func.args[0] if func.args else None
         if arg is None:
             other_functions.add(func)
@@ -2990,29 +3085,12 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
     time_only_aux: dict[sp.Expr, sp.Symbol] = {}  # Time-only functions → assignment rules
     aux_counter = 1
 
-    # Handle time-only functions FIRST - these become assignment rules, NOT state ODEs
-    # This is critical for models like Weber where sin(πt/15), cos(πt/15), tanh(k*(t-5))
-    # are known functions of time and should NOT be integrated as state variables
+    # Time-only functions (sin(time), cos(time), etc.) are handled the SAME as state-dependent
+    # functions - they become state variables with coupled oscillator ODEs (classical S-system approach).
+    # This follows Savageau 1987: all functions are lifted to autonomous state variables.
     assignment_rules: dict[str, str] = dict(sym.assignment_rules)  # Copy existing rules
-
-    for func in sorted(time_only_functions, key=str):
-        Z = sp.symbols(f"Z_{aux_counter}", positive=True)
-        time_only_aux[func] = Z
-
-        # Determine offset for positivity
-        needs_offset, offset = _requires_positivity_transform(func)
-        func_to_offset[func] = offset
-
-        # Create assignment rule: Z := func + offset
-        if offset > 0:
-            rule_expr = f"{func} + {offset}"
-        else:
-            rule_expr = str(func)
-        assignment_rules[Z.name] = rule_expr
-
-        # Also add to func_to_aux for substitution
-        func_to_aux[func] = Z
-        aux_counter += 1
+    
+    # NOTE: time_only_functions and time_only_aux are now UNUSED - all functions get ODEs
 
     # Handle sin/cos pairs (state-dependent only) - create BOTH auxiliaries even if only one appears
     for arg, funcs_dict in sin_cos_pairs.items():
@@ -3066,6 +3144,9 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
     new_aux_odes: dict[sp.Symbol, sp.Expr] = {}
 
     # Handle sin/cos pairs with coupled derivatives
+    # CRITICAL: Create time symbol with positive=True to match SBML parser
+    time_sym = sp.Symbol("time", positive=True)
+    
     for arg, funcs_dict2 in sin_cos_pairs.items():
         sin_func = funcs_dict2.get("sin", sp.sin(arg))
         cos_func = funcs_dict2.get("cos", sp.cos(arg))
@@ -3081,6 +3162,12 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
             if var in arg.free_symbols:
                 partial = sp.diff(arg, var)
                 arg_prime += partial * new_odes[var]
+
+        # Handle explicit time dependence: d(time)/dt = 1
+        # CRITICAL: For sin(time), cos(time), the argument IS time, so arg' = 1
+        if time_sym in arg.free_symbols:
+            partial_t = sp.diff(arg, time_sym)
+            arg_prime += partial_t  # d(time)/dt = 1
 
         # Z_sin' = (Z_cos - 2) * arg'
         Z_sin_ode = (Z_cos - 2) * arg_prime
@@ -3111,8 +3198,7 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
                 partial = sp.diff(base, var)
                 base_prime += partial * new_odes[var]
 
-        # Handle time dependence
-        time_sym = sp.Symbol("time")
+        # Handle time dependence (time_sym defined above at start of sin/cos loop)
         if time_sym in base.free_symbols:
             partial_t = sp.diff(base, time_sym)
             base_prime += partial_t  # d(time)/dt = 1
@@ -3167,7 +3253,7 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
                     func_prime += term
 
         # Handle explicit time dependence: d(time)/dt = 1
-        time_sym = sp.Symbol("time")
+        # (time_sym defined above at start of sin/cos loop)
         if time_sym in func.free_symbols:
             partial_t = sp.diff(func, time_sym)
             # Substitute auxiliaries in the time derivative term
@@ -3830,6 +3916,12 @@ def recast_to_ssystem(sym: "SymSystem", mode: str = "simplified") -> "RecastResu
 
     # Pass assignment rules (time-only auxiliaries) to result
     result.assignment_rules = sym.assignment_rules
+
+    # Propagate simulation metadata from input SymSystem
+    result.sim_t_start = sym.sim_t_start
+    result.sim_t_end = sym.sim_t_end
+    result.sim_n_steps = sym.sim_n_steps
+    result.eps_init = sym.eps_init
 
     return result
 
@@ -4539,6 +4631,12 @@ def gma_to_antimony(
         else:
             lines.append(f"{eq.var.name}' = {production} - ({degradation});")
 
+    # Add @SIM metadata if available
+    sim_lines = _format_sim_metadata_lines(result)
+    if sim_lines:
+        lines.append("")
+        lines.extend(sim_lines)
+
     lines.append("end")
     # Convert ** to ^ for valid Antimony syntax
     return _sympy_to_antimony_syntax("\n".join(lines))
@@ -4560,9 +4658,11 @@ def ssystem_to_antimony(
             - 'ode': Output as species with ODEs (default, may drift)
             - 'assignment': Output as assignment rules (algebraically exact)
     """
-    # CRITICAL: Antimony identifiers cannot start with numbers or contain hyphens
-    # Prefix with 'm_' if name starts with digit, replace hyphens with underscores
+    # CRITICAL: Antimony identifiers cannot start with numbers, contain hyphens, or periods
+    # Prefix with 'm_' if name starts with digit, replace invalid chars with underscores
     if model_name:
+        # Replace periods with underscores (period is invalid in identifiers)
+        model_name = model_name.replace(".", "_")
         # Replace hyphens with underscores (hyphen is subtraction in Antimony)
         model_name = model_name.replace("-", "_")
         # Prefix with 'm_' if name starts with digit
@@ -4709,6 +4809,8 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
     # --- Initial conditions for auxiliary variables ONLY ---
     # Note: We only output ICs for variables that are in result.variables (the recast auxiliaries).
     # Original variables are reconstructed via assignment rules and should NOT have ICs here.
+    # CRITICAL: Variables with assignment rules (Z := f(t)) get their value from the rule,
+    # so they MUST NOT have initial conditions (Antimony forbids this).
     lines.append("// ========================================================================")
     lines.append("// INITIAL CONDITIONS (auxiliary variables)")
     lines.append("// ========================================================================")
@@ -4722,6 +4824,9 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         lines.append("//       while maintaining dynamics qualitatively equivalent to zero ICs")
 
     auxiliary_vars = set(result.variables)  # These are the Z_1, Z_2, ... variables
+    
+    # Build set of assignment rule variable names (these cannot have ICs)
+    assignment_rule_vars = set(result.assignment_rules.keys()) if result.assignment_rules else set()
 
     # Sort initials - handle both Symbol and tuple keys
     def _init_sort_key(kv):
@@ -4736,6 +4841,9 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
     for s, v in sorted(result.initials.items(), key=_init_sort_key):
         # Skip tuple keys (compartment info, const params) - only process Symbol keys
         if not hasattr(s, "name"):
+            continue
+        # Skip variables with assignment rules (their value comes from the rule)
+        if s.name in assignment_rule_vars:
             continue
         # Only output ICs for auxiliary variables, NOT original variables or parameters
         if s in auxiliary_vars and s.name not in result.params:
@@ -4843,6 +4951,12 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
             g = product_to_antimony(eq.growth[0], g_exps)
             h = product_to_antimony(eq.decay[0], h_exps)
             lines.append(f"{eq.var.name}' = {g} - {h};")
+
+    # Add @SIM metadata if available
+    sim_lines = _format_sim_metadata_lines(result)
+    if sim_lines:
+        lines.append("")
+        lines.extend(sim_lines)
 
     lines.append("end")
     # Convert ** to ^ for valid Antimony syntax
@@ -5018,6 +5132,12 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
                 # Use numeric value
                 val = result.initials[v]
                 lines.append(f"  {v.name} = {float(val):g};")
+
+    # Add @SIM metadata if available
+    sim_lines = _format_sim_metadata_lines(result)
+    if sim_lines:
+        lines.append("")
+        lines.extend(["  " + line for line in sim_lines])  # Indent canonical mode
 
     lines.append("end")
     # Convert ** to ^ for valid Antimony syntax
