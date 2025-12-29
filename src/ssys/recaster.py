@@ -2763,10 +2763,17 @@ def lift_squared_for_sqrt(
     u_ode = 2 * X * X_prime
 
     # Initial condition: u(0) = X(0)² + c
+    # Build name-based lookup for initial conditions (handles symbol object mismatch)
+    initials_by_name = {}
+    for s, v in sym.initials.items():
+        if hasattr(s, 'name'):
+            initials_by_name[s.name] = v
+
     X_at_0 = X
-    for var in sym.vars:
-        if var in X.free_symbols:
-            X_at_0 = X_at_0.subs(var, sym.initials.get(var, 1.0))
+    # Substitute state variables by NAME (symbol identity may differ)
+    for sym_in_X in list(X.free_symbols):
+        if sym_in_X.name in initials_by_name:
+            X_at_0 = X_at_0.subs(sym_in_X, initials_by_name[sym_in_X.name])
     # Substitute parameters
     for param_name, param_val in sym.params.items():
         X_at_0 = X_at_0.subs(sp.Symbol(param_name), param_val)
@@ -3387,18 +3394,24 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
         new_initials[Z] = Z_init
 
     # Compute initial conditions for sqrt auxiliaries
+    # Build name-based lookup for initials (handles symbol object mismatch)
+    initials_by_name = {}
+    for s, v in sym.initials.items():
+        if hasattr(s, 'name'):
+            initials_by_name[s.name] = v
+    
     for sqrt_expr, Z in sqrt_to_aux.items():
         # Evaluate sqrt at t=0
         sqrt_at_0 = sqrt_expr
         # First substitute time=0
         time_sym = sp.Symbol("time")
         sqrt_at_0 = sqrt_at_0.subs(time_sym, 0)
-        # Then substitute state variables
-        for var in sym.vars:
-            if var in sqrt_at_0.free_symbols:
-                sqrt_at_0 = sqrt_at_0.subs(var, sym.initials.get(var, 1.0))
+        # Then substitute state variables by NAME (symbol identity may differ)
+        for sym_in_sqrt in list(sqrt_at_0.free_symbols):
+            if sym_in_sqrt.name in initials_by_name:
+                sqrt_at_0 = sqrt_at_0.subs(sym_in_sqrt, initials_by_name[sym_in_sqrt.name])
         # Then substitute parameters
-        for param_sym in sqrt_at_0.free_symbols:
+        for param_sym in list(sqrt_at_0.free_symbols):
             param_name = param_sym.name
             if param_name in sym.params:
                 sqrt_at_0 = sqrt_at_0.subs(param_sym, sym.params[param_name])
