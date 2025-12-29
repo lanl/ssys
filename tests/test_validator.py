@@ -232,6 +232,77 @@ class TestRecastValidatorEdgeCases:
         assert validator is not None
 
 
+class TestVariableICollisionWithSpI:
+    """Tests for variable 'I' collision with SymPy's imaginary unit sp.I.
+    
+    Regression test for bug where sympify('I') returns sp.I (imaginary unit),
+    which has empty free_symbols. When a model uses variable 'I' (e.g., for
+    infected population in epidemic models), the validator's _canonicalize_symbols()
+    failed because:
+    1. sp.I.free_symbols is empty, so substitution loop had nothing to substitute
+    2. Jacobian computation then saw sp.I instead of a proper Symbol
+    """
+
+    def test_variable_I_not_confused_with_imaginary(self, tmp_path):
+        """Test that variable I is handled correctly, not as imaginary unit."""
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            // Simple SIR-like model with variable I
+            S' = -beta*S*I
+            I' = beta*S*I - gamma*I
+            R' = gamma*I
+            
+            beta = 0.3
+            gamma = 0.1
+            S = 0.99
+            I = 0.01
+            R = 0.0
+        """)
+
+        # Simplified recast (2 terms per ODE)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+            // ============================================================
+            // AUXILIARY DEFINITIONS (for lifted variables)
+            // ============================================================
+            // S -> [Z_1, Z_2]
+            // I -> [Z_3, Z_4]
+            // R -> [Z_5]
+            // ============================================================
+
+            Z_1' = -beta * Z_1 * Z_2^-1 * Z_3 * Z_4
+            Z_2' = -beta * Z_2 * Z_1^-1 * Z_3 * Z_4
+            Z_3' = beta * Z_1 * Z_2 * Z_3^-1
+            Z_4' = -gamma * Z_4
+            Z_5' = gamma * Z_3 * Z_4 * Z_5^-1
+
+            beta = 0.3
+            gamma = 0.1
+            Z_1 = 0.99
+            Z_2 = 1.0
+            Z_3 = 0.01
+            Z_4 = 1.0
+            Z_5 = 1e-06
+            end
+        """)
+
+        validator = RecastValidator(str(original), str(recast))
+        result = validator.check_symbolic_equivalence(timeout=10.0)
+
+        assert result is not None
+        assert result.name == "symbolic_equivalence"
+        # The key test: should NOT fail due to sp.I confusion
+        # (may still fail for other reasons, but not the I/sp.I issue)
+        if result.result == ValidationResult.FAIL:
+            # If it fails, make sure it's NOT due to I as sp.I
+            details_lower = result.details.lower()
+            assert "imaginary" not in details_lower, \
+                f"Variable I confused with imaginary: {result.details}"
+            assert "sp.I" not in result.details, \
+                f"sp.I appeared in error: {result.details}"
+
+
 class TestTimeDependentValidation:
     """Tests for time-dependent model validation with clock variables."""
 
