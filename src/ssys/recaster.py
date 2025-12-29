@@ -3572,6 +3572,15 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
                 if aux not in aux_to_func_with_offset:
                     aux_to_func_with_offset[aux] = defn
 
+    # Build symbolic IC expressions for auxiliary variables
+    # Z_1 = exp(b*A) is EXACT on the invariant manifold at t=0
+    # This avoids numeric rounding and makes the manifold relationship explicit
+    new_initial_exprs = dict(sym.initial_exprs)  # Copy existing
+    for aux_sym, aux_def in aux_to_func_with_offset.items():
+        # Store the symbolic definition as the IC expression
+        # Convert to Antimony syntax for output
+        new_initial_exprs[aux_sym] = _sympy_to_antimony_syntax(str(aux_def))
+
     # Return augmented system and auxiliary definitions
     return (
         SymSystem(
@@ -3579,7 +3588,7 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
             params=sym.params,
             odes=combined_odes,
             initials=new_initials,
-            initial_exprs=sym.initial_exprs,  # Propagate symbolic IC expressions
+            initial_exprs=new_initial_exprs,  # Include symbolic IC expressions for auxiliaries
             assignment_rules=assignment_rules,  # Time-only auxiliaries as assignment rules
             compartments=sym.compartments,  # Propagate compartments
         ),
