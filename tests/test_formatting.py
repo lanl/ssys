@@ -115,6 +115,55 @@ class TestProductToAntimony:
         result = product_to_antimony(coeff, exps)
         assert "-1" in result
 
+    def test_symbolic_add_exponent_parenthesized(self):
+        """Test that symbolic Add exponents are parenthesized to avoid ambiguity.
+        
+        Bug regression test for d741354:
+        Without parentheses, x^-C - 1 parses as (x^-C) - 1 (subtraction)
+        instead of x^(-C-1) (exponent).
+        """
+        x = sp.Symbol("x", positive=True)
+        C = sp.Symbol("C", positive=True)
+        coeff = sp.Float(1.0)
+        # Symbolic exponent: -C - 1 (an Add expression)
+        exps = {x: -C - 1}
+        result = product_to_antimony(coeff, exps)
+        # Exponent must be parenthesized: x^(-C - 1), not x^-C - 1
+        assert "^(-C - 1)" in result or "^(-1 - C)" in result
+
+    def test_symbolic_simple_exponent_not_over_parenthesized(self):
+        """Test that simple symbolic exponents don't get unnecessary parentheses.
+        
+        For exponents that are just a symbol or symbol*constant,
+        no parentheses are needed: x^C is fine, doesn't need x^(C).
+        """
+        x = sp.Symbol("x", positive=True)
+        C = sp.Symbol("C", positive=True)
+        coeff = sp.Float(1.0)
+        # Symbolic exponent: just C (not an Add expression)
+        exps = {x: C}
+        result = product_to_antimony(coeff, exps)
+        # Should NOT have extra parentheses around C
+        assert "^C" in result
+        assert "^(C)" not in result
+
+    def test_symbolic_negative_exponent_not_over_parenthesized(self):
+        """Test that negated symbolic exponents without sums don't get parentheses.
+        
+        For -C (just a negated symbol, represented as Mul(-1, C), not Add),
+        parentheses are not needed: x^-C is unambiguous.
+        """
+        x = sp.Symbol("x", positive=True)
+        C = sp.Symbol("C", positive=True)
+        coeff = sp.Float(1.0)
+        # Symbolic exponent: -C (Mul, not Add)
+        exps = {x: -C}
+        result = product_to_antimony(coeff, exps)
+        # Should NOT have parentheses around -C (it's not an Add)
+        assert "^-C" in result
+        # But should not have spurious parentheses if it's just -C
+        # (sympy may format as -C or -1*C)
+
     def test_rational_coefficient_preserved_as_fraction(self):
         """Test that rational coefficients are preserved as fractions, not decimals."""
         x = sp.Symbol("x", positive=True)
