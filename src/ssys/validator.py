@@ -778,8 +778,21 @@ class RecastValidator:
             str(v) for v in self.recast_odes.keys()
         }
 
+        # CRITICAL: Also collect ALL free symbols from ALL expressions
+        # This ensures auxiliary variables (Z_1, etc.) that appear in ODEs are canonicalized
+        # even if they weren't already in the keys or params
+        all_expr_symbols = set()
+        for ode in self.orig_odes.values():
+            all_expr_symbols.update(s.name for s in ode.free_symbols)
+        for ode in self.recast_odes.values():
+            all_expr_symbols.update(s.name for s in ode.free_symbols)
+        for expr in self.mapping.values():
+            all_expr_symbols.update(s.name for s in expr.free_symbols)
+        for expr in self.auxiliary_defs.values():
+            all_expr_symbols.update(s.name for s in expr.free_symbols)
+
         canon = {}
-        for name in all_params | all_species:
+        for name in all_params | all_species | all_expr_symbols:
             canon[name] = sp.Symbol(name, positive=True)
 
         # Store canonical symbols for later use (e.g., in numerical validation)
@@ -787,6 +800,13 @@ class RecastValidator:
 
         # Helper to rename all symbols in an expression
         def rename_expr(expr):
+            # Handle sympy constants (I=imaginary, E=Euler) that match variable names
+            # These have empty free_symbols, so normal substitution won't catch them
+            if not expr.free_symbols:
+                expr_str = str(expr)
+                if expr_str in canon:
+                    return canon[expr_str]
+            # Handle compound expressions by substituting all symbols
             subs = {s: canon[s.name] for s in expr.free_symbols if s.name in canon}
             return expr.subs(subs) if subs else expr
 
