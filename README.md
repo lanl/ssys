@@ -311,7 +311,9 @@ See [RECASTING.md](RECASTING.md) for detailed recasting theory, rules, and worke
 - Parameters (treated as positive constants)
 - **Elementary functions**: `exp`, `log`, `sin`, `cos`, `tan`, `sqrt`, `sinh`, `cosh`, `tanh`, `asin`, `acos`, `atan`
 - **Rational functions**: `X/(Y+1)`, `1/(X+Y+Z)`
-- **Assignment rules**: `Z := X + Y` (substituted into ODEs)
+- **Assignment rules**: `Z := X + Y`
+  - As input: substituted into ODEs before recasting
+  - As output: generated as observable variables to reconstruct original variables from auxiliaries
 
 ❌ **Not yet supported:**
 - Modules
