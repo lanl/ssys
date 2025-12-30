@@ -91,37 +91,37 @@ Several models appear in multiple forms across the collection, either because th
 
 Models handcrafted or extracted from the literature for initial integration testing. Many contain hand-crafted recasting notes in comments.
 
-| File | Description | Original | Recast | Rules |
-|------|-------------|----------|--------|-------|
-| m01_exp_decay | Exponential decay | S-system | S-system | — |
-| m02_logistic | Logistic growth | Canonical S-system | S-system | 5 |
-| m03_Lotka_Volterra | Lotka-Volterra predator-prey | Canonical S-system | S-system | 5 |
-| m04_mass_action_branch | Branched mass action pathway | GMA | S-system | 5 |
-| m05_three_term_sum | Three-term sum reduction | GMA | S-system | 5 |
-| m06_feedback | Negative feedback pathway | GMA | S-system | 5 |
-| m07_SIR | SIR epidemic model | S-system | S-system | 5 |
-| m08_Bertalanffy | Von Bertalanffy growth | Canonical S-system | S-system | 5 |
-| m09_A_plus_B_to_C | Mass action A + B → C | S-system | S-system | — |
-| m10_van_der_Pol | Van der Pol oscillator | GMA | S-system | 5 |
-| m11_Monod_chemostat | Monod chemostat | General | GMA | 4 |
-| m12_toy_mass_action | Toy mass action network | GMA | S-system | 5 |
-| m13_composite_func_decomp | Composite function decomposition | General | S-system | 1 |
-| m14_Michaelis_Menten_prod_deg | Michaelis-Menten kinetics | General | S-system | 4 |
-| m15_tryptophan_operon | Tryptophan operon | General | GMA | 4 |
-| m16_normal_dens | Normal distribution density | S-system | S-system | — |
-| m17_central_t | Central t-distribution | General | S-system | 4 |
-| m18_Goodwin | Goodwin oscillator | General | S-system | 4 |
-| m19_RM_predator_prey | Rosenzweig-MacArthur predator-prey | General | GMA | 4 |
-| m20_Briggs_Haldane | Briggs-Haldane enzyme kinetics | GMA | S-system | 5 |
-| m21_Haldane_chemostat | Haldane chemostat | General | S-system | 5 |
-| m22_Brusselator | Brusselator oscillator | GMA | S-system | 5 |
-| m23_MWC | Monod-Wyman-Changeux model | GMA | GMA | — |
-| m24_scalarExpLog | Scalar exp/log dynamics | General | S-system | 1, 2 |
-| m25_CSTR | Continuous stirred tank reactor | General | GMA | 1, 4 |
-| m26_cos_growth | Cosine-driven growth | General | S-system | 3 |
-| m27_spiral | Spiral curve dynamics | General | GMA | 4 |
-| m28_torus | Torus surface dynamics | General | GMA | 4 |
-| m29_time_varying_beta | SIR with time-varying β | General | GMA (time-varying coefficients) | 5 |
+| Model | Original | Recast | Rules |
+|-------|----------|--------|-------|
+| **m01_exp_decay**: Exponential decay | S-system | S-system | — |
+| **m02_logistic**: Logistic growth | Canonical S-system | S-system | 5 |
+| **m03_Lotka_Volterra**: Lotka-Volterra predator-prey | Canonical S-system | S-system | 5 |
+| **m04_mass_action_branch**: Branched mass action pathway | GMA | S-system | 5 |
+| **m05_three_term_sum**: Three-term sum reduction | GMA | S-system | 5 |
+| **m06_feedback**: Negative feedback pathway | GMA | S-system | 5 |
+| **m07_SIR**: SIR epidemic model | S-system | S-system | 5 |
+| **m08_Bertalanffy**: Von Bertalanffy growth | Canonical S-system | S-system | 5 |
+| **m09_A_plus_B_to_C**: Mass action A + B → C | S-system | S-system | — |
+| **m10_van_der_Pol**: Van der Pol oscillator | GMA | S-system | 5 |
+| **m11_Monod_chemostat**: Monod chemostat | General | GMA | 4 |
+| **m12_toy_mass_action**: Toy mass action network | GMA | S-system | 5 |
+| **m13_composite_func_decomp**: Composite function decomposition | General | S-system | 1 |
+| **m14_Michaelis_Menten_prod_deg**: Michaelis-Menten kinetics | General | S-system | 4 |
+| **m15_tryptophan_operon**: Tryptophan operon | General | GMA | 4 |
+| **m16_normal_dens**: Normal distribution density | S-system | S-system | — |
+| **m17_central_t**: Central t-distribution | General | S-system | 4 |
+| **m18_Goodwin**: Goodwin oscillator | General | S-system | 4 |
+| **m19_RM_predator_prey**: Rosenzweig-MacArthur predator-prey | General | GMA | 4 |
+| **m20_Briggs_Haldane**: Briggs-Haldane enzyme kinetics | GMA | S-system | 5 |
+| **m21_Haldane_chemostat**: Haldane chemostat | General | S-system | 5 |
+| **m22_Brusselator**: Brusselator oscillator | GMA | S-system | 5 |
+| **m23_MWC**: Monod-Wyman-Changeux model | GMA | GMA | — |
+| **m24_scalarExpLog**: Scalar exp/log dynamics | General | S-system | 1, 2 |
+| **m25_CSTR**: Continuous stirred tank reactor | General | GMA | 1, 4 |
+| **m26_cos_growth**: Cosine-driven growth | General | S-system | 3 |
+| **m27_spiral**: Spiral curve dynamics | General | GMA | 4 |
+| **m28_torus**: Torus surface dynamics | General | GMA | 4 |
+| **m29_time_varying_beta**: SIR with time-varying β | General | GMA (time-varying) | 5 |
 
 ---
 
@@ -129,36 +129,38 @@ Models handcrafted or extracted from the literature for initial integration test
 
 Models from Savageau & Voit (1987), the foundational paper that introduced exact recasting of nonlinear differential equations into S-system canonical form.
 
-| File | Description | Original | Recast | Rules | Source |
-|------|-------------|----------|--------|-------|--------|
-| S1987_4C_exp_composition | Exponential composition | General | S-system | 1, 2 | §4C |
-| S1987_4D_sum_reduction | Sum reduction | GMA | S-system | 5 | §4D |
-| S1987_5_CSTR | Continuous stirred tank reactor | General | GMA | 1, 4 | §5 |
-| S1987_A1_exponential | Exponential decay | S-system | S-system | — | App. A |
-| S1987_A2_riccati | Riccati equation | S-system | S-system | — | App. A |
-| S1987_A3_cos_growth | Cosine growth | General | S-system | 3, 7 | App. A |
-| S1987_A4_logistic | Logistic growth | Canonical S-system | S-system | 5 | App. A |
-| S1987_A5_spiral | Spiral curve | General | GMA | 4, 7 | App. A |
-| S1987_B1_lotka_volterra | Lotka-Volterra | Canonical S-system | S-system | 5 | App. A |
-| S1987_B2_linear_chain | Linear chemical chain | GMA | S-system | 5 | App. A |
-| S1987_B3_nonlinear_chain | Nonlinear chemical chain | S-system | S-system | 5 | App. A |
-| S1987_B4_torus | Torus integral surface | General | GMA | 4 | App. A |
-| S1987_B5_rigid_body | Euler rigid body equations | S-system | S-system | — | App. A |
-| S1987_B_binary | Half→Binary transformation | S-system | S-system | — | App. B |
-| S1987_C1_decay_chain | Radioactive decay chain | S-system | S-system | 5 | App. A |
-| S1987_C2_decay_chain2 | Decay chain variant | S-system | S-system | 5 | App. A |
-| S1987_C3_parabolic_pde | Parabolic PDE discretization | GMA | S-system | 5 | App. A |
-| S1987_C_implicit_de | Implicit DE transformation | S-system | S-system | — | App. C |
-| S1987_D1_orbit_e0.1 | Two-body orbit (e=0.1) | General | GMA | 4 | App. A |
-| S1987_D2_orbit_e0.3 | Two-body orbit (e=0.3) | General | GMA | 4 | App. A |
-| S1987_D3_orbit_e0.5 | Two-body orbit (e=0.5) | General | GMA | 4 | App. A |
-| S1987_D4_orbit_e0.7 | Two-body orbit (e=0.7) | General | GMA | 4 | App. A |
-| S1987_D5_orbit_e0.9 | Two-body orbit (e=0.9) | General | GMA | 4 | App. A |
-| S1987_E1_bessel | Bessel equation | General | GMA | 4, 7 | App. A |
-| S1987_E2_van_der_pol | Van der Pol oscillator | GMA | S-system | 5 | App. A |
-| S1987_E3_duffing | Duffing equation | General | GMA | 3, 7 | App. A |
-| S1987_E4_falling_body | Falling body with drag | S-system | S-system | 5 | App. A |
-| S1987_E5_implicit | Implicit DE | General | S-system | 4, 7 | App. A |
+| Model | Original | Recast | Rules | Ref |
+|-------|----------|--------|-------|-----|
+| **S1987_4C_exp_composition**: Exponential composition | General | S-system | 1, 2 | §4C |
+| **S1987_4D_sum_reduction**: Sum reduction | GMA | S-system | 5 | §4D |
+| **S1987_5_CSTR**: Continuous stirred tank reactor | General | GMA | 1, 4 | §5 |
+| **S1987_A1_exponential**: Exponential decay | S-system | S-system | — | A |
+| **S1987_A2_riccati**: Riccati equation | S-system | S-system | — | A |
+| **S1987_A3_cos_growth**: Cosine growth | General | S-system | 3, 7 | A |
+| **S1987_A4_logistic**: Logistic growth | Canonical S-sys | S-system | 5 | A |
+| **S1987_A5_spiral**: Spiral curve | General | GMA | 4, 7 | A |
+| **S1987_B1_lotka_volterra**: Lotka-Volterra | Canonical S-sys | S-system | 5 | A |
+| **S1987_B2_linear_chain**: Linear chemical chain | GMA | S-system | 5 | A |
+| **S1987_B3_nonlinear_chain**: Nonlinear chemical chain | S-system | S-system | 5 | A |
+| **S1987_B4_torus**: Torus integral surface | General | GMA | 4 | A |
+| **S1987_B5_rigid_body**: Euler rigid body equations | S-system | S-system | — | A |
+| **S1987_B_binary**: Half→Binary transformation | S-system | S-system | — | B |
+| **S1987_C1_decay_chain**: Radioactive decay chain | S-system | S-system | 5 | A |
+| **S1987_C2_decay_chain2**: Decay chain variant | S-system | S-system | 5 | A |
+| **S1987_C3_parabolic_pde**: Parabolic PDE discretization | GMA | S-system | 5 | A |
+| **S1987_C_implicit_de**: Implicit DE transformation | S-system | S-system | — | C |
+| **S1987_D1_orbit_e0.1**: Two-body orbit (e=0.1) | General | GMA | 4 | A |
+| **S1987_D2_orbit_e0.3**: Two-body orbit (e=0.3) | General | GMA | 4 | A |
+| **S1987_D3_orbit_e0.5**: Two-body orbit (e=0.5) | General | GMA | 4 | A |
+| **S1987_D4_orbit_e0.7**: Two-body orbit (e=0.7) | General | GMA | 4 | A |
+| **S1987_D5_orbit_e0.9**: Two-body orbit (e=0.9) | General | GMA | 4 | A |
+| **S1987_E1_bessel**: Bessel equation | General | GMA | 4, 7 | A |
+| **S1987_E2_van_der_pol**: Van der Pol oscillator | GMA | S-system | 5 | A |
+| **S1987_E3_duffing**: Duffing equation | General | GMA | 3, 7 | A |
+| **S1987_E4_falling_body**: Falling body with drag | S-system | S-system | 5 | A |
+| **S1987_E5_implicit**: Implicit DE | General | S-system | 4, 7 | A |
+
+*Ref column: Section or Appendix in Savageau & Voit (1987)*
 
 ---
 
@@ -166,48 +168,50 @@ Models from Savageau & Voit (1987), the foundational paper that introduced exact
 
 Models for which a recasting has been published in the literature. Sources span multiple authors and application domains.
 
-| File | Description | Original | Recast | Rules | Source |
-|------|-------------|----------|--------|-------|--------|
-| A2013_power_system_2machine | 2-machine power system | General | GMA | 3 | Anghel et al. (2013) |
-| A2013_power_system_3machine | 3-machine power system | General | GMA | 3 | Anghel et al. (2013) |
-| A2017_gompertz_recasting | Gompertz growth | General | S-system | 2 | Anguelov et al. (2017) |
-| DN2015_planetary_motion | Planetary two-body motion | Canonical S-system | GMA | — | Daniels & Nemenman (2015a) |
-| DN2015b_michaelis_menten | Michaelis-Menten kinetics | General | S-system | 4 | Daniels & Nemenman (2015b) |
-| DN2015b_sinx_recasting | sin(x) dynamics | General | GMA | 3 | Daniels & Nemenman (2015b) |
-| HBF1998_brusselator | Brusselator | GMA | S-system | 5 | Hernández-Bermejo et al. (1998) |
-| HBF1998_morse_oscillator | Morse oscillator | General | S-system | 1 | Hernández-Bermejo et al. (1998) |
-| HBF1998_semiconductor_exciton | Semiconductor exciton | General | S-system | 5 | Hernández-Bermejo et al. (1998) |
-| HBF1998_three_wave | Three-wave interaction | GMA | GMA | — | Hernández-Bermejo et al. (1998) |
-| I1988_metabolic_pathway | Unbranched metabolic pathway | General | S-system | 5 | Irvine (1988) |
-| KPW2024_exponential_lifting | Exponential lifting | General | GMA | 1 | Kramer et al. (2024) |
-| MS2007_MM_to_GMA | Michaelis-Menten to GMA | General | S-system | 4 | Marin-Sanguino et al. (2007) |
-| MS2007_fermentation_yeast | Yeast fermentation | GMA | GMA | — | Marin-Sanguino et al. (2007) |
-| MS2007_tryptophan_operon | Tryptophan operon | General | S-system | 5 | Marin-Sanguino et al. (2007) |
-| P2011_branched_SC | Branched SC kinetics | General | S-system | 5 | Pozo et al. (2011) |
-| P2011_linear_pathway_MM | Linear pathway with MM | General | S-system | 4 | Pozo et al. (2011) |
-| PP2005_CSTR_arrhenius | CSTR with Arrhenius | General | GMA (time-varying coefficients) | 7 | Papachristodoulou & Prajna (2005) |
-| PP2005_exponential_exact | Exponential (exact) | General | S-system | 1 | Papachristodoulou & Prajna (2005) |
-| RV1990_central_F | Central F distribution | General | GMA | 4 | Rust & Voit (1990) |
-| RV1990_central_chisquared | Central χ² distribution | GMA | S-system | 5 | Rust & Voit (1990) |
-| RV1990_central_t_density | Central t distribution | General | S-system | 4 | Rust & Voit (1990) |
-| S1988_Monod_chemostat | Monod chemostat | General | GMA | 4 | Savageau (1988) |
-| S1993_mixed_terms | Mixed +/− terms | GMA | S-system | 5 | Savageau (1993) |
-| S1993_sum_radical | Sum with radical | Canonical S-system | S-system | 5 | Savageau (1993) |
-| V1988a_endemic_infection | Endemic infection | GMA | GMA | — | Voit (1988a) |
-| V1988a_sin_exp_system | Sin/exp nonlinearities | General | GMA | 1, 3 | Voit (1988a) |
-| V1988a_weibull_growth | Weibull growth | General | S-system | 7 | Voit (1988a) |
-| V1988b_exponential_ode | Exponential ODE | General | S-system | 1 | Voit (1988b) |
-| V1988b_gma_to_ssystem | GMA to S-system | S-system | S-system | 5 | Voit (1988b) |
-| V1990_cooke_endemic | Cooke endemic model | GMA | GMA | — | Voit (1990) |
-| V1990_endemic_exp_infection | Exponential infection | General | S-system | 1 | Voit (1990) |
-| V1990_kemper_endemic | Kemper endemic model | GMA | GMA | — | Voit (1990) |
-| V1992_blasius_equation | Blasius boundary layer | S-system | S-system | — | Voit (1992) |
-| V1992_log_ode | Logarithmic ODE | General | GMA | 2 | Voit (1992) |
-| V1993_blue_sky | Blue sky catastrophe | General | GMA | 3, 7 | Voit (1993) |
-| V1993_forced_oscillator | Forced oscillator | General | GMA | 3, 7 | Voit (1993) |
-| V1993_rossler_band | Rössler attractor | GMA | S-system | 5 | Voit (1993) |
-| V2005_bistable_gene | Bistable gene expression | General | S-system | 5 | Voit (2005) |
-| Z2022_pll_converter | Phase-locked loop converter | General | GMA | 3 | Zhang et al. (2022) |
+| Model | Original | Recast | Rules |
+|-------|----------|--------|-------|
+| **A2013_power_system_2machine**: 2-machine power system | General | GMA | 3 |
+| **A2013_power_system_3machine**: 3-machine power system | General | GMA | 3 |
+| **A2017_gompertz_recasting**: Gompertz growth | General | S-system | 2 |
+| **DN2015_planetary_motion**: Planetary two-body motion | Canonical S-sys | GMA | — |
+| **DN2015b_michaelis_menten**: Michaelis-Menten kinetics | General | S-system | 4 |
+| **DN2015b_sinx_recasting**: sin(x) dynamics | General | GMA | 3 |
+| **HBF1998_brusselator**: Brusselator | GMA | S-system | 5 |
+| **HBF1998_morse_oscillator**: Morse oscillator | General | S-system | 1 |
+| **HBF1998_semiconductor_exciton**: Semiconductor exciton | General | S-system | 5 |
+| **HBF1998_three_wave**: Three-wave interaction | GMA | GMA | — |
+| **I1988_metabolic_pathway**: Unbranched metabolic pathway | General | S-system | 5 |
+| **KPW2024_exponential_lifting**: Exponential lifting | General | GMA | 1 |
+| **MS2007_MM_to_GMA**: Michaelis-Menten to GMA | General | S-system | 4 |
+| **MS2007_fermentation_yeast**: Yeast fermentation | GMA | GMA | — |
+| **MS2007_tryptophan_operon**: Tryptophan operon | General | S-system | 5 |
+| **P2011_branched_SC**: Branched SC kinetics | General | S-system | 5 |
+| **P2011_linear_pathway_MM**: Linear pathway with MM | General | S-system | 4 |
+| **PP2005_CSTR_arrhenius**: CSTR with Arrhenius | General | GMA (time-var) | 7 |
+| **PP2005_exponential_exact**: Exponential (exact) | General | S-system | 1 |
+| **RV1990_central_F**: Central F distribution | General | GMA | 4 |
+| **RV1990_central_chisquared**: Central χ² distribution | GMA | S-system | 5 |
+| **RV1990_central_t_density**: Central t distribution | General | S-system | 4 |
+| **S1988_Monod_chemostat**: Monod chemostat | General | GMA | 4 |
+| **S1993_mixed_terms**: Mixed +/− terms | GMA | S-system | 5 |
+| **S1993_sum_radical**: Sum with radical | Canonical S-sys | S-system | 5 |
+| **V1988a_endemic_infection**: Endemic infection | GMA | GMA | — |
+| **V1988a_sin_exp_system**: Sin/exp nonlinearities | General | GMA | 1, 3 |
+| **V1988a_weibull_growth**: Weibull growth | General | S-system | 7 |
+| **V1988b_exponential_ode**: Exponential ODE | General | S-system | 1 |
+| **V1988b_gma_to_ssystem**: GMA to S-system | S-system | S-system | 5 |
+| **V1990_cooke_endemic**: Cooke endemic model | GMA | GMA | — |
+| **V1990_endemic_exp_infection**: Exponential infection | General | S-system | 1 |
+| **V1990_kemper_endemic**: Kemper endemic model | GMA | GMA | — |
+| **V1992_blasius_equation**: Blasius boundary layer | S-system | S-system | — |
+| **V1992_log_ode**: Logarithmic ODE | General | GMA | 2 |
+| **V1993_blue_sky**: Blue sky catastrophe | General | GMA | 3, 7 |
+| **V1993_forced_oscillator**: Forced oscillator | General | GMA | 3, 7 |
+| **V1993_rossler_band**: Rössler attractor | GMA | S-system | 5 |
+| **V2005_bistable_gene**: Bistable gene expression | General | S-system | 5 |
+| **Z2022_pll_converter**: Phase-locked loop converter | General | GMA | 3 |
+
+*Source references: See References section at end of document.*
 
 ---
 
@@ -215,28 +219,28 @@ Models for which a recasting has been published in the literature. Sources span 
 
 Additional models from the systems biology and mathematical biology literature, used for expanded testing.
 
-| File | Description | Original | Recast | Rules |
-|------|-------------|----------|--------|-------|
-| Bergman1989 | Minimal glucose model | GMA | S-system | 5 |
-| De_Young1992 | IP3 receptor model | General | S-system | 5 |
-| Dreisigmeyer2008 | Gene expression model | General | GMA | 4 |
-| Fink2000 | Calcium oscillations | General | GMA (time-varying coefficients) | 7 |
-| Gardner2000 | Toggle switch | General | S-system | 4 |
-| Goldbeter1996 | Circadian rhythm | General | GMA | 4 |
-| Kholodenko2000 | MAPK cascade | General | GMA | 4 |
-| Krishna2006 | Circadian clock | General | GMA | 4 |
-| Lander2009 | Morphogen gradient | General | S-system | 5 |
-| Lev_Bar-Or2000 | p53-Mdm2 oscillations | General | GMA | 4 |
-| Lipniacki2006 | NF-κB signaling | General | S-system | 4 |
-| Mangan2003 | Feed-forward loop | General | S-system | 4 |
-| McMillen2002 | Repressilator | General | GMA | 4 |
-| Mueller2006 | Circadian model | General | S-system | 5 |
-| Ozbudak2004 | Gene expression noise | General | S-system | 5 |
-| Rosenfeld2002 | Autoregulation | General | S-system | 4 |
-| Samoilov2005 | Signal transduction | GMA | S-system | 5 |
-| Selkov1968 | Glycolytic oscillator | GMA | S-system | 5 |
-| Weber2018 | Quorum sensing | General | GMA (time-varying coefficients) | 7 |
-| Xiong2018 | Cell cycle model | General | GMA | 4 |
+| Model | Original | Recast | Rules |
+|-------|----------|--------|-------|
+| **Bergman1989**: Minimal glucose model | GMA | S-system | 5 |
+| **De_Young1992**: IP3 receptor model | General | S-system | 5 |
+| **Dreisigmeyer2008**: Gene expression model | General | GMA | 4 |
+| **Fink2000**: Calcium oscillations | General | GMA (time-var) | 7 |
+| **Gardner2000**: Toggle switch | General | S-system | 4 |
+| **Goldbeter1996**: Circadian rhythm | General | GMA | 4 |
+| **Kholodenko2000**: MAPK cascade | General | GMA | 4 |
+| **Krishna2006**: Circadian clock | General | GMA | 4 |
+| **Lander2009**: Morphogen gradient | General | S-system | 5 |
+| **Lev_Bar-Or2000**: p53-Mdm2 oscillations | General | GMA | 4 |
+| **Lipniacki2006**: NF-κB signaling | General | S-system | 4 |
+| **Mangan2003**: Feed-forward loop | General | S-system | 4 |
+| **McMillen2002**: Repressilator | General | GMA | 4 |
+| **Mueller2006**: Circadian model | General | S-system | 5 |
+| **Ozbudak2004**: Gene expression noise | General | S-system | 5 |
+| **Rosenfeld2002**: Autoregulation | General | S-system | 4 |
+| **Samoilov2005**: Signal transduction | GMA | S-system | 5 |
+| **Selkov1968**: Glycolytic oscillator | GMA | S-system | 5 |
+| **Weber2018**: Quorum sensing | General | GMA (time-var) | 7 |
+| **Xiong2018**: Cell cycle model | General | GMA | 4 |
 
 ---
 
