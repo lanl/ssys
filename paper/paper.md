@@ -29,7 +29,7 @@ The software provides a command-line interface for batch processing, a three-tes
 
 # Statement of need
 
-S-systems are a canonical ODE form developed within Biochemical Systems Theory [@Savageau1969; @SavageauVoit1987]. Any ODE system composed of elementary functions can, in principle, be exactly recast into S-system or GMA form [@SavageauVoit1987]. The canonical S-system representation offers several advantages: steady-state equations become linear in log-space, enabling algebraic analysis of identifiability and sensitivity; the uniform power-law structure facilitates parameter estimation via linear regression techniques [@Daniels2015]; and exact recast models can serve as ground truth for validating structure-learning algorithms such as SINDy [@Brunton2016], which infer governing equations from data using sparse regression.
+S-systems are a canonical ODE form developed within Biochemical Systems Theory [@Savageau1976; @SavageauVoit1987]. Any ODE system composed of elementary functions can, in principle, be exactly recast into S-system or GMA form [@SavageauVoit1987]. The canonical S-system representation offers several advantages: steady-state equations become linear in log-space, enabling algebraic analysis of identifiability and sensitivity; the uniform power-law structure facilitates parameter estimation via linear regression techniques [@Daniels2015]; and exact recast models can serve as ground truth for validating structure-learning algorithms that infer governing equations from data [@Daniels2015b].
 
 Despite the theoretical utility of S-systems, no general-purpose, open-source tool previously existed to perform exact recasting of arbitrary ODE models. `ssys` fills this gap by providing:
 
@@ -42,7 +42,7 @@ The package enables researchers to convert published models into canonical form 
 
 # State of the field
 
-Antimony is a widely used human-readable modeling language for systems biology [@Smith2009Antimony], with transparent interoperability to SBML [@Keating2020SBML]. The S-system formalism is classical [@Savageau1969; @Voit2013], but general-purpose recasting tools are scarce. We are not aware of an open-source package that ingests arbitrary Antimony/SBML ODEs and returns an exact S-system with explicit state mappings and correctness certificates. `ssys` aims to be that missing bridge.
+Antimony is a widely used human-readable modeling language for systems biology [@Smith2009Antimony; @Smith2024Antimony], with transparent interoperability to SBML [@Keating2020SBML]. The S-system formalism is classical [@Savageau1976; @Voit2013], but general-purpose recasting tools are scarce. We are not aware of an open-source package that ingests arbitrary Antimony/SBML ODEs and returns an exact S-system with explicit state mappings and correctness certificates. `ssys` aims to be that missing bridge.
 
 # Functionality
 
@@ -67,7 +67,7 @@ ssys-recast --manifest models.manifest --outdir output --validate
 
 # Acknowledgments
 
-We thank Michael A. Savageau for foundational work on S-systems and inspiration for this project.
+This work was inspired by a phone call with Michael A. Savageau in 2025.
 
 This work was supported by the National Institutes of Health (NIH) National Institute of General Medical Sciences (NIGMS) under grant R01GM111510 and by the U.S. Department of Energy through the Los Alamos National Laboratory (LANL). LANL is operated by Triad National Security, LLC, for the National Nuclear Security Administration of the U.S. Department of Energy (Contract No. 89233218CNA000001).
 
