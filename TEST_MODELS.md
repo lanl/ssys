@@ -1,3 +1,9 @@
+---
+title: Test Model Collection
+source: TEST_MODELS.md
+date: 2025-12-30
+---
+
 # Test Model Collection
 
 This document provides an overview of the test model collection used for validating and benchmarking the `ssys` recasting tool. All models are specified in [Antimony](https://antimony.sourceforge.io/) format.

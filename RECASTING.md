@@ -1,3 +1,9 @@
+---
+title: Recasting ODEs into S-system Canonical Form
+source: RECASTING.md
+date: 2025-12-30
+---
+
 # Recasting ODEs into S-system Canonical Form
 
 This document explains the theory and practice of **exact algebraic recasting**—transforming ordinary differential equation (ODE) models into canonical S-system or Generalized Mass Action (GMA) form while preserving dynamics exactly on the invariant constraint manifold (given consistent initial conditions).
