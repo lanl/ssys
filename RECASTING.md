@@ -1,22 +1,23 @@
 # Recasting ODEs into S-system Canonical Form
 
-This document explains the theory and practice of **exact algebraic recasting**—transforming ordinary differential equation (ODE) models into canonical S-system or Generalized Mass Action (GMA) form while preserving dynamics exactly.
+This document explains the theory and practice of **exact algebraic recasting**—transforming ordinary differential equation (ODE) models into canonical S-system or Generalized Mass Action (GMA) form while preserving dynamics exactly on the invariant constraint manifold (given consistent initial conditions).
 
 ## Contents
 
 1. [What is Recasting?](#what-is-recasting)
 2. [The Hierarchy of ODE Forms](#the-hierarchy-of-ode-forms)
-3. [Recasting Rules](#recasting-rules)
-4. [When Does Recasting Succeed?](#when-does-recasting-succeed)
-5. [Worked Examples from the Test Collection](#worked-examples-from-the-test-collection)
-6. [Benefits of Canonical Form](#benefits-of-canonical-form)
-7. [References](#references)
+3. [Positivity Requirements](#positivity-requirements)
+4. [Recasting Rules](#recasting-rules)
+5. [When Does Recasting Succeed?](#when-does-recasting-succeed)
+6. [Worked Examples from the Test Collection](#worked-examples-from-the-test-collection)
+7. [Benefits of Canonical Form](#benefits-of-canonical-form)
+8. [References](#references)
 
 ---
 
 ## What is Recasting?
 
-**Recasting** is an algebraic transformation that converts an arbitrary ODE system into an equivalent system with a specific canonical structure. The transformation is *exact*: the original and recast systems have identical dynamics for the original state variables.
+**Recasting** is an algebraic transformation that converts an ODE system into a system with a specific canonical structure in higher dimension. The transformation is *exact*: the original and recast systems have identical dynamics for the original state variables **when restricted to the invariant constraint manifold** defined by the auxiliary variable definitions and consistent initial conditions.
 
 ### The S-system Canonical Form
 
@@ -25,15 +26,19 @@ An **S-system** is a system of ODEs where each equation has exactly two terms—
 $$\frac{dX_i}{dt} = \alpha_i \prod_j X_j^{g_{ij}} - \beta_i \prod_j X_j^{h_{ij}}$$
 
 where:
-- $\alpha_i, \beta_i > 0$ are rate constants
+- $\alpha_i, \beta_i \geq 0$ are rate constants (nonnegative)
 - $g_{ij}, h_{ij} \in \mathbb{R}$ are kinetic orders (exponents)
 - $X_j > 0$ are state variables
+
+A **strict canonical S-system** additionally requires $\alpha_i, \beta_i > 0$ (strictly positive), achieved via ε-splitting when one coefficient would otherwise be zero. The Savageau & Voit (1987) theorem proves recasting to S-system form (allowing zero coefficients); strict canonical form is an optional convention.
 
 This form was developed by M.A. Savageau as part of Biochemical Systems Theory (BST) in the 1960s–1980s.
 
 ### Historical Context
 
-Savageau & Voit (1987) proved a remarkable result: **any ODE system composed of elementary functions can be exactly recast into S-system form**, given sufficient auxiliary variables. This means S-systems are not a narrow special case but a universal framework for nonlinear dynamics.
+Savageau & Voit (1987) proved a foundational result: a broad class of ODE systems can be transformed via smooth change of variables into an S-system in higher dimension. Specifically, the theorem applies to ODEs whose right-hand sides are built from **elementary functions** (polynomials, rationals, exp, log, sin, cos, etc.) via sums, products, and nested compositions. ODEs involving special functions, integrals, or non-elementary constructs are not guaranteed by the theorem. However, SV87 notes that many special functions (including elliptic integrals and Bessel functions) can nonetheless be represented as S-systems—either because they satisfy ODEs that happen to be recastable, or via Taylor-series approximation where each truncation is an elementary function. The authors explicitly state their theorem provides only a *minimum estimate* of the range of systems that can be recast; the full range remains an open question.
+
+**Important caveat**: The recast system is dynamically equivalent to the original *on an invariant constraint manifold* determined by the auxiliary variable definitions. Recasting introduces m−n constraints (where m is the new dimension and n the original), which must be satisfied by initial conditions. Trajectories are restricted to a reference manifold chosen by these initial conditions.
 
 The test collection in `test_models2/` contains 28 examples from this foundational paper, demonstrating recasting across diverse domains: exponential decay, oscillators, chemical reactors, orbital mechanics, and boundary layer equations.
 
@@ -44,7 +49,7 @@ The test collection in `test_models2/` contains 28 examples from this foundation
 ODE systems can be classified by their right-hand-side structure:
 
 ```
-General ODE  ⊃  GMA  ⊃  S-system  ⊃  Canonical S-system
+General ODE  ⊃  GMA  ⊃  S-system  ⊃  Strict canonical S-system
 ```
 
 ### General ODE
@@ -73,7 +78,7 @@ X' = a·X - b·X·Y - c·X·Z
 
 ### S-system
 
-Two power-law terms per equation (production minus degradation), with zero terms allowed.
+Two power-law terms per equation (production minus degradation), with zero and constant terms allowed.
 
 **Example** (logistic growth):
 ```
@@ -96,6 +101,57 @@ Canonical: X' = ε·X - (k+ε)·X    (for small ε > 0)
 
 ---
 
+## Positivity Requirements
+
+S-system variables must be **strictly positive** ($X_j > 0$) because the power-law terms $X_j^{g_{ij}}$ require positive bases when exponents are non-integer or negative. This is not merely a numerical convenience—it is structural.
+
+### Translation to the Positive Orthant
+
+When original variables can be zero or negative, recasting requires **translation** to ensure positivity:
+
+1. **Variables that are always negative**: Use sign change $X \to -Z$
+2. **Variables bounded below by $c < 0$**: Translate $X \to Z + c$ where $Z = X - c > 0$
+3. **Variables bounded above by $c > 0$**: Define $Z = c - X > 0$
+4. **Unbounded variables**: Replace $X$ with the difference of two positive variables, e.g., $X = X_{+} - X_{-}$ where both $X_+, X_- > 0$
+
+Savageau & Voit (1987) explicitly use these translations in their examples (e.g., Van der Pol: "translate the variables with positive parameters $p$ and $q$").
+
+**Important**: Selecting appropriate translation constants requires knowledge (or assumption) of bounds on the original variables over the integration interval. If the original variable $X$ can cross below $-p$ during evolution, a translation $X \to Z = X + p$ will fail (Z becomes non-positive). In practice, one either:
+- Uses prior knowledge of variable ranges to select safe constants
+- Validates a posteriori that variables remain positive throughout integration
+- Uses the unbounded strategy (replacing $X$ with $X_+ - X_-$), which handles any range but doubles the variables
+
+### Initial Condition Constraints
+
+When auxiliary variables are introduced, their initial conditions must be **consistent with the definitions**. For example:
+- If $D = K_m + S$ and $S(0) = S_0$, then $D(0) = K_m + S_0$
+- If $E = \exp(-k \cdot T)$ and $T(0) = 0$, then $E(0) = 1$
+
+These constraints define the **reference manifold** on which the recast system is equivalent to the original. Choosing inconsistent initial conditions produces spurious trajectories.
+
+### Implications for `ssys`
+
+The `ssys` tool supports some automatic transformations for positivity:
+- **ε-splitting** (in `--mode canonical`): Ensures all α, β > 0 by adding slack terms
+- **Denominator lifting** (Rule 4a): Introduces auxiliaries for rational expressions
+- **Initial condition adjustment**: Can be configured to replace zero initial conditions with a small positive value via `EPS_INIT` comments in model files
+
+**User responsibility**: Translation of non-positive variables to the positive orthant is *not* automatic. If the original model contains variables that can become zero or negative during integration, the user must pre-process the model with appropriate translations. If integration produces non-positive values in auxiliary variables, the recast system will produce incorrect results or fail.
+
+### Numerical Drift Warning
+
+The recast system is effectively a **constrained dynamical system**—auxiliary variables must satisfy their defining algebraic relations throughout integration. When integrating the lifted ODE in floating point, numerical errors can cause **drift off the constraint manifold**, leading to divergence between the recast and original systems.
+
+**Remedies**:
+1. **Back-substitution**: Periodically recompute auxiliary variables from their definitions (e.g., if $Y = \exp(X)$, reset $Y \leftarrow \exp(X)$ after each step)
+2. **Projection**: Project the state onto the constraint manifold at each step
+3. **DAE formulation**: Treat the system as a differential-algebraic equation with stabilized constraints
+4. **Validation**: Compare trajectories of original and recast systems to detect drift
+
+In our test runs on the 117-model collection (see [TEST_MODELS.md](TEST_MODELS.md)), naive integration with standard tolerances sufficed because integration intervals are short (typically T_END ≤ 200). You can verify this yourself by running `ssys validate` on any model, which compares original and recast trajectories and reports the maximum scaled error. For long-time integration or sensitive systems, constraint management may be necessary.
+
+---
+
 ## Recasting Rules
 
 Recasting proceeds by applying a set of algebraic rules to eliminate non-polynomial terms and reduce multi-term sums. Each rule introduces **auxiliary variables** with their own ODEs derived via the chain rule.
@@ -105,7 +161,7 @@ Recasting proceeds by applying a set of algebraic rules to eliminate non-polynom
 > - Rule 4: `lift_rational_functions()`
 > - Rule 5: Product rule (implicit in term handling)
 > - Rule 6: ε-splitting (in output formatting)
-> - Rule 7: `add_dummy_for_constants()` (canonical mode only)
+> - Rule 7: Clock state via `lift_time_functions_to_autonomous()`
 
 ### Rule 1: Exponential Lifting
 
@@ -168,15 +224,19 @@ Lifted:      X' = X·C,  where C = cos(t), S = sin(t)
 | Model | Application |
 |-------|-------------|
 | `m26_cos_growth` ↔ `S1987_A3_cos_growth` | Basic cosine dynamics |
-| `m27_spiral` ↔ `S1987_A5_spiral` | Spiral curves (sin/cos parametric) |
-| `m28_torus` ↔ `S1987_B4_torus` | Torus surface dynamics |
+| `m27_spiral` ↔ `S1987_A5_spiral` | Spiral curves (sin/cos parametric) → GMA |
+| `m28_torus` ↔ `S1987_B4_torus` | Torus surface dynamics → GMA |
 | `A2013_power_system_2machine` | Power system swing equations |
 | `A2013_power_system_3machine` | 3-machine power network |
 | `Z2022_pll_converter` | Phase-locked loop (PLL) dynamics |
 | `DN2015b_sinx_recasting` | sin(x) recasting for inference |
 | `V1988a_sin_exp_system` | Combined sin/exp nonlinearities |
 
-### Rule 4: Sum Handling (Denominator Lifting)
+### Rule 4: Sum Handling
+
+Sum handling involves two distinct operations:
+
+#### 4a: Decomposition (Denominator Lifting)
 
 **Pattern**: Rational expressions with sums in denominators: $\frac{f(X)}{g(X) + h(X)}$
 
@@ -191,6 +251,27 @@ Lifted:      Introduce D = ν + t²
              D' = 2·t·t' = 2·t    (since t' = 1)
              f' = -(ν+1)·t·D⁻¹·f  (now power-law in D)
 ```
+
+#### 4b: Canonical Sum Reduction (Product Splitting)
+
+**Pattern**: Equation with $m$ terms (where $m > 2$) that needs reduction to S-system form
+
+**Transformation** (from SV87 §4D): Replace a variable $X_i$ by the product of two new variables $X_{n+1} \cdot X_{n+2}$, then identify terms to separate the sum. This reduces the term count by one while increasing dimension by one.
+
+**Example** (three-term sum → two-term):
+```
+Original:    X' = A·X^a - B·X^b - C·X^c       (3 terms)
+
+Replace:     X = Y·Z  (product of two new variables)
+Identify:    Y' = A·Y^a·Z^{a-1} - B·Y^b·Z^{b-1}
+             Z' = -C·Y^{c-1}·Z^c
+
+Result:      Two equations, each with ≤2 terms
+```
+
+This step is repeated until each equation has at most two terms. The initial conditions $Y(0)$ and $Z(0)$ must satisfy $Y(0) \cdot Z(0) = X(0)$, which defines the reference manifold. In multi-basin systems, different consistent initializations satisfying the product constraint correspond to different sections of the reference manifold, each with potentially distinct dynamics.
+
+**Note**: This systematic reduction is more structured than simply "introducing a sum variable." The `ssys` implementation uses denominator lifting (4a) but does not currently implement the full canonical sum reduction (4b), which is why some GMA models do not reach S-system form under current `ssys`. Implementing Rule 4b would enable these models to reach strict S-system form at the cost of increased dimension.
 
 **Test models demonstrating sum handling**:
 | Model | Sum Structure | Outcome |
@@ -217,6 +298,8 @@ Introduce:   P = x·y (product auxiliary)
              P' = x'·y + x·y' (chain rule)
 ```
 
+**Caveat**: Introducing product auxiliaries is **not intrinsically simplifying**. If $X'$ and $Y'$ are multi-term expressions, then $P' = X' \cdot Y + X \cdot Y'$ produces even more terms. The product rule is useful for certain algebraic manipulations but may require subsequent sum reduction (Rule 4b) to reach S-system form.
+
 **Test models**:
 | Model | Description |
 |-------|-------------|
@@ -235,6 +318,15 @@ X' = ε·X - (k+ε)·X                  (canonical two-term)
 ```
 
 The dynamics are identical since the ε terms cancel.
+
+**Important**: ε-splitting is an **optional post-processing convention** for ensuring both α and β coefficients are strictly positive. It is *not* part of Savageau & Voit's original theorem, which proves recasting to S-system form (allowing zero coefficients). The `ssys` tool uses ε-splitting only in `--mode canonical`.
+
+**Numerical considerations**: While analytically benign (the ε terms cancel exactly), ε-splitting can introduce numerical artifacts:
+- Very small ε may cause precision issues
+- Moderately sized ε changes the apparent rate constants
+- In stiff systems, ε-splitting may affect step-size selection
+
+For most purposes, `--mode simplified` (default) produces equivalent results without these concerns.
 
 **Test models using ε-splitting**:
 | Model | Reason for Splitting |
@@ -267,78 +359,62 @@ This converts non-autonomous systems (time-dependent) to autonomous systems (sta
 | `m26_cos_growth` ↔ `S1987_A3_cos_growth` | cos(t) oscillation |
 | `A2013_power_system_2machine` | sin(δ-θ) with time evolution |
 
-### Rule 8: Constant Term Handling (Canonical Mode)
-
-**Pattern**: Constant term in ODE (not involving any state variables)
-
-**Transformation**: Introduce `dummy_const` variable where `dummy_const = 1` always.
-
-**Example**:
-```
-Original:    X' = A - k·X        (A is a constant)
-Transformed: X' = A·dummy_const^0 - k·X
-```
-
-Since `dummy_const^0 = 1` for all time, this preserves mathematical equivalence while expressing the constant in power-law form. This is used only in canonical mode for strict S-system representation.
-
-**Note**: In simplified mode, `ssys` outputs constant terms directly (e.g., `T' = 1`) without dummy variables, which is valid GMA but not strict S-system.
-
 ---
 
 ## When Does Recasting Succeed?
 
 Based on the test collection results (117 models), we can characterize when different outcomes occur:
 
-### Achieves S-system Form (61 models)
+### Achieves S-system Form (72 models)
 
 Recasting reaches the two-term S-system form when:
 
-1. **Model is already S-system** (19 models): No transformation needed
+1. **Model is already S-system**: No transformation needed
    - Examples: `m01_exp_decay`, `m02_logistic`, `m03_Lotka_Volterra`, `S1987_B5_rigid_body`
 
-2. **GMA with pairable terms** (20 models): Terms can be combined via lifting
+2. **GMA with pairable terms**: Terms can be combined via lifting
    - Examples: `m04_mass_action_branch`, `m22_Brusselator`, `S1987_E2_van_der_pol`
 
-3. **General ODE with reducible structure** (22 models): Lifting produces ≤2 terms per equation
-   - Examples: `m17_central_t`, `m26_cos_growth`, `S1987_D1-D5_orbit` (all 5 eccentricity variants)
+3. **General ODE with reducible structure**: Lifting produces ≤2 terms per equation
+   - Examples: `m17_central_t`, `m13_composite_func_decomp`, `KPW2024_exponential_lifting`
 
-### Stays at GMA Form (37 models)
+### Stays at GMA Form (44 models)
 
-Recasting stops at GMA (3+ terms per equation) when:
+Recasting stops at GMA (3+ terms per equation) when the current implementation does not reduce multi-term sums further:
 
-1. **Irreducible multi-term sums**: Cannot be factored into ≤2 terms
+1. **Multi-term sums not reduced**: Rule 4b (canonical sum reduction via product splitting) is not applied by `ssys`. These models *could* reach S-system form with increased dimension, but the implementation stops at GMA.
    - Examples: `m11_Monod_chemostat`, `m15_tryptophan_operon`, `m19_RM_predator_prey`
 
-2. **Multiple independent saturation terms**: Each introduces an auxiliary but total exceeds 2
+2. **Multiple independent saturation terms**: Each introduces an auxiliary, but the resulting equation still has 3+ terms
    - Examples: `m25_CSTR` ↔ `S1987_5_CSTR`, `S1987_E1_bessel`, `S1987_E3_duffing`
 
-3. **Complex feedback structures**: GMA endemic infection models
+3. **Complex feedback structures**: GMA endemic infection models where multi-term structure persists
    - Examples: `V1988a_endemic_infection`, `V1990_kemper_endemic`, `V1990_cooke_endemic`
 
-### Remains General Form (19 models)
+### GMA with Time-Varying Coefficients (1 model)
 
-The model stays in General form when:
+Some models achieve GMA structure but have coefficients that depend on time:
 
-1. **Coupled rational functions**: Multiple Michaelis-Menten or Hill terms that cannot be fully decomposed
-   - Examples: `m14_Michaelis_Menten_prod_deg`, `MS2007_tryptophan_operon`, `I1988_metabolic_pathway`
-
-2. **Complex sigmoidal kinetics**: Nested saturations
-   - Examples: `V2005_bistable_gene`, `P2011_branched_SC`, most of `test_models4/`
-
-3. **Time-dependent constructs**: Complex coefficient variations
-   - Examples: `m29_time_varying_beta` (exp-based step functions remain complex)
+- **`m29_time_varying_beta`**: SIR model with β(t) via smooth step functions. The model is recast to power-law form, but the coefficient `beta_t` remains a function of clock state T via assignment rules, so it's not strict constant-coefficient GMA
 
 ### Summary by Directory
 
-| Directory | → S-system | → GMA | → General | Total |
-|-----------|------------|-------|-----------|-------|
-| `test_models1/` | 17 | 8 | 4 | 29 |
-| `test_models2/` | 19 | 9 | 0 | 28 |
-| `test_models3/` | 17 | 15 | 8 | 40 |
-| `test_models4/` | 8 | 5 | 7 | 20 |
-| **Total** | **61** | **37** | **19** | **117** |
+| Directory | → S-system | → GMA | → GMA (time-varying) | Total |
+|-----------|------------|-------|----------------------|-------|
+| `test_models1/` | 21 | 7 | 1 | 29 |
+| `test_models2/` | 18 | 10 | 0 | 28 |
+| `test_models3/` | 22 | 17 | 1 | 40 |
+| `test_models4/` | 11 | 7 | 2 | 20 |
+| **Total** | **72** | **41** | **4** | **117** |
 
-Note: `test_models2/` (Savageau & Voit 1987 examples) achieves 100% recasting (no models remain General), demonstrating that the foundational examples were chosen to showcase successful transformations.
+**Classification Notes**:
+- *S-system*: Successfully recast to canonical S-system form (1-2 monomial terms per equation)
+- *GMA*: Generalized Mass Action form (multiple monomials with constant coefficients)
+- *GMA (time-varying)*: Power-law structure but with coefficients that depend on clock state T
+
+**Provenance**: These counts were computed by running `ssys recast --mode simplified` on all 117 models in `test_models{1,2,3,4}/` and classifying output based on the presence of "S-SYSTEM DYNAMICS" (S-system), "GMA" header (GMA), or time-dependent assignment rules in the recast `.ant` files. See [TEST_MODELS.md](TEST_MODELS.md) for per-model classifications.
+
+Note: All 117 models successfully process through `ssys` — none remain in General form. While some models could theoretically reach strict S-system form via more complex transformations (canonical sum reduction, Rule 4b), `ssys` stops at GMA for multi-term equations.
 
 ---
 
@@ -430,9 +506,9 @@ X' = (μmax·S/(Km + S))·X - D·X
 2. Then: $M' = S' = D(S_0 - S) - ...$
 3. Rewrite MM term as: $S/M = S \cdot M^{-1}$ (power-law!)
 
-**Result**: GMA form (but 3+ terms remain)
+**Result**: GMA form (3+ terms remain after denominator lifting)
 
-**Classification**: General → GMA (cannot reach S-system due to multi-term structure)
+**Classification**: General → GMA. In principle, reaching S-system form is possible via sum reduction (Rule 4b), which would further increase dimension; `ssys` does not currently implement this step.
 
 ---
 
@@ -486,18 +562,19 @@ R' = (γ+ε)·I - ε·I            (net = γ·I)
 
 These 5 models represent the same orbital mechanics problem with different eccentricities (e = 0.1, 0.3, 0.5, 0.7, 0.9):
 
-**Original** (radial coordinates):
+**Original** (Cartesian coordinates):
 ```
-r' = v_r
-θ' = L/(m·r²)
-v_r' = L²/(m·r³) - GM/r²
+Z1' = Z3
+Z2' = Z4
+Z3' = -Z1·(Z1² + Z2²)^(-3/2)
+Z4' = -Z2·(Z1² + Z2²)^(-3/2)
 ```
 
-**Recasting**: The `1/r²` and `1/r³` terms are already power-law! The angular momentum dynamics lift cleanly.
+**Recasting**: The term $(Z_1^2 + Z_2^2)^{-3/2}$ requires lifting via an auxiliary $Y = Z_1^2 + Z_2^2$. The resulting system has 5 variables but remains GMA because $Y' = 2Z_1 Z_3 + 2Z_2 Z_4$ introduces a multi-term sum.
 
-**All 5 variants**: General → S-system
+**All 5 variants**: General → GMA
 
-This family demonstrates that structural recasting outcomes are often independent of parameter values—only the equation structure matters.
+This family demonstrates that the algebraic recasting steps are symbolic/structural and independent of parameter values—only the equation structure determines which lifting rules apply. However, the *validity* of the recast system depends on trajectories staying in the assumed domain (positive orthant), which can depend on parameters and initial conditions. While Savageau & Voit (1987) show these orbit problems can be fully recast to S-system via more complex transformations (8 variables with product splitting), `ssys` stops at GMA.
 
 ---
 
@@ -505,33 +582,38 @@ This family demonstrates that structural recasting outcomes are often independen
 
 ### Log-Linear Structure
 
-In S-system form, taking logarithms converts multiplicative power-law dynamics into additive linear combinations:
+Each *monomial term* in an S-system is log-linear:
 
-$$\log(X_i') = \log(\alpha_i) + \sum_j g_{ij} \log(X_j) + \text{(correction terms)}$$
+$$\log\left(\alpha_i \prod_j X_j^{g_{ij}}\right) = \log(\alpha_i) + \sum_j g_{ij} \log(X_j)$$
+
+**Note**: One cannot directly take the log of $X_i'$ because the net derivative (production minus degradation) can be negative. However, at **steady state**, production equals degradation:
+
+$$\alpha_i \prod_j X_j^{g_{ij}} = \beta_i \prod_j X_j^{h_{ij}}$$
+
+Taking logs yields linear equations in $\log(X_j)$:
+
+$$\log(\alpha_i) + \sum_j g_{ij} \log(X_j) = \log(\beta_i) + \sum_j h_{ij} \log(X_j)$$
 
 This enables:
-- **Linear regression for parameter estimation**: The exponents $g_{ij}$ appear linearly in log-space
-- **Algebraic steady-state analysis**: Setting $X_i' = 0$ yields linear equations in log-transformed variables
+- **Algebraic steady-state analysis**: Linear equations in log-transformed variables
+- **Term-wise parameter estimation**: Methods like alternating regression exploit log-linearity of individual monomial terms rather than the net derivative
 - **Sensitivity analysis**: Log-gains have direct interpretation as elasticity coefficients
 
-### Identifiability
+### Parameter Estimation
 
-S-system parameters are often **structurally identifiable** from time-series data because the log-linear structure separates the roles of rate constants and exponents. This was exploited by Daniels & Nemenman (2015) for efficient network inference.
+The monomial log-linearity of S-systems enables convenient regression-style estimation of term parameters in certain settings. For example, alternating regression methods can separately fit production and degradation terms. However, whether parameters are actually identifiable depends on observability (which states are measured), experiment design, and potential model symmetries/degeneracies.
 
-**Relevant test models**: The papers behind `DN2015_planetary_motion`, `DN2015b_michaelis_menten`, and `DN2015b_sinx_recasting` demonstrate S-system-based inference methods.
+**Relevant test models**: The papers behind `DN2015_planetary_motion`, `DN2015b_michaelis_menten`, and `DN2015b_sinx_recasting` demonstrate S-system-based inference methods (Daniels & Nemenman 2015).
 
 ### Ground Truth for Structure Learning
 
-Exactly recast models provide **benchmarks** for symbolic regression and structure-learning algorithms like SINDy. One can:
+Exactly recast models provide **benchmarks** for symbolic regression and structure-learning algorithms. One can:
 
 1. Take a model from `test_models4/` (e.g., `Selkov1968` glycolytic oscillator)
 2. Recast it exactly with `ssys`
 3. Simulate synthetic data
-4. Test whether SINDy or other methods recover the known structure
+4. Test whether data-driven methods recover the known structure
 
-### Numerical Methods
-
-The uniform power-law structure of S-systems enables specialized numerical integrators. Some historical S-system solvers achieved faster integration than general ODE solvers by exploiting the monomial structure.
 
 ---
 
@@ -546,8 +628,6 @@ The uniform power-law structure of S-systems enables specialized numerical integ
 - Hernández-Bermejo B, Fairén V, Brenig L (1998). Algebraic recasting of nonlinear systems of ODEs into universal formats. *J Phys A: Math Gen* 31:2415–2430. **[HBF1998_* models]**
 
 - Daniels BC, Nemenman I (2015). Efficient inference of parsimonious phenomenological models of cellular dynamics using S-systems and alternating regression. *PLOS ONE* 10(3):e0119821. **[DN2015b_* models]**
-
-- Brunton SL, Proctor JL, Kutz JN (2016). Discovering governing equations from data by sparse identification of nonlinear dynamical systems. *PNAS* 113:3932–3937.
 
 - Marin-Sanguino A, et al. (2007). Optimization of biotechnological systems through geometric programming. *Theor Biol Med Model* 4:38. **[MS2007_* models]**
 
