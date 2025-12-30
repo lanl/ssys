@@ -18,13 +18,14 @@ ssys/
     validator.py          # Mathematical correctness validation
     notebook_helpers.py   # Jupyter notebook generation utilities
     ode_backends/         # ODE solver backend (RoadRunner/CVODE)
-  test_models1/           # 29 core test models
-  test_models2a/          # Literature models (passing)
-  test_models2b/          # Literature models (advanced)
-  test_models3/           # BioModels-derived test cases
-  pathological_models/    # Numerically challenging models
+  test_models1/           # 29 integration testing models
+  test_models2/           # 28 models from Savageau & Voit (1987)
+  test_models3/           # 40 models with published recastings
+  test_models4/           # 20 systems biology models
   tests/                  # Unit tests
   literature/             # Reference papers on S-systems
+  RECASTING.md            # Recasting theory and rules
+  TEST_MODELS.md          # Test model collection documentation
   README.md               # This file
 ```
 
@@ -105,8 +106,8 @@ ssys-recast --manifest test_models1/models.manifest \
 
 Plain text file with one Antimony file path per line:
 ```
-test_models1/01_exp_decay.ant
-test_models1/02_logistic.ant
+m01_exp_decay.ant
+m02_logistic.ant
 # Lines starting with # are ignored
 ```
 
@@ -177,11 +178,13 @@ Options:
 
 | Directory | Description | Count |
 |-----------|-------------|-------|
-| `test_models1/` | Core test suite | 29 |
-| `test_models2a/` | Literature models (passing) | ~40 |
-| `test_models2b/` | Literature models (advanced) | ~15 |
-| `test_models3/` | BioModels-derived | ~17 |
-| `pathological_models/` | Numerically challenging | 3 |
+| `test_models1/` | Integration testing models | 29 |
+| `test_models2/` | Savageau & Voit (1987) examples | 28 |
+| `test_models3/` | Models with published recastings | 40 |
+| `test_models4/` | Systems biology models | 20 |
+| **Total** | | **117** |
+
+See [TEST_MODELS.md](TEST_MODELS.md) for complete model documentation and [RECASTING.md](RECASTING.md) for recasting theory.
 
 ### Viewing the Notebook Reports
 
@@ -234,7 +237,7 @@ Each model entry shows:
 import ssys
 
 # Load and parse model (SBML-based parser)
-text = open("test_models1/01_exp_decay.ant").read()
+text = open("test_models1/m01_exp_decay.ant").read()
 sym = ssys.parse_antimony_via_sbml(text)
 
 # Recast to S-system (simplified mode)
@@ -242,11 +245,11 @@ result = ssys.recast_to_ssystem(sym, mode="simplified")
 
 # Generate Antimony output
 out = ssys.ssystem_to_antimony(result, 
-                                model_name="exp_decay_recast",
+                                model_name="m01_exp_decay_recast",
                                 mode="simplified")
 
 # Save
-open("exp_decay_recast.ant", "w").write(out)
+open("m01_exp_decay_recast.ant", "w").write(out)
 ```
 
 ### Classification
@@ -270,8 +273,8 @@ print(f"Output: {output_class.value}")
 from ssys.validator import validate_recast_pair
 
 report = validate_recast_pair(
-    original_file="test_models1/01_exp_decay.ant",
-    recast_file="out_test_models1/01_exp_decay_recast.ant",
+    original_file="test_models1/m01_exp_decay.ant",
+    recast_file="out_test_models1/m01_exp_decay_recast.ant",
     parser="sbml"
 )
 
@@ -394,7 +397,7 @@ For models where exact zero handling is critical (e.g., Bergman minimal model), 
 
 ### Example 1: Exponential Decay
 
-**Input** (`01_exp_decay.ant`):
+**Input** (`m01_exp_decay.ant`):
 ```
 model exponential_decay()
   X = 1.0
