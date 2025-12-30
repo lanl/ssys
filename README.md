@@ -303,7 +303,7 @@ See [RECASTING.md](RECASTING.md) for detailed recasting theory, rules, and worke
 
 ## Antimony Subset Supported
 
-✅ **Supported:**
+**Supported:**
 - Reactions: `A + B -> C; k*A*B`
 - Initializations: `X = 2.5`, `k = 0.1`
 - Explicit rate rules: `X' = ...`
@@ -315,12 +315,12 @@ See [RECASTING.md](RECASTING.md) for detailed recasting theory, rules, and worke
   - As input: substituted into ODEs before recasting
   - As output: generated as observable variables to reconstruct original variables from auxiliaries
 
-❌ **Not yet supported:**
+**Not yet supported:**
 - Modules
 - Events and piecewise functions
 - Non-positive variables (requires preprocessing)
 
-✅ **Simulation metadata:**
+**Simulation metadata:**
 - `@SIM` comments specify simulation parameters:
   ```antimony
   // @SIM T_START=0 T_END=100 N_STEPS=500 EPS_INIT=1e-6

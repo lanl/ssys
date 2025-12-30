@@ -6,8 +6,8 @@
 set -e  # Exit on error
 
 # Common options
-# Note: -V tables=longtable helps with wide tables, fontsize=11pt improves readability
-COMMON_OPTS="--pdf-engine=xelatex --toc --toc-depth=3 -V geometry:margin=0.75in -V colorlinks=true -V fontsize=10pt"
+# Note: fontsize=9pt and landscape geometry help fit wide tables
+COMMON_OPTS="--pdf-engine=xelatex --toc --toc-depth=3 -V colorlinks=true -V fontsize=9pt"
 
 # Check if DejaVu fonts are available
 if fc-list 2>/dev/null | grep -qi "DejaVu"; then
@@ -36,10 +36,13 @@ pandoc RECASTING.md -o RECASTING.pdf $COMMON_OPTS \
     -V monofont="$MONOFONT"
 
 echo "Building TEST_MODELS.pdf..."
+# TEST_MODELS has wide tables, use landscape and smaller margins
 pandoc TEST_MODELS.md -o TEST_MODELS.pdf $COMMON_OPTS \
     -V mainfont="$MAINFONT" \
     -V sansfont="$SANSFONT" \
-    -V monofont="$MONOFONT"
+    -V monofont="$MONOFONT" \
+    -V geometry:landscape \
+    -V geometry:margin=0.5in
 
 echo ""
 echo "Documentation PDFs generated:"
