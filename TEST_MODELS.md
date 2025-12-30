@@ -91,6 +91,42 @@ Several models appear in multiple forms across the collection, either because th
 
 Models handcrafted or extracted from the literature for initial integration testing. Many contain hand-crafted recasting notes in comments.
 
+### Model Descriptions
+
+| File | Description |
+|------|-------------|
+| m01_exp_decay | Exponential decay |
+| m02_logistic | Logistic growth |
+| m03_Lotka_Volterra | Lotka-Volterra predator-prey |
+| m04_mass_action_branch | Branched mass action pathway |
+| m05_three_term_sum | Three-term sum reduction |
+| m06_feedback | Negative feedback pathway |
+| m07_SIR | SIR epidemic model |
+| m08_Bertalanffy | Von Bertalanffy growth |
+| m09_A_plus_B_to_C | Mass action A + B → C |
+| m10_van_der_Pol | Van der Pol oscillator |
+| m11_Monod_chemostat | Monod chemostat |
+| m12_toy_mass_action | Toy mass action network |
+| m13_composite_func_decomp | Composite function decomposition |
+| m14_Michaelis_Menten_prod_deg | Michaelis-Menten kinetics |
+| m15_tryptophan_operon | Tryptophan operon |
+| m16_normal_dens | Normal distribution density |
+| m17_central_t | Central t-distribution |
+| m18_Goodwin | Goodwin oscillator |
+| m19_RM_predator_prey | Rosenzweig-MacArthur predator-prey |
+| m20_Briggs_Haldane | Briggs-Haldane enzyme kinetics |
+| m21_Haldane_chemostat | Haldane chemostat |
+| m22_Brusselator | Brusselator oscillator |
+| m23_MWC | Monod-Wyman-Changeux model |
+| m24_scalarExpLog | Scalar exp/log dynamics |
+| m25_CSTR | Continuous stirred tank reactor |
+| m26_cos_growth | Cosine-driven growth |
+| m27_spiral | Spiral curve dynamics |
+| m28_torus | Torus surface dynamics |
+| m29_time_varying_beta | SIR with time-varying β |
+
+### Recasting Results
+
 | File | Original | Recast | Rules |
 |------|----------|--------|-------|
 | m01_exp_decay | S-system | S-system | — |
@@ -128,6 +164,41 @@ Models handcrafted or extracted from the literature for initial integration test
 ## test_models2/ — Savageau & Voit 1987 (28 models)
 
 Models from Savageau & Voit (1987), the foundational paper that introduced exact recasting of nonlinear differential equations into S-system canonical form.
+
+### Model Descriptions
+
+| File | Description |
+|------|-------------|
+| S1987_4C_exp_composition | Exponential composition |
+| S1987_4D_sum_reduction | Sum reduction |
+| S1987_5_CSTR | Continuous stirred tank reactor |
+| S1987_A1_exponential | Exponential decay |
+| S1987_A2_riccati | Riccati equation |
+| S1987_A3_cos_growth | Cosine growth |
+| S1987_A4_logistic | Logistic growth |
+| S1987_A5_spiral | Spiral curve |
+| S1987_B1_lotka_volterra | Lotka-Volterra |
+| S1987_B2_linear_chain | Linear chemical chain |
+| S1987_B3_nonlinear_chain | Nonlinear chemical chain |
+| S1987_B4_torus | Torus integral surface |
+| S1987_B5_rigid_body | Euler rigid body equations |
+| S1987_B_binary | Half→Binary transformation |
+| S1987_C1_decay_chain | Radioactive decay chain |
+| S1987_C2_decay_chain2 | Decay chain variant |
+| S1987_C3_parabolic_pde | Parabolic PDE discretization |
+| S1987_C_implicit_de | Implicit DE transformation |
+| S1987_D1_orbit_e0.1 | Two-body orbit (e=0.1) |
+| S1987_D2_orbit_e0.3 | Two-body orbit (e=0.3) |
+| S1987_D3_orbit_e0.5 | Two-body orbit (e=0.5) |
+| S1987_D4_orbit_e0.7 | Two-body orbit (e=0.7) |
+| S1987_D5_orbit_e0.9 | Two-body orbit (e=0.9) |
+| S1987_E1_bessel | Bessel equation |
+| S1987_E2_van_der_pol | Van der Pol oscillator |
+| S1987_E3_duffing | Duffing equation |
+| S1987_E4_falling_body | Falling body with drag |
+| S1987_E5_implicit | Implicit DE |
+
+### Recasting Results
 
 | File | Original | Recast | Rules | Ref |
 |------|----------|--------|-------|-----|
@@ -167,6 +238,53 @@ Models from Savageau & Voit (1987), the foundational paper that introduced exact
 ## test_models3/ — Literature Recastings (40 models)
 
 Models for which a recasting has been published in the literature. Sources span multiple authors and application domains. See References section for citations.
+
+### Model Descriptions
+
+| File | Description |
+|------|-------------|
+| A2013_power_system_2machine | 2-machine power system |
+| A2013_power_system_3machine | 3-machine power system |
+| A2017_gompertz_recasting | Gompertz growth |
+| DN2015_planetary_motion | Planetary two-body motion |
+| DN2015b_michaelis_menten | Michaelis-Menten kinetics |
+| DN2015b_sinx_recasting | sin(x) dynamics |
+| HBF1998_brusselator | Brusselator |
+| HBF1998_morse_oscillator | Morse oscillator |
+| HBF1998_semiconductor_exciton | Semiconductor exciton |
+| HBF1998_three_wave | Three-wave interaction |
+| I1988_metabolic_pathway | Unbranched metabolic pathway |
+| KPW2024_exponential_lifting | Exponential lifting |
+| MS2007_MM_to_GMA | Michaelis-Menten to GMA |
+| MS2007_fermentation_yeast | Yeast fermentation |
+| MS2007_tryptophan_operon | Tryptophan operon |
+| P2011_branched_SC | Branched SC kinetics |
+| P2011_linear_pathway_MM | Linear pathway with MM |
+| PP2005_CSTR_arrhenius | CSTR with Arrhenius |
+| PP2005_exponential_exact | Exponential (exact) |
+| RV1990_central_F | Central F distribution |
+| RV1990_central_chisquared | Central χ² distribution |
+| RV1990_central_t_density | Central t distribution |
+| S1988_Monod_chemostat | Monod chemostat |
+| S1993_mixed_terms | Mixed +/− terms |
+| S1993_sum_radical | Sum with radical |
+| V1988a_endemic_infection | Endemic infection |
+| V1988a_sin_exp_system | Sin/exp nonlinearities |
+| V1988a_weibull_growth | Weibull growth |
+| V1988b_exponential_ode | Exponential ODE |
+| V1988b_gma_to_ssystem | GMA to S-system |
+| V1990_cooke_endemic | Cooke endemic model |
+| V1990_endemic_exp_infection | Exponential infection |
+| V1990_kemper_endemic | Kemper endemic model |
+| V1992_blasius_equation | Blasius boundary layer |
+| V1992_log_ode | Logarithmic ODE |
+| V1993_blue_sky | Blue sky catastrophe |
+| V1993_forced_oscillator | Forced oscillator |
+| V1993_rossler_band | Rössler attractor |
+| V2005_bistable_gene | Bistable gene expression |
+| Z2022_pll_converter | Phase-locked loop converter |
+
+### Recasting Results
 
 | File | Original | Recast | Rules |
 |------|----------|--------|-------|
@@ -216,6 +334,33 @@ Models for which a recasting has been published in the literature. Sources span 
 ## test_models4/ — Systems Biology Models (20 models)
 
 Additional models from the systems biology and mathematical biology literature, used for expanded testing.
+
+### Model Descriptions
+
+| File | Description |
+|------|-------------|
+| Bergman1989 | Minimal glucose model |
+| De_Young1992 | IP3 receptor model |
+| Dreisigmeyer2008 | Gene expression model |
+| Fink2000 | Calcium oscillations |
+| Gardner2000 | Toggle switch |
+| Goldbeter1996 | Circadian rhythm |
+| Kholodenko2000 | MAPK cascade |
+| Krishna2006 | Circadian clock |
+| Lander2009 | Morphogen gradient |
+| Lev_Bar-Or2000 | p53-Mdm2 oscillations |
+| Lipniacki2006 | NF-κB signaling |
+| Mangan2003 | Feed-forward loop |
+| McMillen2002 | Repressilator |
+| Mueller2006 | Circadian model |
+| Ozbudak2004 | Gene expression noise |
+| Rosenfeld2002 | Autoregulation |
+| Samoilov2005 | Signal transduction |
+| Selkov1968 | Glycolytic oscillator |
+| Weber2018 | Quorum sensing |
+| Xiong2018 | Cell cycle model |
+
+### Recasting Results
 
 | File | Original | Recast | Rules |
 |------|----------|--------|-------|
