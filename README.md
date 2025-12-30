@@ -1,7 +1,7 @@
 # ODE → S‑System Recast (Antimony → Antimony)
 
 **Version:** v0.5.3
-**Date:** 2025-12-28
+**Date:** 2025-12-30
 
 This toolkit converts ordinary differential equation (ODE) models written in **Antimony** into **S‑System** or **GMA** form and writes the result back to Antimony. It provides both a **Python library** and a **command-line interface** for batch processing models and generating **Jupyter notebook** verification reports.
 
@@ -23,7 +23,6 @@ ssys/
   test_models3/           # 40 models with published recastings
   test_models4/           # 20 systems biology models
   tests/                  # Unit tests
-  literature/             # Reference papers on S-systems
   RECASTING.md            # Recasting theory and rules
   TEST_MODELS.md          # Test model collection documentation
   README.md               # This file
@@ -86,7 +85,6 @@ The CLI tool batch-recasts models and generates verification notebooks:
 ssys-recast --manifest test_models1/models.manifest \
             --outdir out_test_models1 \
             --mode simplified \
-            --parser sbml \
             --validate
 ```
 
@@ -130,7 +128,7 @@ The validator performs three independent tests to verify mathematical correctnes
 
 2. **Numerical Test**: Validates equivalence at 1000 random sample points with ε = 10⁻⁵ threshold.
 
-3. **Trajectory Test**: Simulates both original and recast models, compares trajectories with 1.5% error threshold.
+3. **Trajectory Test**: Simulates both original and recast models, compares trajectories with 3.0% error threshold.
 
 ### Validation Logic
 
@@ -156,10 +154,10 @@ Overall: ✓ PASS
 source ssys_dev/bin/activate
 
 # Run test_models1 (29 core models)
-python recast_models.py test_models1 --parser sbml
+python recast_models.py test_models1
 
 # Run with validation
-python recast_models.py test_models1 --parser sbml --validate
+python recast_models.py test_models1 --validate
 ```
 
 ### Helper Script Usage
@@ -171,7 +169,6 @@ python recast_models.py <directory> [options]
 ```
 
 Options:
-- `--parser {sbml,legacy}`: Parser to use (default: sbml)
 - `--mode {simplified,canonical}`: Output mode (default: simplified)
 
 ### Test Model Sets
@@ -274,8 +271,7 @@ from ssys.validator import validate_recast_pair
 
 report = validate_recast_pair(
     original_file="test_models1/m01_exp_decay.ant",
-    recast_file="out_test_models1/m01_exp_decay_recast.ant",
-    parser="sbml"
+    recast_file="out_test_models1/m01_exp_decay_recast.ant"
 )
 
 print(f"Overall pass: {report.overall_pass}")
@@ -284,22 +280,29 @@ print(f"Summary: {report.summary}")
 
 ---
 
-## What "Recast" Means
+## GMA and S-system Forms
 
-Given an ODE of the form:
+### Generalized Mass Action (GMA) Form
+
+A **GMA system** has equations where each right-hand side is a sum of power-law monomials:
+
 ```
-Ẋᵢ = Σₖ cᵢₖ ∏ⱼ Zⱼ^(pᵢₖⱼ)
+Ẋᵢ = Σₖ cₖ ∏ⱼ Xⱼ^(eₖⱼ)
 ```
 
-We iteratively **split sums into products** by introducing **auxiliary variables** until every derivative is a **difference of two single power‑law products**:
+*Note:* If the coefficients cₖ depend on time (via a clock state T), the system is classified as **GMA (time-varying)**.
+
+### S-system Form
+
+An **S-system** has exactly two terms per equation—one for production, one for degradation:
 
 ```
 Ẋᵢ = αᵢ ∏ⱼ Xⱼ^(gᵢⱼ) - βᵢ ∏ⱼ Xⱼ^(hᵢⱼ)
 ```
 
-Original variables are **replaced by products of auxiliaries**. The **product constraints** are enforced via initial conditions so that, at t₀, the product equals the original initial value.
+*Note:* The form is **S-system** if αᵢ, βᵢ ≥ 0. The form is **Strict canonical S-system** if αᵢ, βᵢ > 0 (achieved via ε-splitting).
 
-This follows Savageau & Voit (1987): positive orthant assumption, decomposition of composite functions, and sum‑splitting into canonical S‑systems.
+See [RECASTING.md](RECASTING.md) for detailed recasting theory, rules, and worked examples.
 
 ---
 
@@ -334,7 +337,7 @@ This follows Savageau & Voit (1987): positive orthant assumption, decomposition 
 
 ## Algorithm Overview
 
-1. **Parse** Antimony via SBML (reference implementation) or legacy parser
+1. **Parse** Antimony via SBML (reference implementation)
 2. **Build** SymPy ODEs from reactions and rate rules
 3. **Lift composite functions**: exp, sin, log, etc. → auxiliary variables (chain rule)
 4. **Lift rational functions**: denominators → auxiliary variables (exact S-system form)
@@ -353,8 +356,8 @@ The tool classifies both input and output systems:
 
 - **General**: Contains non-monomial terms (arbitrary functions)
 - **GMA** (Generalized Mass Action): All monomial terms, may have multiple terms
-- **S-system**: 1-2 monomial terms per equation (growth and/or decay)
-- **Canonical S-system**: Exactly 2 terms per equation (1 growth + 1 decay)
+- **S-system**: 1-2 monomial terms per equation (growth and/or decay), α, β ≥ 0
+- **Strict canonical S-system**: Exactly 2 terms per equation (1 growth + 1 decay), α, β > 0
 
 ---
 
@@ -389,43 +392,20 @@ The ε-regularization approach:
 - May introduce sensitivity near `t=0`
 - May break exact conservation laws that depend on zeros
 
-For models where exact zero handling is critical (e.g., Bergman minimal model), see `DEVELOPMENT_NOTES.md` for alternative strategies under consideration.
+Alternative strategies for exact zero handling are documented as issues at the online repository.
 
 ---
 
 ## Examples
 
-### Example 1: Exponential Decay
-
-**Input** (`m01_exp_decay.ant`):
-```
-model exponential_decay()
-  X = 1.0
-  k = 0.5
-  X' = -k*X
-end
-```
-
-**Simplified output**:
-```
-X' = 0 - 0.5*X^1
-```
-
-### Example 2: Michaelis-Menten
-
-**Input**:
-```
-S' = -k1*S*E/(Km + S)
-P' = k1*S*E/(Km + S) - k2*P
-```
-
-**Output** (after lifting):
-```
-S' = 0 - k1*S*E*Y_1^-1
-P' = k1*S*E*Y_1^-1 - k2*P
-
-Y_1' = ... # Auxiliary for (Km + S)
-```
+See [RECASTING.md](RECASTING.md) for detailed worked examples covering:
+- Exponential decay (trivial S-system)
+- Central t-distribution (sum lifting)
+- Van der Pol oscillator (GMA → S-system)
+- Monod chemostat (Michaelis-Menten → GMA)
+- Brusselator (product auxiliaries)
+- SIR epidemic model (ε-splitting)
+- Two-body orbit problem (parameter family)
 
 ---
 
@@ -435,7 +415,6 @@ Y_1' = ... # Auxiliary for (Km + S)
 - Ensure environment is activated: `source ssys_dev/bin/activate`
 
 **Parser errors:**
-- Use `--parser sbml` (default) for better Antimony compatibility
 - Check for unsupported constructs (modules, events)
 
 **Validation failures:**
@@ -452,8 +431,7 @@ Y_1' = ... # Auxiliary for (Km + S)
 ## References
 
 - Savageau, M. A., & Voit, E. O. (1987). Recasting nonlinear differential equations as S‑systems: a canonical nonlinear form. *Mathematical Biosciences*, 87(1), 83-115.
-- Voit, E. O. (2013). Biochemical systems theory: A review. *ISRN Biomathematics*, 2013.
-- Sauro, H. M., et al. Antimony: A modular model definition language. *Bioinformatics*, 2009.
+- Smith, L. P., Bergmann, F. T., Chandran, D., & Sauro, H. M. (2009). Antimony: A modular model definition language. *Bioinformatics*, 25(18), 2452-2454.
 
 ---
 
