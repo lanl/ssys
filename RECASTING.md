@@ -148,7 +148,7 @@ The recast system is effectively a **constrained dynamical system**—auxiliary 
 3. **DAE formulation**: Treat the system as a differential-algebraic equation with stabilized constraints
 4. **Validation**: Compare trajectories of original and recast systems to detect drift
 
-In our test runs on the 117-model collection (see [TEST_MODELS.md](TEST_MODELS.md)), naive integration with standard tolerances sufficed because integration intervals are short (typically T_END ≤ 200). You can verify this yourself by running `ssys validate` on any model, which compares original and recast trajectories and reports the maximum scaled error. For long-time integration or sensitive systems, constraint management may be necessary.
+In our test runs on the 117-model collection (see [TEST_MODELS.md](TEST_MODELS.md)), naive integration with standard tolerances sufficed because integration intervals are short (typically T_END ≤ 200). You can verify this yourself by examining the `_validation.json` files in the output directories, which contain trajectory comparison metrics including maximum scaled error. For long-time integration or sensitive systems, constraint management may be necessary.
 
 ---
 
@@ -182,8 +182,8 @@ Lifted:      X' = a·E,  where E = exp(-b·t)
 | `m01_exp_decay` ↔ `S1987_A1_exponential` | `X' = -k·X` | Already S-system |
 | `m13_composite_func_decomp` ↔ `V1988b_exponential_ode` | `X' = exp(-X)` | General → S-system |
 | `S1987_4C_exp_composition` | Exponential composition | General → S-system |
-| `KPW2024_exponential_lifting` | Machine learning example | General → Canonical S-system |
-| `m29_time_varying_beta` | SIR with exp-based step function | General → General (complex) |
+| `KPW2024_exponential_lifting` | Machine learning example | General → GMA |
+| `m29_time_varying_beta` | SIR with exp-based step function | General → GMA (time-varying) |
 
 ### Rule 2: Logarithmic Lifting
 
@@ -280,7 +280,7 @@ This step is repeated until each equation has at most two terms. The initial con
 | `RV1990_central_chisquared` | χ² distribution | GMA → S-system |
 | `RV1990_central_F` | F distribution | General → GMA |
 | `m11_Monod_chemostat` ↔ `S1988_Monod_chemostat` | Km + S | General → GMA |
-| `m14_Michaelis_Menten_prod_deg` ↔ `MS2007_MM_to_GMA` | Two MM terms | General → General |
+| `m14_Michaelis_Menten_prod_deg` ↔ `MS2007_MM_to_GMA` | Two MM terms | General → S-system |
 | `m05_three_term_sum` ↔ `S1987_4D_sum_reduction` | Multi-term sum | GMA → S-system |
 | `S1993_sum_radical` | Sum with radical | Canonical S-system → S-system |
 | `S1993_mixed_terms` | Multiple +/− terms | GMA → S-system |
@@ -378,7 +378,7 @@ Recasting reaches the two-term S-system form when:
 3. **General ODE with reducible structure**: Lifting produces ≤2 terms per equation
    - Examples: `m17_central_t`, `m13_composite_func_decomp`, `KPW2024_exponential_lifting`
 
-### Stays at GMA Form (44 models)
+### Stays at GMA Form (41 models)
 
 Recasting stops at GMA (3+ terms per equation) when the current implementation does not reduce multi-term sums further:
 
@@ -391,11 +391,16 @@ Recasting stops at GMA (3+ terms per equation) when the current implementation d
 3. **Complex feedback structures**: GMA endemic infection models where multi-term structure persists
    - Examples: `V1988a_endemic_infection`, `V1990_kemper_endemic`, `V1990_cooke_endemic`
 
-### GMA with Time-Varying Coefficients (1 model)
+### GMA with Time-Varying Coefficients (4 models)
 
 Some models achieve GMA structure but have coefficients that depend on time:
 
-- **`m29_time_varying_beta`**: SIR model with β(t) via smooth step functions. The model is recast to power-law form, but the coefficient `beta_t` remains a function of clock state T via assignment rules, so it's not strict constant-coefficient GMA
+- **`m29_time_varying_beta`**: SIR model with β(t) via smooth step functions
+- **`PP2005_CSTR_arrhenius`**: CSTR with Arrhenius temperature dependence
+- **`Fink2000`**: Calcium oscillations with time-dependent forcing
+- **`Weber2018`**: Quorum sensing with time-dependent input
+
+These models are recast to power-law form, but coefficients remain functions of clock state T via assignment rules, so they're not strict constant-coefficient GMA.
 
 ### Summary by Directory
 
@@ -412,7 +417,7 @@ Some models achieve GMA structure but have coefficients that depend on time:
 - *GMA*: Generalized Mass Action form (multiple monomials with constant coefficients)
 - *GMA (time-varying)*: Power-law structure but with coefficients that depend on clock state T
 
-**Provenance**: These counts were computed by running `ssys recast --mode simplified` on all 117 models in `test_models{1,2,3,4}/` and classifying output based on the presence of "S-SYSTEM DYNAMICS" (S-system), "GMA" header (GMA), or time-dependent assignment rules in the recast `.ant` files. See [TEST_MODELS.md](TEST_MODELS.md) for per-model classifications.
+**Provenance**: These counts were computed by running `ssys-recast --mode simplified --validate` on all 117 models in `test_models{1,2,3,4}/` and classifying output based on the presence of "S-SYSTEM DYNAMICS" (S-system), "GMA" header (GMA), or time-dependent assignment rules in the recast `.ant` files. See [TEST_MODELS.md](TEST_MODELS.md) for per-model classifications.
 
 Note: All 117 models successfully process through `ssys` — none remain in General form. While some models could theoretically reach strict S-system form via more complex transformations (canonical sum reduction, Rule 4b), `ssys` stops at GMA for multi-term equations.
 
