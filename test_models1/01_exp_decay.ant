@@ -1,8 +1,0 @@
-// Simple first-order decay: S' = -k*S
-model exp_decay()
-S = 10
-k = 0.3
-S' = -k*S
-end
-// @SIM T_START=0 T_END=20 N_STEPS=400 EPS_INIT=1e-6
-// Note: Zero-valued initial conditions are replaced with EPS_INIT during recasting.
