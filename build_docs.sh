@@ -6,7 +6,8 @@
 set -e  # Exit on error
 
 # Common options
-COMMON_OPTS="--pdf-engine=xelatex --toc --toc-depth=3 -V geometry:margin=1in -V colorlinks=true"
+# Note: -V tables=longtable helps with wide tables, fontsize=11pt improves readability
+COMMON_OPTS="--pdf-engine=xelatex --toc --toc-depth=3 -V geometry:margin=0.75in -V colorlinks=true -V fontsize=10pt"
 
 # Check if DejaVu fonts are available
 if fc-list 2>/dev/null | grep -qi "DejaVu"; then
