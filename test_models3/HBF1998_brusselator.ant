@@ -1,4 +1,5 @@
 // Brusselator - Recasting to Unimonomial Form
+// Related: test_models1/m22_Brusselator.ant
 // Source: Hernandez-Bermejo, Fairen & Brenig, "Algebraic recasting of nonlinear
 //         systems of ODEs into universal formats"
 //         J. Phys. A: Math. Gen. 31:2415-2430 (1998)

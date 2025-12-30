@@ -1,4 +1,5 @@
 // SIR model with time-dependent beta(t), exp-based step approximation.
+// Related: m07_SIR.ant (standard SIR with constant β)
 //   dS/dt = -beta_t*S*I + delta*R
 //   dI/dt =  beta_t*S*I - gamma*I
 //   dR/dt =  gamma*I - delta*R

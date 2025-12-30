@@ -1,4 +1,6 @@
 // Prigogine I, Lefever R (1968) J Chem Phys 48: 1695-1700.
+// Related: test_models3/HBF1998_brusselator.ant
+// This model is essentially the same as HBF1998.
 // Recast:
 // Mapping (exact):
 //    x = X1 * X2

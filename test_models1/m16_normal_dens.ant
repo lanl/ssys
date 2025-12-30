@@ -9,7 +9,7 @@
 // ICs corresponding to t=0, f(0)=1/sqrt(2*pi)
 //   X1 = c
 //   F  = 1/sqrt(2*pi)
-model normal()
+model normal_dens()
   // f'(t) = -t f(t); t is the independent variable
   species t, f
   t' = 1                   // march along the abscissa

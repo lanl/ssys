@@ -1,296 +1,318 @@
-# Test Models from Recasting Literature
-
-This folder contains test models extracted from published papers on exact recasting
-of nonlinear differential equations into S-system canonical form.
-
-## Sources
-
-### Savageau & Voit (1987)
-**"Recasting Nonlinear Differential Equations as S-Systems: A Canonical Nonlinear Form"**
-*Mathematical Biosciences* 87:83-115
-
-- Time horizon: t ∈ [0, 20] for all benchmark problems
-- 28 examples covering single equations, small systems, moderate systems, orbit equations, and higher-order equations
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| S1987_4C_exp_composition.ant | Exponential composition | 1→3 | §4C |
-| S1987_4D_sum_reduction.ant | Sum reduction example | 1→2 | §4D |
-| S1987_5_CSTR.ant | Continuous stirred tank reactor | 2→8 | §5 |
-| S1987_A1_exponential.ant | Exponential decay | 1 | Appendix A |
-| S1987_A2_riccati.ant | Riccati equation | 1 | Appendix A |
-| S1987_A3_cos_growth.ant | Cosine growth | 1→3 | Appendix A |
-| S1987_A4_logistic.ant | Logistic growth | 1 | Appendix A |
-| S1987_A5_spiral.ant | Spiral curve | 1→3 | Appendix A |
-| S1987_B1_lotka_volterra.ant | Lotka-Volterra | 2 | Appendix A |
-| S1987_B2_linear_chain.ant | Linear chemical chain | 3→4 | Appendix A |
-| S1987_B3_nonlinear_chain.ant | Nonlinear chemical chain | 3→4 | Appendix A |
-| S1987_B4_torus.ant | Torus integral surface | 3→8 | Appendix A |
-| S1987_B5_rigid_body.ant | Euler rigid body equations | 3→4 | Appendix A |
-| S1987_C1_decay_chain.ant | Radioactive decay chain | 10 | Appendix A |
-| S1987_C2_decay_chain2.ant | Radioactive decay chain 2 | 10 | Appendix A |
-| S1987_C3_parabolic_pde.ant | Parabolic PDE derived | 10→18 | Appendix A |
-| S1987_D1_orbit_e0.1.ant | Orbit (e=0.1) | 4→8 | Appendix A |
-| S1987_D2_orbit_e0.3.ant | Orbit (e=0.3) | 4→8 | Appendix A |
-| S1987_D3_orbit_e0.5.ant | Orbit (e=0.5) | 4→8 | Appendix A |
-| S1987_D4_orbit_e0.7.ant | Orbit (e=0.7) | 4→8 | Appendix A |
-| S1987_D5_orbit_e0.9.ant | Orbit (e=0.9) | 4→8 | Appendix A |
-| S1987_E1_bessel.ant | Bessel equation derived | 2→5 | Appendix A |
-| S1987_E2_van_der_pol.ant | Van der Pol oscillator | 2→5 | Appendix A |
-| S1987_E3_duffing.ant | Duffing equation | 2→6 | Appendix A |
-| S1987_E4_falling_body.ant | Falling body | 2 | Appendix A |
-| S1987_E5_implicit.ant | Implicit DE example | 2→4 | Appendix A |
-| S1987_B_binary.ant | Half→Binary transformation | Appendix B |
-| S1987_C_implicit_de.ant | Implicit DE transformation | Appendix C |
-
-### Marin-Sanguino et al. (2007)
-**"Optimization of biotechnological systems through geometric programming"**
-*Theor. Biol. Med. Model.* 4:38
-
-- 3 examples demonstrating GMA recasting for optimization
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| MS2007_MM_to_GMA.ant | Michaelis-Menten to GMA | 1→2 | Eq. 14-16 |
-| MS2007_fermentation_yeast.ant | Anaerobic fermentation (S. cerevisiae) | 5+9 | Eq. 39-40 |
-| MS2007_tryptophan_operon.ant | Tryptophan operon (E. coli) | 3→8 | Eq. 41-44 |
-
-### Savageau (1988)
-**"Introduction to S-Systems and the Underlying Power-Law Formalism"**
-*Math. Comput. Modelling* 11:546-551
-
-- 2 examples showing different recasting strategies for the same system
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| S1988_monod_chemostat_v1.ant | Monod chemostat (method 1) | 2→4 | Eq. 19-20 |
-| S1988_monod_chemostat_v2.ant | Monod chemostat (method 2) | 2→5 | Eq. 21 |
-
-### Voit (1988)
-**"S-Systems as a Canonical Nonlinear Form"**
-*Math. Comput. Modelling* 11:140-145
-
-- 3 examples of exact recasting
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| V1988a_weibull_growth.ant | Weibull growth law | 1→2 | Eq. 2-4 |
-| V1988a_sin_exp_system.ant | Sin/exp nonlinearities | 2→6 | Eq. 6-10 |
-| V1988a_endemic_infection.ant | Endemic infection (Kemper/Cooke) | 3→7 | Eq. 14-15 |
-
-### Voit (1988b)
-**"New Nonlinear Methodologies for Modeling Molecular and Cellular Systems"**
-*Proc. IFAC Modelling and Control in Biomedical Systems*, Venice, Italy
-
-- 2 examples of exact recasting
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| V1988b_exponential_ode.ant | Exponential ODE | 1→2 | p. 223 |
-| V1988b_gma_to_ssystem.ant | GMA to S-system (product rule) | 2→4 | p. 223 |
-
-### Voit (1990)
-**"S-System Modelling of Endemic Infections"**
-*Comput. Math. Applic.* 20(4-6):161-173
-
-- 3 examples of exact recasting (endemic infection models)
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| V1990_kemper_endemic.ant | Kemper endemic model (γ1=γ2) | 3→5 | Eq. 9 |
-| V1990_cooke_endemic.ant | Cooke endemic model (γ1≠γ2) | 3→7 | Eq. 15 |
-| V1990_endemic_exp_infection.ant | Exponential infection term | 2→3 | Eq. 39-41 |
-
-### Voit (1992)
-**"Symmetries of S-Systems"**
-*Math. Biosci.* 109:19-31
-
-- 2 examples of exact recasting (demonstrating symmetry analysis)
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| V1992_blasius_equation.ant | Blasius equation (boundary layer) | 3 | pp. 28-30 |
-| V1992_log_ode.ant | ODE with logarithmic term | 2→4 | p. 28 |
-
-### Voit (1993)
-**"S-System Modelling of Complex Systems with Chaotic Input"**
-*Environmetrics* 4(2):153-186
-
-- 3 examples of exact recasting (chaotic systems)
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| V1993_rossler_band.ant | Rössler strange attractor (chaos) | 3→4 | Eq. 15 |
-| V1993_forced_oscillator.ant | Forced Duffing-type oscillator | 2→7 | Appendix A |
-| V1993_blue_sky.ant | Blue sky catastrophe | 2→8 | Appendix A |
-
-### Voit (2005)
-**"Smooth bistable S-systems"**
-*IEE Proc. Syst. Biol.* 152(4):207-213
-
-- 1 example of bistable system (sigmoidal switch with recasting)
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| V2005_bistable_gene.ant | Bistable gene expression with hysteresis | 4→6 | Eq. 4 |
-
-### Daniels & Nemenman (2015)
-**"Automated adaptive inference of phenomenological dynamical models"**
-*Nature Communications* 6:8133
-
-- 1 example of exact recasting (gravitational two-body problem)
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| DN2015_planetary_motion.ant | Planetary motion (radial 2-body) | 2 | Eq. 5-6 |
-
-### Anghel, Milano & Papachristodoulou (2013)
-**"Algorithmic Construction of Lyapunov Functions for Power System Stability Analysis"**
-*IEEE Trans. Circuits Syst. I* 60(9):2533-2546
-
-- 2 examples of trigonometric → polynomial DAE recasting (citing Savageau & Voit 1987)
-- Power system swing equations with sin/cos nonlinearities
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| A2013_power_system_3machine.ant | 3-machine lossless power system | 4→6 | §V-A |
-| A2013_power_system_2machine.ant | 2-machine with transfer conductances | 4→6 | §V-B |
-
-### Zhang et al. (2022)
-**"Domain of Attraction's Estimation for Grid Connected Converters with Phase-Locked Loop"**
-*IEEE Trans. Power Systems* 37(2):1351-1362
-
-- 1 example with **explicit citation of Savageau & Voit (1987)** [ref 30]
-- Trig → polynomial recasting for SOS programming
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| Z2022_pll_converter.ant | Phase-locked loop converter | 2→4 | Eq. 7, 17-19 |
-
-### Kramer, Peherstorfer & Willcox (2024)
-**"Learning Nonlinear Reduced Models from Data with Operator Inference"**
-*Annu. Rev. Fluid Mech.* 56:521-548
-
-- 1 example with **explicit citation of Savageau & Voit (1987)** in Section 2.1.3
-- Demonstrates "lifting" to quadratic form for machine learning
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| KPW2024_exponential_lifting.ant | Exponential ODE lifted to quadratic | 1→2 | Sidebar p. 526 |
-
-### Papachristodoulou & Prajna (2005)
-**"Analysis of Non-polynomial Systems using the Sum of Squares Decomposition"**
-*In: Positive Polynomials in Control*, Springer
-
-- 2 examples with **explicit citation of Savageau & Voit (1987)** as reference [14]
-- Recasting for SOS/SDP stability analysis
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| PP2005_exponential_exact.ant | Exact exponential recasting (same dim) | 1→1 | p. 2 |
-| PP2005_CSTR_arrhenius.ant | Diabatic CSTR with Arrhenius kinetics | 2→3 | §4.4 |
-
-### Daniels & Nemenman (2015b)
-**"Efficient Inference of Parsimonious Phenomenological Models of Cellular Dynamics Using S-Systems and Alternating Regression"**
-*PLOS ONE* 10(3):e0119821
-
-- 2 examples with **explicit citation of Savageau & Voit (1987)** as reference [17]
-- Recasting for S-system parameter inference
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| DN2015b_michaelis_menten.ant | Michaelis-Menten kinetics | 1→2 | Eq. 6 |
-| DN2015b_sinx_recasting.ant | sin(x) dynamics | 1→3 | Eq. 7 |
-
-### Anguelov et al. (2018)
-**"On the chemical meaning of some growth models possessing Gompertzian-type property"**
-*Math. Methods Appl. Sci.* 41:8365-8376
-
-- 1 example with **explicit citation of Savageau & Voit (1987)** as reference [7]
-- Recasting of Gompertz growth model to reveal chemical interpretation
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| A2017_gompertz_recasting.ant | Gompertz growth model | 1→2 | Eq. SG |
-
-### Savageau (1993)
-**"Finding Multiple Roots of Nonlinear Algebraic Equations Using S-System Methodology"**
-*Appl. Math. Comput.* 55:187-199
-
-- 2 examples with **explicit citation of Savageau & Voit (1987)** as reference [12]
-- Demonstrates "reductive recasting" for ODEs with multiple terms of same/both signs
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| S1993_sum_radical.ant | Radical term with sum | 1→2 | Eq. 4-7 |
-| S1993_mixed_terms.ant | Multiple + and − terms | 2→5 | Eq. 15-19 |
-
-### Irvine (1988)
-**"Efficient Solution of Nonlinear Models Expressed in S-System Canonical Form"**
-*Math. Comput. Modelling* 11:123-128
-
-- 1 example referencing Savageau & Voit (1986/1987) recasting algorithm
-- Demonstrates computational benefit: 9→19 variables, but 10x faster solution
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| I1988_metabolic_pathway.ant | Unbranched pathway with MM kinetics | 9→19 | Eq. 8-9 |
-
-### Pozo et al. (2011)
-**"Steady-state global optimization of metabolic non-linear dynamic models through recasting into power-law canonical models"**
-*BMC Systems Biology* 5:137
-
-- 2 examples with **explicit citation of Savageau & Voit (1987)** as reference [36]
-- Recasting SC (Saturable and Cooperative) kinetics to GMA for global optimization
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| P2011_linear_pathway_MM.ant | Linear pathway + competitive inhibition | 2→6 | Eq. 20-23 |
-| P2011_branched_SC.ant | Branched network with SC kinetics | 4 | Eq. 2, Fig. 1 |
-
-### Rust & Voit (1990)
-**"Statistical Densities, Cumulatives, Quantiles, and Power Obtained by S-System Differential Equations"**
-*J. Amer. Statist. Assoc.* 85(410):572-578
-
-Also: Voit & Rust (1990) *Biom. J.* 32(6):681-695
-
-- 3 examples of probability distributions recast as S-systems
-- Cites Savageau (1982) which cites Savageau & Voit (1987)
-- Demonstrates handling of SUM terms in distribution expressions
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| RV1990_central_t_density.ant | Central t-distribution | 1→4 | Eq. 4 |
-| RV1990_central_chisquared.ant | Central χ² distribution | 3 | Eq. 6 |
-| RV1990_central_F.ant | Central F distribution | 1→4 | Eq. 10 |
-
-### Hernández-Bermejo, Fairén & Brenig (1998)
-**"Algebraic recasting of nonlinear systems of ODEs into universal formats"**
-*J. Phys. A: Math. Gen.* 31:2415-2430
-
-- 4 examples of recasting to quasipolynomial/Lotka-Volterra/unimonomial form
-- Develops systematic algebraic framework using matrix operations
-- References S&V framework indirectly via Brenig/Voit literature
-
-| File | Description | Variables | Source |
-|------|-------------|-----------|--------|
-| HBF1998_morse_oscillator.ant | Morse oscillator (molecular physics) | 2→5 | §3.2, Eq. 17-25 |
-| HBF1998_semiconductor_exciton.ant | Electron-hole/exciton oscillations | 2→6 | §3.3, Eq. 29-36 |
-| HBF1998_brusselator.ant | Brusselator (Belousov-Zhabotinskii) | 2→4 | §4.2, Eq. 45-54 |
-| HBF1998_three_wave.ant | Three-wave interaction (plasma physics) | 3→4 | §4.3, Eq. 55-61 |
-
-## File Format
-
-Each `.ant` file contains:
-- Header with source citation and equation numbers
-- Time horizon specification
+# Test Model Collection
+
+This document provides an overview of the test model collection used for validating and benchmarking the `ssys` recasting tool. All models are specified in [Antimony](https://antimony.sourceforge.io/) format.
+
+## Summary
+
+The collection contains **117 models** organized into four directories:
+
+| Directory | Models | Description |
+|-----------|--------|-------------|
+| `test_models1/` | 29 | Initial integration testing models |
+| `test_models2/` | 28 | Models from Savageau & Voit (1987) |
+| `test_models3/` | 40 | Models with published recastings |
+| `test_models4/` | 20 | Additional systems biology models |
+
+All 117 models are successfully processed by `ssys`. Model initial conditions, parameter values, and integration intervals were chosen to avoid numerical issues during validation testing.
+
+## Recasting Summary
+
+Models in the collection span different starting forms and recasting outcomes:
+
+| Original Form | → S-system | → GMA | → General | Total |
+|---------------|------------|-------|-----------|-------|
+| S-system/Canonical | 19 | — | — | 19 |
+| GMA | 20 | 13 | — | 33 |
+| General | 22 | 24 | 19 | 65 |
+| **Total** | **61** | **37** | **19** | **117** |
+
+**Notes:**
+- *S-system* and *Strict canonical S-system* models are already in the target form
+- *GMA* models may or may not be recastable into S-system form (depends on term structure)
+- *General* models contain transcendental functions (exp, log, sin, cos) or other non-polynomial terms
+
+## Recasting Rules
+
+The "Rules" column in the tables below indicates which recasting operations are applied. See [RECASTING.md](RECASTING.md) for detailed explanations and worked examples.
+
+| Rule | Name | Pattern | Transformation |
+|------|------|---------|----------------|
+| 1 | Exponential lifting | exp(f(X)) | Y = exp(f), Y' = f'·Y |
+| 2 | Logarithmic lifting | log(X) | Y = log(X), Y' = X'/X |
+| 3 | Trigonometric lifting | sin(θ), cos(θ) | Coupled pair: S' = C·θ', C' = -S·θ' |
+| 4 | Sum handling | 1/(g + h) | D = g + h, use D⁻¹ |
+| 5 | Product rule | Multi-term GMA | Pool construction |
+| 6 | ε-splitting | Single-term ODE | X' = ε·X - (k+ε)·X |
+| 7 | Clock state | time-dependent | T' = 1, substitute time → T |
+| 8 | Constant handling | Constant term | dummy_const^0 (canonical mode) |
+
+"—" indicates no transformation was needed (model already in target form)
+
+**Note:** Rules shown reflect `--mode simplified` (default). In `--mode canonical`:
+- Rule 6 (ε-splitting) applies to all single-term equations to ensure strict two-term form
+- Rule 8 (constant handling) applies to ODEs with constant terms like `T' = 1`
+
+## Model Families
+
+Several models appear in multiple forms across the collection, either because they appear in different papers or were independently created for testing:
+
+| Family | Models |
+|--------|--------|
+| Exponential decay | m01, S1987_A1 |
+| Logistic growth | m02, S1987_A4 |
+| Lotka-Volterra | m03, S1987_B1 |
+| Sum reduction | m05, S1987_4D |
+| SIR epidemic | m07, m29 (time-varying β) |
+| Van der Pol oscillator | m10, S1987_E2 |
+| Monod chemostat | m11, S1988_Monod |
+| Exponential ODE | m13, V1988b_exponential_ode |
+| Michaelis-Menten | m14, MS2007_MM_to_GMA |
+| Tryptophan operon | m15, MS2007_tryptophan_operon |
+| Central t-distribution | m17, RV1990_central_t_density |
+| Brusselator | m22, HBF1998_brusselator |
+| CSTR | m25, S1987_5, PP2005_CSTR_arrhenius |
+| Cosine growth | m26, S1987_A3 |
+| Spiral | m27, S1987_A5 |
+| Torus | m28, S1987_B4 |
+| Two-body orbit | S1987_D1–D5 (varying eccentricity) |
+| Decay chain | S1987_C1, S1987_C2 |
+| Endemic infection | V1988a, V1990_kemper, V1990_cooke, V1990_endemic_exp |
+
+---
+
+## test_models1/ — Integration Testing Models (29 models)
+
+Models handcrafted or extracted from the literature for initial integration testing. Many contain hand-crafted recasting notes in comments.
+
+| File | Description | Original | Recast | Rules |
+|------|-------------|----------|--------|-------|
+| m01_exp_decay | Exponential decay | S-system | S-system | 6 |
+| m02_logistic | Logistic growth | Canonical S-system | S-system | — |
+| m03_Lotka_Volterra | Lotka-Volterra predator-prey | Canonical S-system | S-system | — |
+| m04_mass_action_branch | Branched mass action pathway | GMA | S-system | 5 |
+| m05_three_term_sum | Three-term sum reduction | GMA | S-system | 5 |
+| m06_feedback | Negative feedback pathway | GMA | S-system | 5 |
+| m07_SIR | SIR epidemic model | S-system | S-system | 6 |
+| m08_Bertalanffy | Von Bertalanffy growth | Canonical S-system | S-system | — |
+| m09_A_plus_B_to_C | Mass action A + B → C | S-system | S-system | — |
+| m10_van_der_Pol | Van der Pol oscillator | GMA | S-system | 5 |
+| m11_Monod_chemostat | Monod chemostat | General | GMA | 4 |
+| m12_toy_mass_action | Toy mass action network | GMA | S-system | 5 |
+| m13_composite_func_decomp | Composite function decomposition | General | S-system | 1 |
+| m14_Michaelis_Menten_prod_deg | Michaelis-Menten kinetics | General | General | 4 |
+| m15_tryptophan_operon | Tryptophan operon | General | GMA | 4 |
+| m16_normal_dens | Normal distribution density | S-system | S-system | — |
+| m17_central_t | Central t-distribution | General | S-system | 4, 7 |
+| m18_Goodwin | Goodwin oscillator | General | Canonical S-system | 1, 4 |
+| m19_RM_predator_prey | Rosenzweig-MacArthur predator-prey | General | GMA | 4 |
+| m20_Briggs_Haldane | Briggs-Haldane enzyme kinetics | GMA | S-system | 5 |
+| m21_Haldane_chemostat | Haldane chemostat | General | General | 4 |
+| m22_Brusselator | Brusselator oscillator | GMA | S-system | 5 |
+| m23_MWC | Monod-Wyman-Changeux model | GMA | GMA | — |
+| m24_scalarExpLog | Scalar exp/log dynamics | General | S-system | 1, 2 |
+| m25_CSTR | Continuous stirred tank reactor | General | GMA | 1, 4 |
+| m26_cos_growth | Cosine-driven growth | General | S-system | 3, 7 |
+| m27_spiral | Spiral curve dynamics | General | GMA | 3, 7 |
+| m28_torus | Torus surface dynamics | General | S-system | 3, 7 |
+| m29_time_varying_beta | SIR with time-varying β | General | General | 7 |
+
+---
+
+## test_models2/ — Savageau & Voit 1987 (28 models)
+
+Models from Savageau & Voit (1987), the foundational paper that introduced exact recasting of nonlinear differential equations into S-system canonical form.
+
+| File | Description | Original | Recast | Rules | Source |
+|------|-------------|----------|--------|-------|--------|
+| S1987_4C_exp_composition | Exponential composition | General | S-system | 1 | §4C |
+| S1987_4D_sum_reduction | Sum reduction | GMA | S-system | 5 | §4D |
+| S1987_5_CSTR | Continuous stirred tank reactor | General | GMA | 1, 4 | §5 |
+| S1987_A1_exponential | Exponential decay | S-system | S-system | 6 | App. A |
+| S1987_A2_riccati | Riccati equation | S-system | S-system | — | App. A |
+| S1987_A3_cos_growth | Cosine growth | General | S-system | 3, 7 | App. A |
+| S1987_A4_logistic | Logistic growth | Canonical S-system | S-system | — | App. A |
+| S1987_A5_spiral | Spiral curve | General | GMA | 3, 7 | App. A |
+| S1987_B1_lotka_volterra | Lotka-Volterra | Canonical S-system | S-system | — | App. A |
+| S1987_B2_linear_chain | Linear chemical chain | GMA | S-system | 5 | App. A |
+| S1987_B3_nonlinear_chain | Nonlinear chemical chain | S-system | S-system | — | App. A |
+| S1987_B4_torus | Torus integral surface | General | GMA | 3, 7 | App. A |
+| S1987_B5_rigid_body | Euler rigid body equations | S-system | S-system | — | App. A |
+| S1987_B_binary | Half→Binary transformation | S-system | S-system | — | App. B |
+| S1987_C1_decay_chain | Radioactive decay chain | S-system | S-system | — | App. A |
+| S1987_C2_decay_chain2 | Decay chain variant | S-system | S-system | — | App. A |
+| S1987_C3_parabolic_pde | Parabolic PDE discretization | GMA | S-system | 5 | App. A |
+| S1987_C_implicit_de | Implicit DE transformation | S-system | S-system | — | App. C |
+| S1987_D1_orbit_e0.1 | Two-body orbit (e=0.1) | General | S-system | 4, 7 | App. A |
+| S1987_D2_orbit_e0.3 | Two-body orbit (e=0.3) | General | S-system | 4, 7 | App. A |
+| S1987_D3_orbit_e0.5 | Two-body orbit (e=0.5) | General | S-system | 4, 7 | App. A |
+| S1987_D4_orbit_e0.7 | Two-body orbit (e=0.7) | General | S-system | 4, 7 | App. A |
+| S1987_D5_orbit_e0.9 | Two-body orbit (e=0.9) | General | S-system | 4, 7 | App. A |
+| S1987_E1_bessel | Bessel equation | General | GMA | 4, 7 | App. A |
+| S1987_E2_van_der_pol | Van der Pol oscillator | GMA | S-system | 5 | App. A |
+| S1987_E3_duffing | Duffing equation | General | GMA | 4, 7 | App. A |
+| S1987_E4_falling_body | Falling body with drag | S-system | S-system | — | App. A |
+| S1987_E5_implicit | Implicit DE | General | S-system | 4, 7 | App. A |
+
+---
+
+## test_models3/ — Literature Recastings (40 models)
+
+Models for which a recasting has been published in the literature. Sources span multiple authors and application domains.
+
+| File | Description | Original | Recast | Rules | Source |
+|------|-------------|----------|--------|-------|--------|
+| A2013_power_system_2machine | 2-machine power system | General | GMA | 3 | Anghel et al. (2013) |
+| A2013_power_system_3machine | 3-machine power system | General | GMA | 3 | Anghel et al. (2013) |
+| A2017_gompertz_recasting | Gompertz growth | General | S-system | 1 | Anguelov et al. (2017) |
+| DN2015_planetary_motion | Planetary two-body motion | Canonical S-system | Canonical S-system | — | Daniels & Nemenman (2015a) |
+| DN2015b_michaelis_menten | Michaelis-Menten kinetics | General | S-system | 4 | Daniels & Nemenman (2015b) |
+| DN2015b_sinx_recasting | sin(x) dynamics | General | GMA | 3 | Daniels & Nemenman (2015b) |
+| HBF1998_brusselator | Brusselator | GMA | S-system | 5 | Hernández-Bermejo et al. (1998) |
+| HBF1998_morse_oscillator | Morse oscillator | General | S-system | 1 | Hernández-Bermejo et al. (1998) |
+| HBF1998_semiconductor_exciton | Semiconductor exciton | General | General | 1 | Hernández-Bermejo et al. (1998) |
+| HBF1998_three_wave | Three-wave interaction | GMA | GMA | — | Hernández-Bermejo et al. (1998) |
+| I1988_metabolic_pathway | Unbranched metabolic pathway | General | General | 4 | Irvine (1988) |
+| KPW2024_exponential_lifting | Exponential lifting | General | Canonical S-system | 1 | Kramer et al. (2024) |
+| MS2007_MM_to_GMA | Michaelis-Menten to GMA | General | General | 4 | Marin-Sanguino et al. (2007) |
+| MS2007_fermentation_yeast | Yeast fermentation | GMA | GMA | — | Marin-Sanguino et al. (2007) |
+| MS2007_tryptophan_operon | Tryptophan operon | General | General | 4 | Marin-Sanguino et al. (2007) |
+| P2011_branched_SC | Branched SC kinetics | General | General | 4 | Pozo et al. (2011) |
+| P2011_linear_pathway_MM | Linear pathway with MM | General | Canonical S-system | 4 | Pozo et al. (2011) |
+| PP2005_CSTR_arrhenius | CSTR with Arrhenius | General | General | 1, 4 | Papachristodoulou & Prajna (2005) |
+| PP2005_exponential_exact | Exponential (exact) | General | S-system | 1 | Papachristodoulou & Prajna (2005) |
+| RV1990_central_F | Central F distribution | General | GMA | 4, 7 | Rust & Voit (1990) |
+| RV1990_central_chisquared | Central χ² distribution | GMA | S-system | 5, 7 | Rust & Voit (1990) |
+| RV1990_central_t_density | Central t distribution | General | S-system | 4, 7 | Rust & Voit (1990) |
+| S1988_Monod_chemostat | Monod chemostat | General | GMA | 4 | Savageau (1988) |
+| S1993_mixed_terms | Mixed +/− terms | GMA | S-system | 5 | Savageau (1993) |
+| S1993_sum_radical | Sum with radical | Canonical S-system | S-system | — | Savageau (1993) |
+| V1988a_endemic_infection | Endemic infection | GMA | GMA | — | Voit (1988a) |
+| V1988a_sin_exp_system | Sin/exp nonlinearities | General | GMA | 1, 3 | Voit (1988a) |
+| V1988a_weibull_growth | Weibull growth | General | General | 1 | Voit (1988a) |
+| V1988b_exponential_ode | Exponential ODE | General | S-system | 1 | Voit (1988b) |
+| V1988b_gma_to_ssystem | GMA to S-system | GMA | GMA | — | Voit (1988b) |
+| V1990_cooke_endemic | Cooke endemic model | GMA | GMA | — | Voit (1990) |
+| V1990_endemic_exp_infection | Exponential infection | General | Canonical S-system | 1 | Voit (1990) |
+| V1990_kemper_endemic | Kemper endemic model | GMA | GMA | — | Voit (1990) |
+| V1992_blasius_equation | Blasius boundary layer | S-system | S-system | — | Voit (1992) |
+| V1992_log_ode | Logarithmic ODE | General | GMA | 2 | Voit (1992) |
+| V1993_blue_sky | Blue sky catastrophe | General | GMA | 3, 7 | Voit (1993) |
+| V1993_forced_oscillator | Forced oscillator | General | GMA | 3, 7 | Voit (1993) |
+| V1993_rossler_band | Rössler attractor | GMA | S-system | 5 | Voit (1993) |
+| V2005_bistable_gene | Bistable gene expression | General | General | 4 | Voit (2005) |
+| Z2022_pll_converter | Phase-locked loop converter | General | GMA | 3 | Zhang et al. (2022) |
+
+---
+
+## test_models4/ — Systems Biology Models (20 models)
+
+Additional models from the systems biology and mathematical biology literature, used for expanded testing.
+
+| File | Description | Original | Recast | Rules |
+|------|-------------|----------|--------|-------|
+| Bergman1989 | Minimal glucose model | GMA | GMA | — |
+| De_Young1992 | IP3 receptor model | General | General | 4 |
+| Dreisigmeyer2008 | Gene expression model | General | GMA | 4 |
+| Fink2000 | Calcium oscillations | General | General | 4 |
+| Gardner2000 | Toggle switch | General | Canonical S-system | 4 |
+| Goldbeter1996 | Circadian rhythm | General | General | 4 |
+| Kholodenko2000 | MAPK cascade | General | General | 4 |
+| Krishna2006 | Circadian clock | General | GMA | 4 |
+| Lander2009 | Morphogen gradient | General | General | 4 |
+| Lev_Bar-Or2000 | p53-Mdm2 oscillations | General | General | 4 |
+| Lipniacki2006 | NF-κB signaling | General | Canonical S-system | 4 |
+| Mangan2003 | Feed-forward loop | General | General | 4 |
+| McMillen2002 | Repressilator | General | GMA | 4 |
+| Mueller2006 | Circadian model | General | General | 4 |
+| Ozbudak2004 | Gene expression noise | General | General | 4 |
+| Rosenfeld2002 | Autoregulation | General | Canonical S-system | 4 |
+| Samoilov2005 | Signal transduction | GMA | S-system | 5 |
+| Selkov1968 | Glycolytic oscillator | GMA | S-system | 5 |
+| Weber2018 | Quorum sensing | General | General | 3, 7 |
+| Xiong2018 | Cell cycle model | General | GMA | 4 |
+
+---
+
+## Antimony Format Notes
+
+Models are specified in [Antimony](https://antimony.sourceforge.io/) format, a human-readable model description language commonly used in systems biology.
+
+### Supported Features
+
+- Species declarations
+- Rate rules and reactions
+- Parameter definitions
+- Compartment definitions (single compartment)
 - Initial conditions
-- Original ODE system in Antimony format
-- Recast S-system form in comments
+- Model annotations in comments
 
-## Usage
+### Unsupported Features
 
-```python
-import ssys
-sym = ssys.parse_antimony("tests2/S1987_A4_logistic.ant")
-result = ssys.recast_to_ssystem(sym, mode="simplified")
+- **Events / Heaviside functions**: Step discontinuities are not supported. Use smooth approximations instead (see `m29_time_varying_beta.ant` for an example using a sigmoid approximation)
+- **Delays**: Time-delay differential equations are not supported
+- **Multiple compartments**: Models with multiple compartment definitions have not been tested
+
+### Simulation Metadata
+
+Model files may include simulation metadata in comments:
+```
+// @SIM T_START=0 T_END=20 N_STEPS=400
+```
+
+---
+
+## Numerical Considerations
+
+Recasting can introduce numerical challenges:
+
+1. **State variable lifting**: Recasting may increase the number of state variables, affecting numerical stability
+2. **Stiff systems**: Some recast systems may become stiff, requiring appropriate ODE solvers
+3. **Initial condition constraints**: Recast systems require strictly positive initial conditions when negative exponents are present
+
+Model initial conditions, parameter values, and integration intervals in this collection were chosen to avoid numerical problems during validation testing.
+
+---
+
+## References
+
+- Anghel M, Milano F, Papachristodoulou A (2013). Algorithmic construction of Lyapunov functions for power system stability analysis. *IEEE Trans Circuits Syst I* 60(9):2533–2546.
+
+- Anguelov R, Borisov M, Iliev A, Kyurkchiev N, Markov S (2017). On the chemical meaning of some growth models possessing Gompertzian-type property. *Math Methods Appl Sci* 41:8365–8376.
+
+- Daniels BC, Nemenman I (2015a). Automated adaptive inference of phenomenological dynamical models. *Nat Commun* 6:8133.
+
+- Daniels BC, Nemenman I (2015b). Efficient inference of parsimonious phenomenological models of cellular dynamics using S-systems and alternating regression. *PLOS ONE* 10(3):e0119821.
+
+- Hernández-Bermejo B, Fairén V, Brenig L (1998). Algebraic recasting of nonlinear systems of ODEs into universal formats. *J Phys A: Math Gen* 31:2415–2430.
+
+- Irvine DH (1988). Efficient solution of nonlinear models expressed in S-system canonical form. *Math Comput Modelling* 11:123–128.
+
+- Kramer B, Peherstorfer B, Willcox K (2024). Learning nonlinear reduced models from data with operator inference. *Annu Rev Fluid Mech* 56:521–548.
+
+- Marin-Sanguino A, Voit EO, Gonzalez-Alcon C, Torres NV (2007). Optimization of biotechnological systems through geometric programming. *Theor Biol Med Model* 4:38.
+
+- Papachristodoulou A, Prajna S (2005). Analysis of non-polynomial systems using the sum of squares decomposition. In: *Positive Polynomials in Control*, Springer.
+
+- Pozo C, Guillén-Gosálbez G, Sorribas A, Jiménez L (2011). Steady-state global optimization of metabolic non-linear dynamic models through recasting into power-law canonical models. *BMC Syst Biol* 5:137.
+
+- Rust PF, Voit EO (1990). Statistical densities, cumulatives, quantiles, and power obtained by S-system differential equations. *J Amer Statist Assoc* 85(410):572–578.
+
+- Savageau MA (1988). Introduction to S-systems and the underlying power-law formalism. *Math Comput Modelling* 11:546–551.
+
+- Savageau MA (1993). Finding multiple roots of nonlinear algebraic equations using S-system methodology. *Appl Math Comput* 55:187–199.
+
+- Savageau MA, Voit EO (1987). Recasting nonlinear differential equations as S-systems: a canonical nonlinear form. *Math Biosci* 87:83–115.
+
+- Voit EO (1988a). S-systems as a canonical nonlinear form. *Math Comput Modelling* 11:140–145.
+
+- Voit EO (1988b). New nonlinear methodologies for modeling molecular and cellular systems. In: *Proc IFAC Modelling and Control in Biomedical Systems*, Venice, Italy.
+
+- Voit EO (1990). S-system modelling of endemic infections. *Comput Math Applic* 20(4–6):161–173.
+
+- Voit EO (1992). Symmetries of S-systems. *Math Biosci* 109:19–31.
+
+- Voit EO (1993). S-system modelling of complex systems with chaotic input. *Environmetrics* 4(2):153–186.
+
+- Voit EO (2005). Smooth bistable S-systems. *IEE Proc Syst Biol* 152(4):207–213.
+
+- Zhang X, Xia Y, Zhu H, Zhang M, Konstantinou G (2022). Domain of attraction's estimation for grid connected converters with phase-locked loop. *IEEE Trans Power Syst* 37(2):1351–1362.

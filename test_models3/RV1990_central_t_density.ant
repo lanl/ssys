@@ -1,4 +1,5 @@
 // Central t-Distribution Density - Original Form
+// Related: test_models1/m17_central_t.ant
 // Source: Voit & Rust, "Evaluation of the Noncentral t Distribution with S-Systems"
 //         Biom. J. 32(6):681-695 (1990)
 //         Equations (2)-(4)

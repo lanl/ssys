@@ -13,7 +13,7 @@ m12_toy_mass_action.ant
 m13_composite_func_decomp.ant
 m14_Michaelis_Menten_prod_deg.ant
 m15_tryptophan_operon.ant
-m16_normal.ant
+m16_normal_dens.ant
 m17_central_t.ant
 m18_Goodwin.ant
 m19_RM_predator_prey.ant

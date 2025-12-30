@@ -1,4 +1,5 @@
 // SIR model
+// Related: m29_time_varying_beta.ant (SIR with time-varying β)
 // Kermack WO, McKendrick AG (1927) A contribution to the
 //   the mathematical theory of epidemics. Proc R Soc A 115: 700-721.
 // States and ICs (NYC-scale):
@@ -37,4 +38,4 @@ model SIR()
   // recovery: I -> R at rate gamma_rate * I
   R2: I -> R; gamma_rate*I
 end
-// @SIM T_START=0 T_END=20 N_STEPS=400 
+// @SIM T_START=0 T_END=20 N_STEPS=400
