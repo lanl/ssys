@@ -174,14 +174,16 @@ From the repository root:
 
 ```bash
 # README.md → README.pdf
-pandoc README.md -o README.pdf
+pandoc README.md -o README.pdf --pdf-engine=xelatex
 
 # RECASTING.md → RECASTING.pdf  
-pandoc RECASTING.md -o RECASTING.pdf
+pandoc RECASTING.md -o RECASTING.pdf --pdf-engine=xelatex
 
 # TEST_MODELS.md → TEST_MODELS.pdf
-pandoc TEST_MODELS.md -o TEST_MODELS.pdf
+pandoc TEST_MODELS.md -o TEST_MODELS.pdf --pdf-engine=xelatex
 ```
+
+**Note:** The `--pdf-engine=xelatex` flag is required because the documentation files contain Unicode characters (Greek letters like ε, θ, mathematical symbols like ≥, ≤). XeLaTeX handles Unicode natively; the default pdflatex does not.
 
 ### 5.3 Enhanced Options
 
@@ -190,6 +192,7 @@ For better formatting with table of contents and margins:
 ```bash
 pandoc README.md \
   -o README.pdf \
+  --pdf-engine=xelatex \
   --toc \
   --toc-depth=3 \
   -V geometry:margin=1in \
@@ -197,6 +200,7 @@ pandoc README.md \
 
 pandoc RECASTING.md \
   -o RECASTING.pdf \
+  --pdf-engine=xelatex \
   --toc \
   --toc-depth=3 \
   -V geometry:margin=1in \
@@ -204,6 +208,7 @@ pandoc RECASTING.md \
 
 pandoc TEST_MODELS.md \
   -o TEST_MODELS.pdf \
+  --pdf-engine=xelatex \
   --toc \
   --toc-depth=3 \
   -V geometry:margin=1in \
@@ -217,8 +222,9 @@ Create a script `build_docs.sh`:
 ```bash
 #!/bin/bash
 # Build PDF documentation from markdown files
+# Uses XeLaTeX for Unicode support (Greek letters, math symbols)
 
-OPTS="--toc --toc-depth=3 -V geometry:margin=1in -V colorlinks=true"
+OPTS="--pdf-engine=xelatex --toc --toc-depth=3 -V geometry:margin=1in -V colorlinks=true"
 
 pandoc README.md    -o README.pdf    $OPTS
 pandoc RECASTING.md -o RECASTING.pdf $OPTS
