@@ -1273,9 +1273,10 @@ def classify_system(sym: SymSystem) -> SystemClass:
         if len(pos_monomials) != 1 or len(neg_monomials) != 1:
             is_canonical = False
 
-        # Check S-system: 1-2 total terms
-        total_terms = len(pos_monomials) + len(neg_monomials)
-        if total_terms < 1 or total_terms > 2:
+        # Check S-system: at most 1 positive AND at most 1 negative term
+        # S-system form: α·∏X^g - β·∏X^h (production minus degradation)
+        # Two terms with the SAME sign is GMA, not S-system
+        if len(pos_monomials) > 1 or len(neg_monomials) > 1:
             is_ssystem = False
 
         # Check GMA: may have multiple terms, but all must be monomials
