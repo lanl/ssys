@@ -58,7 +58,7 @@ The package includes 213 unit tests covering parsing, recasting, validation, and
 
 # Availability
 
-`ssys` is available on GitLab at https://lisdi-git.lanl.gov/hlavacek/ssys. Installation requires Python ≥3.10, SymPy, NumPy, libRoadRunner, and the Antimony library.
+`ssys` is available on GitLab at https://lisdi-git.lanl.gov/hlavacek/ssys. Installation requires Python >= 3.10, SymPy, NumPy, libRoadRunner, and the Antimony library.
 
 ```bash
 pip install -e ".[dev]"
