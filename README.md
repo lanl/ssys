@@ -150,9 +150,6 @@ Overall: ✓ PASS
 ### Quick Start
 
 ```bash
-# Activate environment
-source ssys_dev/bin/activate
-
 # Run test_models1 (29 core models)
 python recast_models.py test_models1
 
