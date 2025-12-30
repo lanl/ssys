@@ -309,7 +309,7 @@ See [RECASTING.md](RECASTING.md) for detailed recasting theory, rules, and worke
 - Explicit rate rules: `X' = ...`
 - Boundary species: `$X` (not dynamic)
 - Parameters (treated as positive constants)
-- **Elementary functions**: `exp`, `log`, `sin`, `cos`, `tan`, `sqrt`
+- **Elementary functions**: `exp`, `log`, `sin`, `cos`, `tan`, `sqrt`, `sinh`, `cosh`, `tanh`, `asin`, `acos`, `atan`
 - **Rational functions**: `X/(Y+1)`, `1/(X+Y+Z)`
 - **Assignment rules**: `Z := X + Y` (substituted into ODEs)
 
