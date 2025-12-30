@@ -31,6 +31,13 @@ out_*/
 *.tmp
 temp_*
 
+# Generated documentation (build with ./build_docs.sh or docker)
+README.pdf
+RECASTING.pdf
+TEST_MODELS.pdf
+paper/paper.pdf
+paper/jats/
+
 # Local documentation files (not for version control)
 Copyright_Disclosure_ssys_09Dec2025.docx
 Copyright_Disclosure_ssys_09Dec2025.pdf
