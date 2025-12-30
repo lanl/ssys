@@ -42,7 +42,7 @@ The package enables researchers to convert published models into canonical form 
 
 # State of the field
 
-Antimony is a widely used human-readable modeling language for systems biology [@Smith2009Antimony], with transparent interoperability to SBML [@Hucka2003]. The S-system formalism is classical [@Savageau1969; @Voit2013], but general-purpose recasting tools are scarce. We are not aware of an open-source package that ingests arbitrary Antimony/SBML ODEs and returns an exact S-system with explicit state mappings and correctness certificates. `ssys` aims to be that missing bridge.
+Antimony is a widely used human-readable modeling language for systems biology [@Smith2009Antimony], with transparent interoperability to SBML [@Keating2020SBML]. The S-system formalism is classical [@Savageau1969; @Voit2013], but general-purpose recasting tools are scarce. We are not aware of an open-source package that ingests arbitrary Antimony/SBML ODEs and returns an exact S-system with explicit state mappings and correctness certificates. `ssys` aims to be that missing bridge.
 
 # Functionality
 
@@ -65,8 +65,10 @@ pip install -e ".[dev]"
 ssys-recast --manifest models.manifest --outdir output --validate
 ```
 
-# Acknowledgements
+# Acknowledgments
 
-This work was supported by the U.S. Department of Energy through the Los Alamos National Laboratory (LANL). LANL is operated by Triad National Security, LLC, for the National Nuclear Security Administration of the U.S. Department of Energy (Contract No. 89233218CNA000001).
+We thank Michael A. Savageau for foundational work on S-systems and inspiration for this project.
+
+This work was supported by the National Institutes of Health (NIH) National Institute of General Medical Sciences (NIGMS) under grant R01GM111510 and by the U.S. Department of Energy through the Los Alamos National Laboratory (LANL). LANL is operated by Triad National Security, LLC, for the National Nuclear Security Administration of the U.S. Department of Energy (Contract No. 89233218CNA000001).
 
 # References
