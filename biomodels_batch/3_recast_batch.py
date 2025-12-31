@@ -422,6 +422,11 @@ def main():
         action="store_true",
         help="Only retry models that previously failed with timeout (requires prior run)"
     )
+    parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Delete old results (recasts/, failures/, validation/, validated/) before starting"
+    )
 
     args = parser.parse_args()
 
@@ -437,6 +442,29 @@ def main():
     logger.info(f"Validate: {not args.no_validate}")
     logger.info(f"Resume: {args.resume}")
     logger.info(f"Retry timeouts only: {args.retry_timeouts}")
+
+    # Clean old results if requested
+    if args.clean:
+        import shutil
+        logger.info("Cleaning old results...")
+        dirs_to_clean = [
+            Path(config.RECASTS_DIR),
+            Path(config.FAILURES_DIR),
+            Path(config.VALIDATION_DIR),
+            Path(config.RESULTS_DIR) / "validated",
+        ]
+        for d in dirs_to_clean:
+            if d.exists():
+                shutil.rmtree(d)
+                logger.info(f"  Deleted {d}")
+        
+        # Also reset the results CSV
+        results_csv = Path(config.RESULTS_DIR) / "batch_recast_results.csv"
+        if results_csv.exists():
+            results_csv.unlink()
+            logger.info(f"  Deleted {results_csv}")
+        
+        logger.info("Cleanup complete.")
 
     # Load candidates
     filter_arg = None if args.filter == "all" else args.filter
