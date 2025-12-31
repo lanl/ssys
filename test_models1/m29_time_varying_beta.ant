@@ -124,4 +124,4 @@ model time_varying_beta()
   t = 0;
 
 end
-// @SIM T_START=0 T_END=200 N_STEPS=400
+// @SIM T_START=0 T_END=200 N_STEPS=400 EPS_SLACK=1e-10
