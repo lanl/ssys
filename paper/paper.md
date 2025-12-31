@@ -63,7 +63,7 @@ Antimony is a widely used human-readable modeling language for systems biology [
 
 # Quality control
 
-The package includes more than 200 unit tests covering parsing, recasting, validation, and CLI functionality. Test suites include more than 100 models.
+The package includes more than 200 unit tests covering parsing, recasting, validation, and CLI functionality. Integration tests entail transformation and validation of more than 100 models.
 
 # BioModels database benchmark
 
