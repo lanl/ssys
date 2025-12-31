@@ -490,12 +490,37 @@ def main():
     if skipped > 0:
         logger.info(f"Skipped {skipped} models (already have output files)")
 
-    # Save detailed results FIRST (before summary that might crash)
-    results_df = pd.DataFrame(results)
+    # Save detailed results - MERGE with existing CSV instead of overwriting
     results_csv = Path(config.RESULTS_DIR) / "batch_recast_results.csv"
     results_csv.parent.mkdir(parents=True, exist_ok=True)
-    results_df.to_csv(results_csv, index=False)
-    logger.info(f"Saved results to {results_csv}")
+    
+    new_results_df = pd.DataFrame(results)
+    
+    if results_csv.exists() and not new_results_df.empty:
+        # Load existing results and merge
+        existing_df = pd.read_csv(results_csv)
+        
+        # Create a key for merging (model_id + mode)
+        new_results_df["_key"] = new_results_df["model_id"] + "_" + new_results_df["mode"]
+        existing_df["_key"] = existing_df["model_id"] + "_" + existing_df["mode"]
+        
+        # Remove existing entries that will be replaced by new results
+        existing_df = existing_df[~existing_df["_key"].isin(new_results_df["_key"])]
+        
+        # Combine old (non-overlapping) + new results
+        merged_df = pd.concat([existing_df, new_results_df], ignore_index=True)
+        merged_df = merged_df.drop(columns=["_key"])
+        
+        # Sort by model_id for consistency
+        merged_df = merged_df.sort_values("model_id").reset_index(drop=True)
+        
+        merged_df.to_csv(results_csv, index=False)
+        logger.info(f"Merged {len(new_results_df)} new results with {len(existing_df)} existing")
+        logger.info(f"Total results in {results_csv}: {len(merged_df)}")
+    else:
+        # No existing file or no new results - just save
+        new_results_df.to_csv(results_csv, index=False)
+        logger.info(f"Saved {len(new_results_df)} results to {results_csv}")
 
     # Generate and print summary
     try:
