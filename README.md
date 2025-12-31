@@ -178,6 +178,21 @@ Options:
 
 See [TEST_MODELS.md](TEST_MODELS.md) for complete model documentation and [RECASTING.md](RECASTING.md) for recasting theory.
 
+### pytest Integration Tests
+
+The full integration test suite validates all 117 models in both modes:
+
+```bash
+# Run full integration suite (~3 min)
+pytest tests/test_integration.py -v
+
+# Skip slow integration tests during rapid development
+pytest -m "not slow"
+
+# Run a specific model directory
+pytest tests/test_integration.py -k "test_models1"
+```
+
 ### Viewing the Notebook Reports
 
 ```bash
