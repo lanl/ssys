@@ -4985,6 +4985,22 @@ def _failed_to_antimony(result: RecastResult, model_name: str) -> str:
 
 def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
     """Format S-system in simplified mode with enhanced documentation and assignment rules."""
+    # Build name sanitization map for reserved keywords
+    all_names: set[str] = set()
+    for var in result.variables:
+        all_names.add(var.name)
+    for comp_name in result.compartments.keys():
+        all_names.add(comp_name)
+    for param_name in result.params.keys():
+        all_names.add(param_name)
+    if result.assignment_rules:
+        for rule_name in result.assignment_rules.keys():
+            all_names.add(rule_name)
+    name_map = _build_name_sanitization_map(all_names)
+
+    def sanitize(name: str) -> str:
+        return name_map.get(name, name)
+
     lines: list[str] = []
     lines.append(f"model {model_name}()")
     lines.append("")
@@ -4993,9 +5009,9 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
     # Use original compartment name if available, otherwise default to "cell"
     if result.compartments:
         for comp_name, comp_size in result.compartments.items():
-            lines.append(f"compartment {comp_name} = {comp_size:g};")
+            lines.append(f"compartment {sanitize(comp_name)} = {comp_size:g};")
         # Use first compartment name for species declarations
-        default_compartment = next(iter(result.compartments.keys()))
+        default_compartment = sanitize(next(iter(result.compartments.keys())))
     else:
         lines.append("compartment cell = 1;")
         default_compartment = "cell"
