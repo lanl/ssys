@@ -4714,6 +4714,22 @@ def gma_to_antimony(
             - "ode": Output as species with ODEs (default, may drift)
             - "assignment": Output as assignment rules (algebraically exact)
     """
+    # Build name sanitization map for reserved keywords
+    all_names: set[str] = set()
+    for eq in result.gma_equations:
+        all_names.add(eq.var.name)
+    for comp_name in result.compartments.keys():
+        all_names.add(comp_name)
+    for param_name in result.params.keys():
+        all_names.add(param_name)
+    if result.assignment_rules:
+        for rule_name in result.assignment_rules.keys():
+            all_names.add(rule_name)
+    name_map = _build_name_sanitization_map(all_names)
+
+    def sanitize(name: str) -> str:
+        return name_map.get(name, name)
+
     lines: list[str] = []
     lines.append(f"model {model_name}()")
     lines.append("")
