@@ -5270,6 +5270,20 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
     - Detailed explanatory comments
     - Clean equation formatting
     """
+    # Build name sanitization map for reserved keywords
+    # Canonical mode uses generated names (Z_1, Z_2) which are safe,
+    # but original params and assignment rules may have conflicts
+    all_names: set[str] = set()
+    for param_name in result.params.keys():
+        all_names.add(param_name)
+    if result.assignment_rules:
+        for rule_name in result.assignment_rules.keys():
+            all_names.add(rule_name)
+    name_map = _build_name_sanitization_map(all_names)
+
+    def sanitize(name: str) -> str:
+        return name_map.get(name, name)
+
     lines: list[str] = []
 
     # Model declaration with _SSystem suffix
