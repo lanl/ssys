@@ -5073,7 +5073,7 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         lines.append("// ========================================================================")
         for param_name in param_names_to_output:
             param_val = result.params[param_name]
-            lines.append(f"{param_name} = {param_val:g};")
+            lines.append(f"{sanitize(param_name)} = {param_val:g};")
         lines.append("")
 
     # --- Assignment rules (time-dependent quantities) ---
@@ -5257,7 +5257,10 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         lines.extend(sim_lines)
 
     # Convert ** to ^ for valid Antimony syntax
-    return _sympy_to_antimony_syntax("\n".join(lines))
+    output = _sympy_to_antimony_syntax("\n".join(lines))
+    # Apply name sanitization to entire output (handles ODE expressions)
+    output = _apply_name_sanitization(output, name_map)
+    return output
 
 
 def _ssystem_to_antimony_canonical(result, model_name: str) -> str:

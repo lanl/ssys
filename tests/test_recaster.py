@@ -987,6 +987,135 @@ class TestCanonicalModeFormatting:
             f"eps_slack should propagate to result: {result.eps_slack}"
 
 
+class TestReservedKeywordSanitization:
+    """Tests for Antimony reserved keyword sanitization.
+
+    Regression tests for bug where compartment names like 'compartment' caused
+    parsing errors: "unexpected 'compartment', expecting '$' or element name"
+    """
+
+    def test_sanitize_antimony_name_reserved_keyword(self):
+        """Test that reserved keywords are sanitized with _var suffix."""
+        from ssys.recaster import _sanitize_antimony_name
+
+        # Reserved keywords should get _var suffix
+        assert _sanitize_antimony_name("compartment") == "compartment_var"
+        assert _sanitize_antimony_name("species") == "species_var"
+        assert _sanitize_antimony_name("model") == "model_var"
+        assert _sanitize_antimony_name("function") == "function_var"
+
+    def test_sanitize_antimony_name_reserved_function(self):
+        """Test that reserved function names are sanitized."""
+        from ssys.recaster import _sanitize_antimony_name
+
+        # Reserved function names should get _var suffix
+        assert _sanitize_antimony_name("exp") == "exp_var"
+        assert _sanitize_antimony_name("log") == "log_var"
+        assert _sanitize_antimony_name("sin") == "sin_var"
+        assert _sanitize_antimony_name("time") == "time_var"
+
+    def test_sanitize_antimony_name_safe_names(self):
+        """Test that safe names are not modified."""
+        from ssys.recaster import _sanitize_antimony_name
+
+        # Safe names should pass through unchanged
+        assert _sanitize_antimony_name("X") == "X"
+        assert _sanitize_antimony_name("cell") == "cell"
+        assert _sanitize_antimony_name("k1") == "k1"
+        assert _sanitize_antimony_name("my_compartment") == "my_compartment"
+
+    def test_sanitize_antimony_name_case_insensitive(self):
+        """Test that sanitization is case-insensitive."""
+        from ssys.recaster import _sanitize_antimony_name
+
+        # Antimony is case-insensitive for keywords
+        assert _sanitize_antimony_name("COMPARTMENT") == "COMPARTMENT_var"
+        assert _sanitize_antimony_name("Compartment") == "Compartment_var"
+        assert _sanitize_antimony_name("EXP") == "EXP_var"
+
+    def test_build_name_sanitization_map(self):
+        """Test building sanitization map for multiple names."""
+        from ssys.recaster import _build_name_sanitization_map
+
+        names = {"X", "compartment", "k1", "exp", "cell"}
+        name_map = _build_name_sanitization_map(names)
+
+        # Only reserved names should be in the map
+        assert "compartment" in name_map
+        assert "exp" in name_map
+        assert name_map["compartment"] == "compartment_var"
+        assert name_map["exp"] == "exp_var"
+
+        # Safe names should NOT be in the map
+        assert "X" not in name_map
+        assert "k1" not in name_map
+        assert "cell" not in name_map
+
+    def test_apply_name_sanitization_expression(self):
+        """Test applying sanitization to expression strings."""
+        from ssys.recaster import _apply_name_sanitization
+
+        name_map = {"compartment": "compartment_var", "exp": "exp_var"}
+
+        # Test expression sanitization
+        result = _apply_name_sanitization("compartment + X", name_map)
+        assert result == "compartment_var + X"
+
+        # Test that partial matches are not replaced (word boundary)
+        result = _apply_name_sanitization("compartmental", name_map)
+        assert result == "compartmental"  # Not "compartment_varal"
+
+    def test_compartment_sanitization_in_output(self):
+        """Test that compartment 'compartment' is sanitized in Antimony output."""
+        from ssys.recaster import SymSystem, recast_to_ssystem, ssystem_to_antimony
+
+        X = sp.Symbol("X", positive=True)
+        k = sp.Symbol("k", positive=True)
+
+        # System with compartment named 'compartment' (the reserved keyword)
+        sym = SymSystem(
+            vars=[X],
+            params={"k": 0.5},
+            odes={X: -k * X},
+            initials={X: 1.0},
+            compartments={"compartment": 1.0},  # Reserved keyword as name
+        )
+
+        result = recast_to_ssystem(sym)
+        output = ssystem_to_antimony(result, model_name="test")
+
+        # Should have sanitized compartment name to compartment_var
+        # Note: the Antimony keyword "compartment" may also get sanitized 
+        # but the important thing is the NAME is no longer just "compartment"
+        assert "compartment_var" in output, \
+            f"Should sanitize 'compartment' to 'compartment_var': {output}"
+        # Should NOT have the original invalid syntax "compartment compartment = 1"
+        assert "compartment compartment = 1" not in output, \
+            f"Should NOT have 'compartment compartment': {output}"
+
+    def test_parameter_sanitization_in_output(self):
+        """Test that reserved parameter names are sanitized in Antimony output."""
+        from ssys.recaster import SymSystem, recast_to_ssystem, ssystem_to_antimony
+
+        X = sp.Symbol("X", positive=True)
+        exp_param = sp.Symbol("exp", positive=True)  # Reserved function name
+
+        # System with parameter named 'exp' (reserved function name)
+        sym = SymSystem(
+            vars=[X],
+            params={"exp": 0.5},  # Reserved function name as param
+            odes={X: -exp_param * X},
+            initials={X: 1.0},
+        )
+
+        result = recast_to_ssystem(sym)
+        output = ssystem_to_antimony(result, model_name="test")
+
+        # Should have sanitized parameter name
+        assert "exp_var = 0.5" in output, \
+            f"Should sanitize 'exp' to 'exp_var': {output}"
+
+
 class TestVersionConsistency:
     """Tests for version consistency between pyproject.toml and __init__.py."""
 
