@@ -184,10 +184,13 @@ To regenerate all results from scratch:
 # Activate environment
 source ../ssys_dev/bin/activate
 
-# Step 1: Re-recast all models (applies latest fixes)
-python 3_recast_batch.py --mode simplified --timeout 60
+# Step 1a: First pass - quick recast with 15s timeout (catches ~90%)
+python 3_recast_batch.py --mode simplified --timeout 15 --no-validate
 
-# Step 2: Re-run validation
+# Step 1b: Second pass - retry only timeout failures with 60s timeout
+python 3_recast_batch.py --mode simplified --timeout 60 --retry-timeouts --no-validate
+
+# Step 2: Re-run validation on all successful recasts
 python 3b_validate_batch.py --numerical-only --timeout 60
 
 # Step 3: Collect validated models
@@ -198,5 +201,31 @@ python 5_rebuild_results_csv.py
 ```
 
 **Time estimates:**
-- Recasting: ~15-30 minutes (894 models)
+- First pass (15s): ~10-15 minutes
+- Second pass (timeouts only): ~5-10 minutes
 - Validation: ~30-60 minutes (depends on model complexity)
+
+## Understanding Failure Logs
+
+When a model fails to recast, an explanatory log is created in `results/failures/`:
+
+```
+Model: BIOMD0000000123
+Mode: simplified
+Timestamp: 2025-12-31T12:00:00
+Category: TIMEOUT
+Error: Timeout
+
+--- Explanation ---
+Model took too long to recast. Try with --timeout 60 or higher.
+Complex models with many species/reactions or deeply nested functions
+may require longer processing time.
+```
+
+**Error categories:**
+- `TIMEOUT` - Model took too long (try with higher --timeout)
+- `UNSUPPORTED_CONSTRUCT` - Piecewise functions, events, or delays
+- `PARSE_ERROR` - SBML/Antimony syntax issues
+- `NEGATIVITY` - Variables that become negative
+- `COMPLEXITY` - Deep nesting or recursion limits
+- `OTHER` - See error message for details
