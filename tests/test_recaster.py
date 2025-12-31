@@ -995,14 +995,13 @@ class TestReservedKeywordSanitization:
     """
 
     def test_sanitize_antimony_name_reserved_keyword(self):
-        """Test that reserved keywords are sanitized with _var suffix."""
+        """Test that empirically-problematic keywords get _var suffix."""
         from ssys.recaster import _sanitize_antimony_name
 
-        # Reserved keywords should get _var suffix
+        # Only keywords that have caused real-world parsing errors in BioModels
         assert _sanitize_antimony_name("compartment") == "compartment_var"
-        assert _sanitize_antimony_name("species") == "species_var"
-        assert _sanitize_antimony_name("model") == "model_var"
-        assert _sanitize_antimony_name("function") == "function_var"
+        assert _sanitize_antimony_name("DNA") == "DNA_var"
+        assert _sanitize_antimony_name("RNA") == "RNA_var"
 
     def test_sanitize_antimony_name_non_reserved_functions(self):
         """Test that function names are NOT sanitized (no modeler uses these)."""
@@ -1032,22 +1031,22 @@ class TestReservedKeywordSanitization:
         # Antimony is case-insensitive for keywords
         assert _sanitize_antimony_name("COMPARTMENT") == "COMPARTMENT_var"
         assert _sanitize_antimony_name("Compartment") == "Compartment_var"
-        assert _sanitize_antimony_name("SPECIES") == "SPECIES_var"
+        assert _sanitize_antimony_name("rna") == "rna_var"
 
     def test_build_name_sanitization_map(self):
         """Test building sanitization map for multiple names."""
         from ssys.recaster import _build_name_sanitization_map
 
-        names = {"X", "compartment", "k1", "species", "cell"}
+        names = {"X", "compartment", "k1", "DNA", "cell"}
         name_map = _build_name_sanitization_map(names)
 
-        # Only type keywords should be in the map (not function names)
+        # Only empirically-problematic keywords should be in the map
         assert "compartment" in name_map
-        assert "species" in name_map
+        assert "DNA" in name_map
         assert name_map["compartment"] == "compartment_var"
-        assert name_map["species"] == "species_var"
+        assert name_map["DNA"] == "DNA_var"
 
-        # Safe names and function names should NOT be in the map
+        # Safe names should NOT be in the map
         assert "X" not in name_map
         assert "k1" not in name_map
         assert "cell" not in name_map
@@ -1098,18 +1097,18 @@ class TestReservedKeywordSanitization:
         assert "compartment_var compartment_var" not in output, \
             f"Should NOT corrupt keyword to 'compartment_var compartment_var': {output}"
 
-    def test_species_keyword_sanitization_in_output(self):
-        """Test that 'species' as a param name is sanitized in Antimony output."""
+    def test_dna_keyword_sanitization_in_output(self):
+        """Test that 'DNA' as a param name is sanitized in Antimony output."""
         from ssys.recaster import SymSystem, recast_to_ssystem, ssystem_to_antimony
 
         X = sp.Symbol("X", positive=True)
-        species_param = sp.Symbol("species", positive=True)  # Reserved keyword
+        dna_param = sp.Symbol("DNA", positive=True)  # Reserved keyword
 
-        # System with parameter named 'species' (reserved type keyword)
+        # System with parameter named 'DNA' (empirically-problematic keyword)
         sym = SymSystem(
             vars=[X],
-            params={"species": 0.5},  # Reserved type keyword as param
-            odes={X: -species_param * X},
+            params={"DNA": 0.5},  # Reserved keyword as param
+            odes={X: -dna_param * X},
             initials={X: 1.0},
         )
 
@@ -1117,8 +1116,44 @@ class TestReservedKeywordSanitization:
         output = ssystem_to_antimony(result, model_name="test")
 
         # Should have sanitized parameter name
-        assert "species_var = 0.5" in output, \
-            f"Should sanitize 'species' to 'species_var': {output}"
+        assert "DNA_var = 0.5" in output, \
+            f"Should sanitize 'DNA' to 'DNA_var': {output}"
+
+
+class TestDnaRnaSanitization:
+    """Tests for DNA/RNA reserved keyword sanitization."""
+
+    def test_dna_rna_keywords_sanitized(self):
+        """Test that DNA and RNA are sanitized to DNA_var and RNA_var."""
+        from ssys.recaster import _sanitize_antimony_name
+
+        assert _sanitize_antimony_name("DNA") == "DNA_var"
+        assert _sanitize_antimony_name("RNA") == "RNA_var"
+        # Case insensitive
+        assert _sanitize_antimony_name("dna") == "dna_var"
+        assert _sanitize_antimony_name("Dna") == "Dna_var"
+
+    def test_rna_keyword_sanitization_in_output(self):
+        """Test that 'RNA' as a param name is sanitized in Antimony output."""
+        from ssys.recaster import SymSystem, recast_to_ssystem, ssystem_to_antimony
+
+        X = sp.Symbol("X", positive=True)
+        rna_param = sp.Symbol("RNA", positive=True)  # Reserved keyword
+
+        # System with parameter named 'RNA' (empirically-problematic keyword)
+        sym = SymSystem(
+            vars=[X],
+            params={"RNA": 0.5},  # Reserved keyword as param
+            odes={X: -rna_param * X},
+            initials={X: 1.0},
+        )
+
+        result = recast_to_ssystem(sym)
+        output = ssystem_to_antimony(result, model_name="test")
+
+        # Should have sanitized parameter name
+        assert "RNA_var = 0.5" in output, \
+            f"Should sanitize 'RNA' to 'RNA_var': {output}"
 
 
 class TestVersionConsistency:

@@ -25,11 +25,12 @@ EPS_SLACK = 1.0  # Default slack for canonical mode
 # (exp, log, sin, etc.) are NOT included because:
 # 1. No modeler would name a variable "exp" or "sin"
 # 2. Antimony would parse them as function calls, giving a different error
+# Antimony reserved keywords that have EMPIRICALLY caused parsing errors in BioModels.
+# We only sanitize keywords where we have seen real-world failures, not speculative ones.
+# Additional keywords can be added if new parsing errors are observed.
 ANTIMONY_RESERVED_KEYWORDS = frozenset({
-    # Type keywords - these appear at the start of declarations
-    "compartment", "species", "model", "function", "unit", "import", "end",
-    "const", "var", "formula", "event", "at", "after", "priority", "delay",
-    "substanceOnly", "hasOnlySubstanceUnits", "module", "in",
+    "compartment",  # Very common compartment name (259 cases in BioModels)
+    "DNA", "RNA",   # Common species names that conflict with Antimony built-ins
 })
 
 
@@ -4927,6 +4928,8 @@ def ssystem_to_antimony(
         # Prefix with 'm_' if name starts with digit
         if model_name[0].isdigit():
             model_name = f"m_{model_name}"
+        # Sanitize reserved keywords (e.g., model_name="model" -> "model_var")
+        model_name = _sanitize_antimony_name(model_name)
 
     # Check if recasting failed
     if result.status == RecastStatus.FAILED:
