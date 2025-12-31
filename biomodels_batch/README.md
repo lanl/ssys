@@ -154,3 +154,49 @@ Edit `config.py` to adjust:
 - SBML → Antimony conversion requires Antimony and libroadrunner
 - Large model collections may take hours to fetch
 - All data files are git-ignored to avoid repository bloat
+
+## Download Success Rate
+
+Not all models in BioModels can be downloaded. Typical download success is ~60-65%:
+
+| BioModels ODE Models | ~1,700 |
+|----------------------|--------|
+| Successfully downloaded | ~1,056 (62%) |
+| Download failures | ~644 (38%) |
+
+**Reasons for download failures:**
+
+1. **COMBINE Archive Format Variations**: BioModels provides models as OMEX/COMBINE archives (zip files). The script looks for SBML files named `{model_id}_url.xml` or files containing "sbml". Some archives use different naming conventions.
+
+2. **API/Network Issues**: Rate limiting, temporary 404 errors, or server issues. The script includes 50ms delays between requests to avoid rate limits.
+
+3. **Missing SBML Content**: Some BioModels entries are curated metadata without downloadable SBML files. Others may be deprecated or use alternative formats (CellML, etc.).
+
+4. **Model ID Filtering**: Only models classified as "ordinary differential equation" in BioModels metadata are fetched. Non-ODE models (stochastic, spatial, etc.) are filtered out.
+
+**The ~1,056 downloadable models represent the "actually usable" subset** for S-system recasting. This is a strong benchmark - many published validation studies use far fewer models.
+
+## Re-Running the Full Pipeline
+
+To regenerate all results from scratch:
+
+```bash
+# Activate environment
+source ../ssys_dev/bin/activate
+
+# Step 1: Re-recast all models (applies latest fixes)
+python 3_recast_batch.py --mode simplified --timeout 60
+
+# Step 2: Re-run validation
+python 3b_validate_batch.py --numerical-only --timeout 60
+
+# Step 3: Collect validated models
+python 6_collect_validated.py
+
+# Step 4: Rebuild results CSV
+python 5_rebuild_results_csv.py
+```
+
+**Time estimates:**
+- Recasting: ~15-30 minutes (894 models)
+- Validation: ~30-60 minutes (depends on model complexity)
