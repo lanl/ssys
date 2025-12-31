@@ -83,10 +83,10 @@ def generate_pipeline_table() -> str:
         "",
         "| Stage | Count | Notes |",
         "|-------|-------|-------|",
-        f"| BioModels ODE models | 1,644 | Fetched from BioModels database |",
+        f"| BioModels ODE models | 1,644 | Matched fetch query |",
         f"| SBML downloads | {sbml_count:,} | Successfully downloaded |",
-        f"| Filtered out | {filtered_out:,} | Events, delays, parse errors |",
-        f"| **Transformation candidates** | **{candidates_count:,}** | Passed all filters |",
+        f"| Filtered out | {filtered_out:,} | No ODEs, events, delays, etc. |",
+        f"| **Transformation candidates** | **{candidates_count:,}** | Passed heuristic filters |",
         f"| Successful transformations | {transforms_count:,} | {100*transforms_count/candidates_count:.1f}% success rate |" if candidates_count > 0 else f"| Successful transformations | {transforms_count:,} | - |",
     ]
     

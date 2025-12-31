@@ -1,15 +1,15 @@
 # BioModels Batch Transformation Results
 
-*Auto-generated on 2025-12-31 14:59*
+*Auto-generated on 2025-12-31 15:07*
 
 ## Pipeline Summary
 
 | Stage | Count | Notes |
 |-------|-------|-------|
-| BioModels ODE models | 1,644 | Fetched from BioModels database |
+| BioModels ODE models | 1,644 | Matched fetch query |
 | SBML downloads | 1,644 | Successfully downloaded |
-| Filtered out | 666 | Events, delays, parse errors |
-| **Transformation candidates** | **978** | Passed all filters |
+| Filtered out | 666 | No ODEs, events, delays, etc. |
+| **Transformation candidates** | **978** | Passed heuristic filters |
 | Successful transformations | 884 | 90.4% success rate |
 | Failed (timeout) | 76 | >60s processing time |
 | Failed (error) | 29 | Various parsing/transformation errors |
