@@ -265,12 +265,12 @@ python 3_recast_batch.py --mode simplified --timeout 60 --retry-timeouts --no-va
 # VALIDATION PHASE (3-stage pipeline)
 # ============================================================
 
-# Stage 1: Fast numerical screening (all CPUs)
-python 3b_validate_batch.py --numerical-only --timeout 60 --workers -1
+# Stage 1: Fast numerical screening (8 workers)
+python 3b_validate_batch.py --numerical-only --timeout 60 --workers 8
 
 # Stage 2: JAX numerical cross-check (passed models only)
 python 3b_validate_batch.py --numerical-only --use-jax --passed-only \
-    --timeout 120 --workers -1
+    --timeout 120 --workers 8
 
 # Stage 3: Symbolic proof (passed models, subprocess isolation)
 python 3b_validate_batch.py --symbolic-only --passed-only --subprocess \
@@ -302,13 +302,13 @@ python 5_rebuild_results_csv.py
 - Tests: Pointwise numerical comparison of ODEs
 - Speed: ~0.5s per model
 - Purpose: Fast screening to filter out incorrect transformations
-- Flags: `--numerical-only --workers -1`
+- Flags: `--numerical-only --workers 8`
 
 **Stage 2: JAX Numerical (independent implementation)**
 - Tests: Same numerical test using JAX autodiff
 - Speed: ~1-2s per model (JAX compilation overhead)
 - Purpose: Cross-validate with independent code
-- Flags: `--numerical-only --use-jax --passed-only --workers -1`
+- Flags: `--numerical-only --use-jax --passed-only --workers 8`
 
 **Stage 3: Symbolic Proof (can hang on complex models)**
 - Tests: Algebraic simplification to prove equivalence
@@ -322,8 +322,8 @@ python 5_rebuild_results_csv.py
 The validation script supports parallel execution:
 
 ```bash
-# Use all CPUs
---workers -1
+# Use 8 workers (recommended for 10-core machines)
+--workers 8
 
 # Use 4 workers (good for memory-intensive symbolic)
 --workers 4
@@ -331,6 +331,8 @@ The validation script supports parallel execution:
 # Single-threaded (default)
 --workers 1
 ```
+
+**Warning:** `--workers -1` uses all CPUs and can freeze the machine. Use explicit counts like `--workers 8` instead.
 
 For symbolic validation, use `--subprocess --workers 4` to:
 1. Run each model in isolated subprocess

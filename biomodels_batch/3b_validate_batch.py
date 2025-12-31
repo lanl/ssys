@@ -7,11 +7,11 @@ This allows recasting and validation to be run as separate phases.
 
 Three-Stage Validation Pipeline:
 Stage 1 (fast, robust):
-    python 3b_validate_batch.py --numerical-only --timeout 60 --workers -1
+    python 3b_validate_batch.py --numerical-only --timeout 60 --workers 8
 
 Stage 2 (JAX cross-check on passed models):
     python 3b_validate_batch.py --numerical-only --use-jax --passed-only \
-        --timeout 120 --workers -1
+        --timeout 120 --workers 8
 
 Stage 3 (symbolic proof on passed models, subprocess isolation):
     python 3b_validate_batch.py --symbolic-only --passed-only --subprocess \
