@@ -93,6 +93,10 @@ addopts = [
     "--cov=ssys",
     "--cov-report=term-missing",
 ]
+markers = [
+    "integration: marks tests as integration tests (run all 117 models)",
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
 
 [tool.ruff]
 line-length = 100
