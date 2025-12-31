@@ -55,6 +55,8 @@ Of 894 successful recasts:
 | General | 31 |
 | S-system | 23 |
 
+**Note on "General" classification:** The 31 models classified as "General" in recast form are successfully recast models that preserve assignment rules (`:=`) from the original model. For example, derived quantities like `alpha := a_tr * eff * tau_prot / (log(2) * KM)` are kept as assignment rules rather than being converted to auxiliary ODEs. The ODE equations themselves are in GMA form; the "General" classification reflects the presence of assignment rules alongside the rate equations. This is intentional - ssys preserves algebraically derived quantities as assignment rules for clarity and efficiency.
+
 ## Validated Models
 
 The 175 validated models are saved in `results/validated/`:
