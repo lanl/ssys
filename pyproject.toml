@@ -57,8 +57,9 @@ dev = [
 jax = [
     # JAX enables faster numerical validation with automatic differentiation
     # Install with: pip install ssys[jax]
-    "jax>=0.4",
-    "jaxlib>=0.4",
+    # IMPORTANT: JAX >=0.4.26 requires numpy>=2.0, which breaks libroadrunner
+    "jax>=0.4,<0.4.26",
+    "jaxlib>=0.4,<0.4.26",
 ]
 
 [project.urls]

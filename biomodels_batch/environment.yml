@@ -5,7 +5,7 @@ channels:
 dependencies:
   - python=3.12
   
-  # Scientific stack (with numpy<2 for compatibility)
+  # Scientific stack (with numpy<2 for libroadrunner compatibility)
   - numpy<2.0
   - scipy>=1.11
   - pandas>=2.0
@@ -29,6 +29,10 @@ dependencies:
   # Pip-only packages
   - pip
   - pip:
-      # Tellurium (SBML to Antimony conversion)
-      # Note: Not available via conda for ARM64/Apple Silicon
-      - tellurium>=2.2.10
+      # SBML to Antimony conversion (standalone packages, NOT tellurium)
+      - antimony>=2.13
+      - libroadrunner>=2.5
+      - python-libsbml>=5.20
+      # JAX for fast validation (pinned for numpy<2 compatibility)
+      - jax>=0.4.0,<0.4.26
+      - jaxlib>=0.4.0,<0.4.26

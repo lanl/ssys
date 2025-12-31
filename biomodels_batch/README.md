@@ -23,10 +23,10 @@ uv pip install -r requirements.txt
 Verify installation:
 
 ```bash
-python -c "import bioservices; import tellurium; print('✓ Ready!')"
+python -c "import bioservices; import antimony; import roadrunner; print('✓ Ready!')"
 ```
 
-**Note**: The numpy<2.0 constraint in requirements.txt is critical for compatibility with scipy/pandas/tellurium.
+**Note**: The numpy<2.0 constraint in requirements.txt is critical for compatibility with libroadrunner.
 
 ## Usage
 
@@ -151,6 +151,6 @@ Edit `config.py` to adjust:
 ## Notes
 
 - BioModels API has rate limits - the fetch script includes delays
-- SBML → Antimony conversion requires Tellurium
+- SBML → Antimony conversion requires Antimony and libroadrunner
 - Large model collections may take hours to fetch
 - All data files are git-ignored to avoid repository bloat

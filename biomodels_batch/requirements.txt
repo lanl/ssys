@@ -2,7 +2,7 @@
 # Install with: uv pip install -r requirements.txt
 
 # Core dependencies (should already be installed with ssys)
-# IMPORTANT: numpy<2.0 required for compatibility with scipy/pandas/tellurium
+# IMPORTANT: numpy<2.0 required for compatibility with libroadrunner
 numpy>=1.24.0,<2.0
 scipy>=1.11.0
 sympy>=1.12
@@ -12,12 +12,9 @@ matplotlib>=3.7.0
 bioservices>=1.11.2
 requests>=2.31.0
 
-# SBML to Antimony conversion
-# Option 1: Tellurium (includes Antimony and libroadrunner)
-tellurium>=2.2.10
-
-# Option 2: Standalone Antimony (lighter weight alternative)
-# antimony>=2.13.0
+# SBML to Antimony conversion (standalone - NOT tellurium)
+antimony>=2.13.0
+python-libsbml>=5.20
 
 # Data handling
 pandas>=2.0.0
@@ -33,5 +30,6 @@ tqdm>=4.65.0
 joblib>=1.3.0
 
 # JAX for fast numerical validation (autodiff)
-jax>=0.4.0
-jaxlib>=0.4.0
+# IMPORTANT: JAX >=0.4.26 requires numpy>=2.0, which breaks libroadrunner
+jax>=0.4.0,<0.4.26
+jaxlib>=0.4.0,<0.4.26
