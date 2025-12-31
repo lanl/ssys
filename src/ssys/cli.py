@@ -62,7 +62,7 @@ def recast_file(
 
     # Extract @SIM metadata FIRST (before any parsing)
     # This works for both parser modes
-    t_start, t_end, n_steps, eps_init = _extract_sim_metadata(txt)
+    t_start, t_end, n_steps, eps_init, eps_slack = _extract_sim_metadata(txt)
 
     # Parse based on selected parser
     if parser == "sbml":
@@ -79,6 +79,7 @@ def recast_file(
     sym.sim_t_end = t_end
     sym.sim_n_steps = n_steps
     sym.eps_init = eps_init
+    sym.eps_slack = eps_slack
 
     rec = recast_to_ssystem(sym, mode=mode)
     out_text = ssystem_to_antimony(rec, model_name=f"{name}_recast", mode=mode)

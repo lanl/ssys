@@ -15,6 +15,7 @@ func_def_pat = re.compile(r"^([A-Za-z_]\w*)\s*\(([^)]*)\)\s*:=\s*(.+)$")
 func_call_pat = re.compile(r"([A-Za-z_]\w*)\s*\(([^()]*)\)")
 
 EPS_INIT = 1e-6
+EPS_SLACK = 1.0  # Default slack for canonical mode
 
 
 def _expand_function_calls(
@@ -269,6 +270,8 @@ def _format_sim_metadata_lines(result: "RecastResult") -> list[str]:
         sim_parts.append(f"N_STEPS={result.sim_n_steps}")
     if result.eps_init is not None:
         sim_parts.append(f"EPS_INIT={result.eps_init:g}")
+    if result.eps_slack is not None:
+        sim_parts.append(f"EPS_SLACK={result.eps_slack:g}")
 
     if sim_parts:
         lines.append(f"// @SIM {' '.join(sim_parts)}")
@@ -473,22 +476,23 @@ def parse_antimony(text: str) -> ModelIR:
 
 def _extract_sim_metadata(
     text: str,
-) -> tuple[float | None, float | None, int | None, float | None]:
+) -> tuple[float | None, float | None, int | None, float | None, float | None]:
     """
     Extract @SIM metadata from Antimony comments.
 
-    Format: // @SIM T_START=0 T_END=100 N_STEPS=500 EPS_INIT=1e-6
+    Format: // @SIM T_START=0 T_END=100 N_STEPS=500 EPS_INIT=1e-6 EPS_SLACK=1e-10
 
     Args:
         text: Antimony text to scan for @SIM metadata
 
     Returns:
-        Tuple of (t_start, t_end, n_steps, eps_init), any of which may be None if not found
+        Tuple of (t_start, t_end, n_steps, eps_init, eps_slack), any of which may be None if not found
     """
     t_start = None
     t_end = None
     n_steps = None
     eps_init = None
+    eps_slack = None
 
     sim_marker_pattern = re.compile(r"@SIM\b")
     key_value_pattern = re.compile(r"(\w+)\s*=\s*([0-9.eE+-]+)")
@@ -520,8 +524,13 @@ def _extract_sim_metadata(
                             eps_init = float(value)
                         except ValueError:
                             pass
+                    elif key == "EPS_SLACK":
+                        try:
+                            eps_slack = float(value)
+                        except ValueError:
+                            pass
 
-    return t_start, t_end, n_steps, eps_init
+    return t_start, t_end, n_steps, eps_init, eps_slack
 
 
 def _preprocess_antimony_text(text: str) -> str:
@@ -564,7 +573,7 @@ def parse_antimony_via_sbml(antimony_text: str) -> "SymSystem":
         )
 
     # Extract @SIM metadata BEFORE conversion (comments are lost in SBML)
-    t_start, t_end, n_steps, eps_init = _extract_sim_metadata(antimony_text)
+    t_start, t_end, n_steps, eps_init, eps_slack = _extract_sim_metadata(antimony_text)
 
     # CRITICAL: Preprocess to join multi-line statements
     # libantimony requires complete statements on single lines
@@ -605,6 +614,7 @@ def parse_antimony_via_sbml(antimony_text: str) -> "SymSystem":
     sym.sim_t_end = t_end
     sym.sim_n_steps = n_steps
     sym.eps_init = eps_init
+    sym.eps_slack = eps_slack
 
     # Cache original Antimony text for RoadRunner simulation
     sym.antimony_text = antimony_text
@@ -1020,6 +1030,7 @@ class SymSystem:
     sim_t_end: float | None = None  # Simulation end time from @SIM
     sim_n_steps: int | None = None  # Number of simulation steps from @SIM
     eps_init: float | None = None  # User-specified EPS_INIT for zero IC replacement
+    eps_slack: float | None = None  # User-specified EPS_SLACK for canonical mode
     antimony_text: str = ""  # Cache original Antimony text for RoadRunner
 
 
@@ -1184,6 +1195,7 @@ class RecastResult:
     sim_t_end: float | None = None
     sim_n_steps: int | None = None
     eps_init: float | None = None
+    eps_slack: float | None = None  # User-specified EPS_SLACK for canonical mode
 
 
 def classify_system(sym: SymSystem) -> SystemClass:
@@ -2079,7 +2091,7 @@ def lift_rational_functions(
         # Create new variable list: keep original vars, add Y auxiliaries
         new_vars = list(sym.vars) + list(denom_to_aux.values())
 
-        # Update sym for next iteration
+        # Update sym for next iteration (preserve all metadata)
         sym = SymSystem(
             vars=new_vars,
             params=sym.params,
@@ -2088,6 +2100,11 @@ def lift_rational_functions(
             initial_exprs=sym.initial_exprs,  # Propagate symbolic IC expressions
             assignment_rules=sym.assignment_rules,  # Preserve original assignment rules
             compartments=sym.compartments,  # Propagate compartments
+            sim_t_start=sym.sim_t_start,  # Propagate sim metadata
+            sim_t_end=sym.sim_t_end,
+            sim_n_steps=sym.sim_n_steps,
+            eps_init=sym.eps_init,
+            eps_slack=sym.eps_slack,
         )
 
     # Return final system and ALL accumulated auxiliary definitions
@@ -2189,6 +2206,11 @@ def add_dummy_for_constants(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol, 
             odes=new_odes,
             initials=new_initials,
             compartments=sym.compartments,  # Propagate compartments
+            sim_t_start=sym.sim_t_start,  # Propagate sim metadata
+            sim_t_end=sym.sim_t_end,
+            sim_n_steps=sym.sim_n_steps,
+            eps_init=sym.eps_init,
+            eps_slack=sym.eps_slack,
         ),
         aux_defs,
     )
@@ -2896,7 +2918,7 @@ def lift_time_functions_to_autonomous(
         # Document clock auxiliary
         all_aux_defs[T] = time_sym  # T represents time
 
-        # Create updated system
+        # Create updated system (preserve all metadata)
         sym = SymSystem(
             vars=new_vars,
             params=sym.params,
@@ -2905,6 +2927,11 @@ def lift_time_functions_to_autonomous(
             initial_exprs=sym.initial_exprs,
             assignment_rules=new_assignment_rules,
             compartments=sym.compartments,  # Propagate compartments
+            sim_t_start=sym.sim_t_start,  # Propagate sim metadata
+            sim_t_end=sym.sim_t_end,
+            sim_n_steps=sym.sim_n_steps,
+            eps_init=sym.eps_init,
+            eps_slack=sym.eps_slack,
         )
 
     # Phase 2: Handle sqrt(X² + c) patterns for STATE-dependent expressions only
@@ -2993,6 +3020,11 @@ def lift_time_functions_to_autonomous(
             initial_exprs=sym.initial_exprs,
             assignment_rules=sym.assignment_rules,
             compartments=sym.compartments,  # Propagate compartments
+            sim_t_start=sym.sim_t_start,  # Propagate sim metadata
+            sim_t_end=sym.sim_t_end,
+            sim_n_steps=sym.sim_n_steps,
+            eps_init=sym.eps_init,
+            eps_slack=sym.eps_slack,
         )
 
     return sym, all_aux_defs, aux_counter
@@ -3499,6 +3531,11 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
             initials=new_initials,
             initial_exprs=sym.initial_exprs,
             compartments=sym.compartments,  # Propagate compartments
+            sim_t_start=sym.sim_t_start,  # Propagate sim metadata
+            sim_t_end=sym.sim_t_end,
+            sim_n_steps=sym.sim_n_steps,
+            eps_init=sym.eps_init,
+            eps_slack=sym.eps_slack,
         )
 
         # Recursively lift and manually adjust auxiliary names to continue from max_z_index
@@ -3600,6 +3637,11 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
             initial_exprs=new_initial_exprs,  # Include symbolic IC expressions for auxiliaries
             assignment_rules=assignment_rules,  # Time-only auxiliaries as assignment rules
             compartments=sym.compartments,  # Propagate compartments
+            sim_t_start=sym.sim_t_start,  # Propagate sim metadata
+            sim_t_end=sym.sim_t_end,
+            sim_n_steps=sym.sim_n_steps,
+            eps_init=sym.eps_init,
+            eps_slack=sym.eps_slack,
         ),
         aux_to_func_with_offset,  # Dictionary mapping Z_i -> f(X) + offset
     )
@@ -3875,14 +3917,15 @@ def recast_to_ssystem(sym: "SymSystem", mode: str = "simplified") -> "RecastResu
     sym, rational_aux_defs = lift_rational_functions(sym, composite_aux_defs)
     all_auxiliary_defs.update(rational_aux_defs)
 
-    # Handle constant terms: skip dummy variable in simplified mode for cleaner output
-    # In simplified mode, constant terms like "t' = 1" are acceptable and valid
-    # In canonical mode, we could add dummy if strict power-law form is required
-    if mode == "canonical":
-        # Canonical mode: use dummy variable for strict S-system form
-        sym, dummy_aux_defs = add_dummy_for_constants(sym)
-        all_auxiliary_defs.update(dummy_aux_defs)
-    # else: simplified mode - leave constants as-is
+    # Handle constant terms: in simplified mode, constants are acceptable as-is.
+    # In canonical mode, the epsilon slack mechanism handles pure constant terms
+    # by converting X' = C to X' = (C+ε) - ε, which provides the required
+    # "two terms per ODE" form without needing a dummy variable.
+    #
+    # NOTE: add_dummy_for_constants() was REMOVED because:
+    # 1. It's redundant with epsilon slack
+    # 2. It created a new SymSystem that lost assignment_rules, causing bugs
+    # 3. It added unnecessary complexity for no practical benefit
 
     # Identify lifted auxiliaries (those added during lifting)
     lifted_vars = set(sym.vars) - original_vars
@@ -3971,6 +4014,7 @@ def recast_to_ssystem(sym: "SymSystem", mode: str = "simplified") -> "RecastResu
     result.sim_t_start = sym.sim_t_start
     result.sim_t_end = sym.sim_t_end
     result.sim_n_steps = sym.sim_n_steps
+    result.eps_slack = sym.eps_slack  # Propagate user-specified EPS_SLACK
 
     # CRITICAL: If any IC was perturbed to EPS_INIT (for zero approximation),
     # we must record the EPS_INIT value used in the output for reproducibility.
@@ -5152,11 +5196,47 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
         lines.append("")
 
     # Parameter declarations (from result.params)
+    # IMPORTANT: Filter out parameters that are assignment rules (they're computed, not constants)
     if result.params:
         lines.append("  // Parameters")
         for param_name in sorted(result.params.keys()):
+            # Skip parameters that are actually assignment rules
+            if result.assignment_rules and param_name in result.assignment_rules:
+                continue
             param_val = result.params[param_name]
             lines.append(f"  {param_name} = {param_val:g};")
+        lines.append("")
+
+    # --- Assignment rules from original model (time-dependent quantities) ---
+    # These define quantities like mu := mu_max * S / (K_S + S + S^2/K_I)
+    # CRITICAL: Must come AFTER observable definitions so referenced variables exist
+    # But we need to define observables first - do that now with original names
+    
+    # Define original variables as observables with original names (not _obs suffix)
+    # This is needed so assignment rules that reference them (like mu := f(S)) work
+    # CRITICAL: Skip identity mappings (X = X) - these cause "Loop detected" errors
+    if orig_vars:
+        non_identity_mappings = []
+        for orig in orig_vars:
+            aux_list = result.factor_map[orig]
+            # Skip identity mappings (where variable maps to itself)
+            if len(aux_list) == 1 and aux_list[0] == orig:
+                continue
+            rhs = " * ".join([a.name for a in aux_list]) if aux_list else "1"
+            non_identity_mappings.append((orig, rhs))
+        
+        if non_identity_mappings:
+            lines.append("  // Observable variables (reconstructed from auxiliaries)")
+            for orig, rhs in non_identity_mappings:
+                lines.append(f"  {orig.name} := {rhs};")
+            lines.append("")
+
+    # Now output assignment rules
+    if result.assignment_rules:
+        lines.append("  // Assignment rules (from original model)")
+        for var_name in sorted(result.assignment_rules.keys()):
+            expr = result.assignment_rules[var_name]
+            lines.append(f"  {var_name} := {expr};")
         lines.append("")
 
     # Add slack variable if needed (for pure decay OR pure growth terms)
@@ -5176,8 +5256,10 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
             break
 
     if needs_slack:
+        # Use user-specified EPS_SLACK if available, otherwise use module default
+        eps_slack_value = result.eps_slack if result.eps_slack is not None else EPS_SLACK
         lines.append("  // Slack variable (keeps both coefficients >0)")
-        lines.append("  epsilon = 1.0;")
+        lines.append(f"  epsilon = {eps_slack_value:g};")
         lines.append("")
 
     # Canonical S-system dynamics with clean formatting and slack variables
@@ -5241,18 +5323,6 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
             h = product_to_antimony(h_coeff, h_exps)
             lines.append(f"  {eq.var.name}' = {g} - {h};")
     lines.append("")
-
-    # Observable variables for original variables (if factorized)
-    if orig_vars and any(len(result.factor_map[orig]) > 1 for orig in orig_vars):
-        lines.append("  // Observable: original variable(s)")
-        for orig in orig_vars:
-            aux_list = result.factor_map[orig]
-            if len(aux_list) > 1:  # Only show non-trivial mappings
-                obs_name = f"{orig.name}_obs"
-                rhs = " * ".join([a.name for a in aux_list])
-                lines.append(f"  var {obs_name};")
-                lines.append(f"  {obs_name} := {rhs};")
-        lines.append("")
 
     # Initial conditions
     lines.append("  // Initial conditions")
