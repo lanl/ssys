@@ -45,9 +45,17 @@ import multiprocessing as mp
 import os
 import sys
 import tempfile
+import warnings
 from pathlib import Path
 
 import antimony
+import numpy as np
+
+# Suppress NumPy warnings about invalid values (e.g., negative^fractional)
+# These occur during lambdified function evaluation and are handled by
+# detecting NaN in the results.
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="numpy")
+np.seterr(invalid="ignore", divide="ignore")
 
 # Add parent directory to path for ssys import
 sys.path.insert(0, str(Path(__file__).parent.parent))
