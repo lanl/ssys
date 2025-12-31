@@ -392,11 +392,11 @@ show_status() {
     
     echo ""
     echo "File counts:"
-    echo "  SBML downloads:   $(count_files "$SBML_DIR" "*.xml")"
-    echo "  Candidates:       $(count_files "$CANDIDATES_DIR" "*.xml")"
-    echo "  Recasts:          $(count_files "$RECASTS_DIR" "*.ant")"
-    echo "  Validation:       $(count_files "$VALIDATION_DIR" "*_validation.json")"
-    echo "  Validated:        $(count_files "$VALIDATED_DIR" "*.ant")"
+    echo "  SBML downloads:     $(count_files "$SBML_DIR" "*.xml")"
+    echo "  Candidates:         $(count_files "$CANDIDATES_DIR" "*.xml")"
+    echo "  Transforms:         $(count_files "$RECASTS_DIR" "*.ant")"
+    echo "  Validation reports: $(count_files "$VALIDATION_DIR" "*_validation.json")"
+    echo "  Validated models:   $(count_files "$VALIDATED_DIR" "*.ant")"
 }
 
 # ===========================================================================
