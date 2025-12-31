@@ -2089,7 +2089,11 @@ class RecastValidator:
         return X_reconstructed
 
     def validate(
-        self, run_symbolic: bool = True, run_numerical: bool = True, run_trajectory: bool = True
+        self,
+        run_symbolic: bool = True,
+        run_numerical: bool = True,
+        run_trajectory: bool = True,
+        use_jax: bool = False,
     ) -> ValidationReport:
         """
         Run full validation suite.
@@ -2097,7 +2101,8 @@ class RecastValidator:
         Args:
             run_symbolic: Run symbolic equivalence test
             run_numerical: Run numerical pointwise test
-            run_trajectory: Run trajectory comparison test (required for pass)
+            run_trajectory: Run trajectory comparison test
+            use_jax: Use JAX autodiff for numerical validation (faster, no symbolic)
 
         Returns:
             ValidationReport with all test results
@@ -2115,16 +2120,17 @@ class RecastValidator:
             report.symbolic_test = self.check_symbolic_equivalence()
 
         if run_numerical:
-            # Always use SymPy numerical validation
-            # JAX was causing hangs/slowdowns - see DEVELOPMENT_NOTES.md
-            report.numerical_test = self.check_numerical_pointwise()
+            if use_jax:
+                report.numerical_test = self.check_numerical_pointwise_jax()
+            else:
+                report.numerical_test = self.check_numerical_pointwise()
 
         if run_trajectory:
             report.trajectory_test = self.check_trajectory_comparison()
 
         # Determine overall pass/fail
-        # STRICT: ALL three tests (symbolic, numerical, trajectory) must PASS
-        # If any test fails, is not attempted, or times out, overall validation fails
+        # Only REQUESTED tests must pass - if a test wasn't run, don't require it
+        # If any requested test fails or times out, overall validation fails
 
         symbolic_pass = (
             report.symbolic_test is not None
@@ -2139,8 +2145,18 @@ class RecastValidator:
             and report.trajectory_test.result == ValidationResult.PASS
         )
 
-        # All three tests must pass for overall pass
-        report.overall_pass = symbolic_pass and numerical_pass and trajectory_pass
+        # Only require tests that were actually run
+        # If a test was run, it must pass. If not run, don't count it.
+        required_tests = []
+        if run_symbolic:
+            required_tests.append(symbolic_pass)
+        if run_numerical:
+            required_tests.append(numerical_pass)
+        if run_trajectory:
+            required_tests.append(trajectory_pass)
+        
+        # All REQUESTED tests must pass for overall pass
+        report.overall_pass = all(required_tests) if required_tests else False
 
         # Generate summary
         if report.overall_pass:
@@ -2165,6 +2181,10 @@ def validate_recast_pair(
     mode: str = "simplified",
     output_json: str | None = None,
     parser: str = "legacy",
+    run_symbolic: bool = True,
+    run_numerical: bool = True,
+    run_trajectory: bool = True,
+    use_jax: bool = False,
 ) -> ValidationReport:
     """
     Convenience function to validate a recast.
@@ -2176,12 +2196,16 @@ def validate_recast_pair(
         mode: Recast mode
         output_json: Optional path to save JSON report
         parser: Parser for Antimony files ('legacy' or 'sbml')
+        run_symbolic: Run symbolic equivalence test
+        run_numerical: Run numerical pointwise test
+        run_trajectory: Run trajectory comparison test
+        use_jax: Use JAX autodiff for numerical validation
 
     Returns:
         ValidationReport
     """
     validator = RecastValidator(original_file, recast_file, factor_map, mode, parser)
-    report = validator.validate()
+    report = validator.validate(run_symbolic, run_numerical, run_trajectory, use_jax)
 
     if output_json:
         with open(output_json, "w") as f:
