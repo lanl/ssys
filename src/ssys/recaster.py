@@ -17,6 +17,92 @@ func_call_pat = re.compile(r"([A-Za-z_]\w*)\s*\(([^()]*)\)")
 EPS_INIT = 1e-6
 EPS_SLACK = 1.0  # Default slack for canonical mode
 
+# Antimony reserved keywords that cannot be used as identifiers
+# These cause parsing errors like: "unexpected 'compartment', expecting '$' or element name"
+ANTIMONY_RESERVED_KEYWORDS = frozenset({
+    # Type keywords
+    "compartment", "species", "model", "function", "unit", "import", "end",
+    "const", "var", "formula", "event", "at", "after", "priority", "delay",
+    "substanceOnly", "hasOnlySubstanceUnits", "module", "in",
+    # Common biology terms that conflict
+    "DNA", "RNA",
+})
+
+# Antimony reserved function names that cannot be used as variable names
+# These cause errors like: "unexpected name of an existing function"
+ANTIMONY_RESERVED_FUNCTIONS = frozenset({
+    "exp", "log", "ln", "log10", "log2",
+    "sin", "cos", "tan", "sec", "csc", "cot",
+    "asin", "acos", "atan", "sinh", "cosh", "tanh",
+    "sqrt", "pow", "abs", "ceil", "floor", "round",
+    "min", "max", "factorial", "root", "piecewise",
+    "time", "pi", "avogadro", "true", "false", "nan", "inf",
+})
+
+# Combined set for quick lookup
+ANTIMONY_RESERVED_NAMES = ANTIMONY_RESERVED_KEYWORDS | ANTIMONY_RESERVED_FUNCTIONS
+
+
+def _sanitize_antimony_name(name: str) -> str:
+    """
+    Sanitize a name to avoid Antimony reserved keyword conflicts.
+    
+    If the name (case-insensitive) matches a reserved keyword or function,
+    append '_var' suffix to make it a valid identifier.
+    
+    Args:
+        name: Original identifier name
+        
+    Returns:
+        Sanitized name safe for use in Antimony output
+    """
+    if name.lower() in {n.lower() for n in ANTIMONY_RESERVED_NAMES}:
+        return f"{name}_var"
+    return name
+
+
+def _build_name_sanitization_map(names: set[str]) -> dict[str, str]:
+    """
+    Build a mapping of original names to sanitized names.
+    
+    Only includes entries for names that need sanitization.
+    
+    Args:
+        names: Set of all identifier names used in the model
+        
+    Returns:
+        Dict mapping original_name -> sanitized_name for conflicting names
+    """
+    mapping = {}
+    for name in names:
+        sanitized = _sanitize_antimony_name(name)
+        if sanitized != name:
+            mapping[name] = sanitized
+    return mapping
+
+
+def _apply_name_sanitization(text: str, name_map: dict[str, str]) -> str:
+    """
+    Apply name sanitization to a text string (expression or identifier).
+    
+    Uses word-boundary matching to avoid partial replacements.
+    
+    Args:
+        text: Original text
+        name_map: Mapping of original_name -> sanitized_name
+        
+    Returns:
+        Text with names sanitized
+    """
+    if not name_map:
+        return text
+    result = text
+    for orig, sanitized in name_map.items():
+        # Use word boundary regex to match whole identifiers only
+        pattern = r"\b" + re.escape(orig) + r"\b"
+        result = re.sub(pattern, sanitized, result)
+    return result
+
 
 def _expand_function_calls(
     expr_str: str, function_templates: dict[str, tuple[list[str], str]], max_depth: int = 10
