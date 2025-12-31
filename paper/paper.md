@@ -77,7 +77,7 @@ Installation: `pip install -e ".[dev]"`. A working example that recasts 29 model
 
 # Acknowledgments
 
-This work was inspired by a phone call with Michael A. Savageau in early 2025. I will always be grateful to Mike for his kind and patient mentorship of me as a graduate student at the University of Michigan, his exemplary and inspiring scholarship, and his enduring support and friendship.
+This work was inspired by a phone call with Michael A. Savageau in early 2025. I will always be grateful to Mike for his kind and patient mentorship of me as a graduate student at the University of Michigan, his exemplary and inspiring scholarship, and his enduring support.
 
 This work was supported by the National Institutes of Health (NIH) National Institute of General Medical Sciences (NIGMS) under grant R01GM111510 and by the U.S. Department of Energy through the Los Alamos National Laboratory (LANL). LANL is operated by Triad National Security, LLC, for the National Nuclear Security Administration of the U.S. Department of Energy (Contract No. 89233218CNA000001).
 
