@@ -31,3 +31,6 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Archived results
+results_old_*/
