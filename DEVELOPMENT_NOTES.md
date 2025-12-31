@@ -5,9 +5,9 @@ tracked as issues in the remote repository.
 
 ---
 
-## Current Status (v0.5.2)
+## Current Status (v0.5.4)
 
-**Release Date:** 2025-12-28
+**Release Date:** 2025-12-30
 
 The ssys recaster is functional with the following capabilities:
 - SBML-first parser architecture (Antimony → SBML → SymPy)

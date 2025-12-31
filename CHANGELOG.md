@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] - 2025-12-30
+
+### Added
+- **BioModels batch validation workflow** with separate recasting and validation phases
+- New `3b_validate_batch.py` script for standalone validation of existing recasts
+- Partial validation support in `validate_recast_pair()`:
+  - `run_symbolic`, `run_numerical`, `run_trajectory` parameters
+  - `--symbolic-only` and `--numerical-only` CLI flags
+- JAX autodiff backend option (`--use-jax`) for numerical validation
+- JAX to `biomodels_batch/requirements.txt`
+
+### Changed
+- Validator `overall_pass` logic: only requires tests that were actually requested
+- Batch scripts updated to use `antimony` library instead of `tellurium`
+
+### Fixed
+- Signal-based timeout now properly catches validation hangs
+- Fixed `overall_pass` returning `False` when partial validation passed all requested tests
+
+### Notes
+- JAX numerical validation is **slower** than NumPy for batch processing due to JIT compilation
+  overhead. Use NumPy backend (default) for batch validation. See DEVELOPMENT_NOTES.md.
+
 ## [0.5.3] - 2025-12-28
 
 ### Added
@@ -169,7 +192,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - matplotlib >=3.7
 - nbformat >=5.9
 
-[Unreleased]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.3...main
+[Unreleased]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.4...main
+[0.5.4]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.3...v0.5.4
 [0.5.3]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.2...v0.5.3
 [0.5.2]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.1...v0.5.2
 [0.5.1]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.0...v0.5.1

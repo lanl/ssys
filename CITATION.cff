@@ -2,7 +2,7 @@ cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 type: software
 title: "ssys: Exact algebraic recasting of ODEs to canonical S-system form"
-version: 0.1.0
+version: 0.5.4
 date-released: 2025-11-21
 url: "https://github.com/lanl/ssys"
 repository-code: "https://github.com/lanl/ssys"
