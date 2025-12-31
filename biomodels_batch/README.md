@@ -184,26 +184,91 @@ To regenerate all results from scratch:
 # Activate environment
 source ../ssys_dev/bin/activate
 
-# Step 1a: First pass - quick recast with 15s timeout (catches ~90%)
-python 3_recast_batch.py --mode simplified --timeout 15 --no-validate
+# ============================================================
+# RECASTING PHASE
+# ============================================================
+
+# Step 1a: First pass - quick recast with 15s timeout (~90% of models)
+python 3_recast_batch.py --clean --mode simplified --timeout 15 --no-validate
 
 # Step 1b: Second pass - retry only timeout failures with 60s timeout
 python 3_recast_batch.py --mode simplified --timeout 60 --retry-timeouts --no-validate
 
-# Step 2: Re-run validation on all successful recasts
-python 3b_validate_batch.py --numerical-only --timeout 60
+# ============================================================
+# VALIDATION PHASE (3-stage pipeline)
+# ============================================================
 
-# Step 3: Collect validated models
+# Stage 1: Fast numerical screening (all CPUs)
+python 3b_validate_batch.py --numerical-only --timeout 60 --workers -1
+
+# Stage 2: JAX numerical cross-check (passed models only)
+python 3b_validate_batch.py --numerical-only --use-jax --passed-only \
+    --timeout 120 --workers -1
+
+# Stage 3: Symbolic proof (passed models, subprocess isolation)
+python 3b_validate_batch.py --symbolic-only --passed-only --subprocess \
+    --timeout 120 --workers 4
+
+# ============================================================
+# COLLECTION PHASE
+# ============================================================
+
+# Collect validated models
 python 6_collect_validated.py
 
-# Step 4: Rebuild results CSV
+# Rebuild results CSV
 python 5_rebuild_results_csv.py
 ```
 
-**Time estimates:**
-- First pass (15s): ~10-15 minutes
-- Second pass (timeouts only): ~5-10 minutes
-- Validation: ~30-60 minutes (depends on model complexity)
+**Time estimates (on 8-core machine):**
+- Recasting Phase: ~15-25 minutes total
+  - First pass (15s): ~10-15 minutes
+  - Second pass (timeouts only): ~5-10 minutes
+- Validation Phase: ~30-60 minutes total
+  - Stage 1 (numerical): ~10-15 minutes (parallelized)
+  - Stage 2 (JAX): ~5-10 minutes (only ~20% of models)
+  - Stage 3 (symbolic): ~10-20 minutes (only passed models)
+
+## 3-Stage Validation Explained
+
+**Stage 1: Non-JAX Numerical (fastest, most robust)**
+- Tests: Pointwise numerical comparison of ODEs
+- Speed: ~0.5s per model
+- Purpose: Fast screening to filter out bad recasts
+- Flags: `--numerical-only --workers -1`
+
+**Stage 2: JAX Numerical (independent implementation)**
+- Tests: Same numerical test using JAX autodiff
+- Speed: ~1-2s per model (JAX compilation overhead)
+- Purpose: Cross-validate with independent code
+- Flags: `--numerical-only --use-jax --passed-only --workers -1`
+
+**Stage 3: Symbolic Proof (can hang on complex models)**
+- Tests: Algebraic simplification to prove equivalence
+- Speed: Variable (can hang indefinitely on SymPy)
+- Purpose: Mathematical proof of correctness
+- Flags: `--symbolic-only --passed-only --subprocess --workers 4`
+- Note: `--subprocess` enables hard kill for SymPy hangs
+
+## Parallel Processing
+
+The validation script supports parallel execution:
+
+```bash
+# Use all CPUs
+--workers -1
+
+# Use 4 workers (good for memory-intensive symbolic)
+--workers 4
+
+# Single-threaded (default)
+--workers 1
+```
+
+For symbolic validation, use `--subprocess --workers 4` to:
+1. Run each model in isolated subprocess
+2. Hard-kill stuck SymPy processes
+3. Limit parallelism to avoid memory pressure
 
 ## Understanding Failure Logs
 

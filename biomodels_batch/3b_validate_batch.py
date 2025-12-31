@@ -5,6 +5,18 @@ Validate existing recasts against their original SBML files.
 Runs validation on recasts produced by 3_recast_batch.py.
 This allows recasting and validation to be run as separate phases.
 
+Three-Stage Validation Pipeline:
+Stage 1 (fast, robust):
+    python 3b_validate_batch.py --numerical-only --timeout 60 --workers -1
+
+Stage 2 (JAX cross-check on passed models):
+    python 3b_validate_batch.py --numerical-only --use-jax --passed-only \
+        --timeout 120 --workers -1
+
+Stage 3 (symbolic proof on passed models, subprocess isolation):
+    python 3b_validate_batch.py --symbolic-only --passed-only --subprocess \
+        --timeout 120 --workers 4
+
 Usage:
     # Validate all existing recasts
     python 3b_validate_batch.py
@@ -18,6 +30,9 @@ Usage:
     # Skip models already validated
     python 3b_validate_batch.py --resume
 
+    # Only validate models that passed numerical validation
+    python 3b_validate_batch.py --passed-only --symbolic-only
+
 Output:
     results/validation/ - Validation JSON reports
     results/validation_summary.txt - Summary statistics
@@ -26,6 +41,8 @@ Output:
 import argparse
 import json
 import logging
+import multiprocessing as mp
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -70,6 +87,35 @@ def find_recast_files(mode: str) -> list[tuple[str, Path, Path]]:
             logger.warning(f"SBML not found for {model_id}")
 
     return pairs
+
+
+def filter_passed_models(
+    pairs: list[tuple[str, Path, Path]], mode: str
+) -> list[tuple[str, Path, Path]]:
+    """
+    Filter to only models that passed numerical validation.
+    
+    Checks existing validation reports for numerical test pass.
+    """
+    filtered = []
+    for model_id, sbml_path, recast_path in pairs:
+        val_path = Path(config.VALIDATION_DIR) / f"{model_id}_{mode}_validation.json"
+        if not val_path.exists():
+            continue
+        
+        try:
+            with open(val_path) as f:
+                report = json.load(f)
+            
+            # Check if numerical test passed
+            tests = report.get("tests", {})
+            num_test = tests.get("numerical", {})
+            if num_test.get("result") == "pass":
+                filtered.append((model_id, sbml_path, recast_path))
+        except Exception:
+            continue
+    
+    return filtered
 
 
 def validate_model(
@@ -173,6 +219,98 @@ def format_test_result(report: dict) -> str:
     return f"sym:{s} num:{n} traj:{t}"
 
 
+def _subprocess_validate(args_tuple):
+    """
+    Run validation in a subprocess (for reliable timeout of SymPy).
+    
+    This function runs in a separate process to allow hard kills
+    when SymPy hangs during symbolic simplification.
+    """
+    (model_id, sbml_path, recast_path, mode, 
+     symbolic_only, numerical_only, use_jax, timeout) = args_tuple
+    
+    result_queue = mp.Queue()
+    
+    def worker():
+        try:
+            report = validate_model(
+                model_id, sbml_path, recast_path, mode,
+                symbolic_only, numerical_only, use_jax
+            )
+            result_queue.put(("success", report))
+        except Exception as e:
+            result_queue.put(("error", str(e)))
+    
+    p = mp.Process(target=worker)
+    p.start()
+    p.join(timeout=timeout)
+    
+    if p.is_alive():
+        # Force kill the subprocess
+        p.terminate()
+        p.join(timeout=2)
+        if p.is_alive():
+            p.kill()  # SIGKILL as last resort
+            p.join()
+        return {
+            "model_id": model_id,
+            "mode": mode,
+            "overall_pass": False,
+            "error": f"Timeout after {timeout}s (subprocess killed)",
+        }
+    
+    try:
+        status, result = result_queue.get_nowait()
+        if status == "success":
+            return result
+        else:
+            return {
+                "model_id": model_id,
+                "mode": mode,
+                "overall_pass": False,
+                "error": result,
+            }
+    except Exception:
+        return {
+            "model_id": model_id,
+            "mode": mode,
+            "overall_pass": False,
+            "error": "Subprocess communication failed",
+        }
+
+
+def _parallel_validate_worker(args):
+    """Worker function for parallel validation."""
+    (model_id, sbml_path, recast_path, mode,
+     symbolic_only, numerical_only, use_jax, timeout, use_subprocess) = args
+    
+    if use_subprocess:
+        report = _subprocess_validate((
+            model_id, sbml_path, recast_path, mode,
+            symbolic_only, numerical_only, use_jax, timeout
+        ))
+    else:
+        # Use thread-based timeout (may not work for SymPy hangs)
+        success, report, error = utils.safe_execute(
+            validate_model,
+            model_id, sbml_path, recast_path, mode,
+            symbolic_only, numerical_only, use_jax,
+            timeout_sec=timeout,
+            default=None
+        )
+        
+        if not success or report is None:
+            error_msg = error if error else f"Timeout after {timeout}s"
+            report = {
+                "model_id": model_id,
+                "mode": mode,
+                "overall_pass": False,
+                "error": error_msg,
+            }
+    
+    return model_id, report
+
+
 def main():
     """Main execution."""
     parser = argparse.ArgumentParser(
@@ -217,6 +355,22 @@ def main():
         default=60,
         help="Timeout per model in seconds (default: 60)"
     )
+    parser.add_argument(
+        "--passed-only",
+        action="store_true",
+        help="Only validate models that passed numerical validation (for stage 2+3)"
+    )
+    parser.add_argument(
+        "--subprocess",
+        action="store_true",
+        help="Run each validation in subprocess (reliable timeout for SymPy hangs)"
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of parallel workers (-1 for all CPUs, default: 1)"
+    )
 
     args = parser.parse_args()
 
@@ -232,6 +386,9 @@ def main():
     logger.info(f"Use JAX: {args.use_jax}")
     logger.info(f"Timeout: {args.timeout}s")
     logger.info(f"Resume: {args.resume}")
+    logger.info(f"Passed only: {args.passed_only}")
+    logger.info(f"Subprocess isolation: {args.subprocess}")
+    logger.info(f"Workers: {args.workers}")
 
     # Find recast files
     pairs = find_recast_files(args.mode)
@@ -246,6 +403,14 @@ def main():
     if args.limit:
         pairs = pairs[:args.limit]
         logger.info(f"Limited to first {args.limit} models")
+
+    # Filter to passed models if requested (for stage 2+3 validation)
+    if args.passed_only:
+        original_count = len(pairs)
+        pairs = filter_passed_models(pairs, args.mode)
+        logger.info(
+            f"Filtered to {len(pairs)} passed models (from {original_count})"
+        )
 
     # Filter out already validated if resuming
     if args.resume:
@@ -265,63 +430,106 @@ def main():
         logger.info("Nothing to validate")
         return
 
+    # Determine number of workers
+    n_workers = args.workers
+    if n_workers == -1:
+        n_workers = os.cpu_count() or 1
+    
     # Validate each model with progress indicators
     pass_count = 0
     fail_count = 0
     error_count = 0
 
-    print(f"\nValidating {len(pairs)} models...\n")
+    print(f"\nValidating {len(pairs)} models with {n_workers} workers...\n")
     print("-" * 70)
 
-    for i, (model_id, sbml_path, recast_path) in enumerate(pairs, 1):
-        # Validate with timeout
-        success, report, error = utils.safe_execute(
-            validate_model,
-            model_id, sbml_path, recast_path, args.mode,
-            args.symbolic_only, args.numerical_only, args.use_jax,
-            timeout_sec=args.timeout,
-            default=None
+    if n_workers > 1:
+        # Parallel execution
+        from joblib import Parallel, delayed
+        
+        # Prepare arguments for parallel workers
+        work_items = [
+            (model_id, str(sbml_path), str(recast_path), args.mode,
+             args.symbolic_only, args.numerical_only, args.use_jax,
+             args.timeout, args.subprocess)
+            for model_id, sbml_path, recast_path in pairs
+        ]
+        
+        # Run in parallel with progress reporting
+        results = Parallel(n_jobs=n_workers, verbose=10)(
+            delayed(_parallel_validate_worker)(item) for item in work_items
         )
         
-        if not success or report is None:
-            error_msg = error if error else f"Timeout after {args.timeout}s"
-            report = {
-                "model_id": model_id,
-                "mode": args.mode,
-                "overall_pass": False,
-                "error": error_msg,
-            }
+        # Process results
+        for model_id, report in results:
+            save_validation_report(model_id, args.mode, report)
+            
+            if "error" in report:
+                error_count += 1
+            elif report.get("overall_pass", False):
+                pass_count += 1
+            else:
+                fail_count += 1
+    else:
+        # Sequential execution (original behavior)
+        for i, (model_id, sbml_path, recast_path) in enumerate(pairs, 1):
+            if args.subprocess:
+                # Subprocess isolation for reliable timeout
+                report = _subprocess_validate((
+                    model_id, sbml_path, recast_path, args.mode,
+                    args.symbolic_only, args.numerical_only, args.use_jax,
+                    args.timeout
+                ))
+            else:
+                # Thread-based timeout (may not work for SymPy)
+                success, report, error = utils.safe_execute(
+                    validate_model,
+                    model_id, sbml_path, recast_path, args.mode,
+                    args.symbolic_only, args.numerical_only, args.use_jax,
+                    timeout_sec=args.timeout,
+                    default=None
+                )
+                
+                if not success or report is None:
+                    error_msg = error if error else f"Timeout after {args.timeout}s"
+                    report = {
+                        "model_id": model_id,
+                        "mode": args.mode,
+                        "overall_pass": False,
+                        "error": error_msg,
+                    }
 
-        # Save report
-        save_validation_report(model_id, args.mode, report)
+            # Save report
+            save_validation_report(model_id, args.mode, report)
 
-        # Update counts
-        if "error" in report:
-            error_count += 1
-            status = "⚠ ERROR"
-        elif report.get("overall_pass", False):
-            pass_count += 1
-            status = "✓ PASS"
-        else:
-            fail_count += 1
-            status = "✗ FAIL"
+            # Update counts
+            if "error" in report:
+                error_count += 1
+                status = "⚠ ERROR"
+            elif report.get("overall_pass", False):
+                pass_count += 1
+                status = "✓ PASS"
+            else:
+                fail_count += 1
+                status = "✗ FAIL"
 
-        # Print progress line
-        test_summary = format_test_result(report)
-        total = pass_count + fail_count + error_count
-        pct = 100 * pass_count / total if total > 0 else 0
+            # Print progress line
+            test_summary = format_test_result(report)
+            total = pass_count + fail_count + error_count
+            pct = 100 * pass_count / total if total > 0 else 0
 
-        print(
-            f"[{i:3d}/{len(pairs)}] {model_id:25s} {status:8s} ({test_summary})"
-        )
-
-        # Print running totals every 10 models or at the end
-        if i % 10 == 0 or i == len(pairs):
             print(
-                f"         Running: ✓ {pass_count} pass | ✗ {fail_count} fail | "
-                f"⚠ {error_count} error | {pct:.1f}% pass rate"
+                f"[{i:3d}/{len(pairs)}] {model_id:25s} {status:8s} ({test_summary})"
             )
-            print("-" * 70)
+
+            # Print running totals every 10 models or at the end
+            if i % 10 == 0 or i == len(pairs):
+                print(
+                    f"         Running: ✓ {pass_count} pass | "
+                    f"✗ {fail_count} fail | ⚠ {error_count} error | "
+                    f"{pct:.1f}% pass rate"
+                )
+                print("-" * 70)
 
     # Final summary
     total = pass_count + fail_count + error_count
