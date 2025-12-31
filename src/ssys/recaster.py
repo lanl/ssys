@@ -19,36 +19,30 @@ EPS_SLACK = 1.0  # Default slack for canonical mode
 
 # Antimony reserved keywords that cannot be used as identifiers
 # These cause parsing errors like: "unexpected 'compartment', expecting '$' or element name"
+# when used as compartment/species/parameter names.
+#
+# NOTE: Only type declaration keywords are problematic in practice. Function names
+# (exp, log, sin, etc.) are NOT included because:
+# 1. No modeler would name a variable "exp" or "sin"
+# 2. Antimony would parse them as function calls, giving a different error
 ANTIMONY_RESERVED_KEYWORDS = frozenset({
-    # Type keywords
+    # Type keywords - these appear at the start of declarations
     "compartment", "species", "model", "function", "unit", "import", "end",
     "const", "var", "formula", "event", "at", "after", "priority", "delay",
     "substanceOnly", "hasOnlySubstanceUnits", "module", "in",
-    # Common biology terms that conflict
-    "DNA", "RNA",
 })
-
-# Antimony reserved function names that cannot be used as variable names
-# These cause errors like: "unexpected name of an existing function"
-ANTIMONY_RESERVED_FUNCTIONS = frozenset({
-    "exp", "log", "ln", "log10", "log2",
-    "sin", "cos", "tan", "sec", "csc", "cot",
-    "asin", "acos", "atan", "sinh", "cosh", "tanh",
-    "sqrt", "pow", "abs", "ceil", "floor", "round",
-    "min", "max", "factorial", "root", "piecewise",
-    "time", "pi", "avogadro", "true", "false", "nan", "inf",
-})
-
-# Combined set for quick lookup
-ANTIMONY_RESERVED_NAMES = ANTIMONY_RESERVED_KEYWORDS | ANTIMONY_RESERVED_FUNCTIONS
 
 
 def _sanitize_antimony_name(name: str) -> str:
     """
     Sanitize a name to avoid Antimony reserved keyword conflicts.
     
-    If the name (case-insensitive) matches a reserved keyword or function,
+    If the name (case-insensitive) matches a reserved keyword,
     append '_var' suffix to make it a valid identifier.
+    
+    Only type declaration keywords (compartment, species, model, etc.) are
+    problematic in practice. Function names are NOT sanitized because no
+    reasonable modeler would name a variable "exp" or "sin".
     
     Args:
         name: Original identifier name
@@ -56,7 +50,7 @@ def _sanitize_antimony_name(name: str) -> str:
     Returns:
         Sanitized name safe for use in Antimony output
     """
-    if name.lower() in {n.lower() for n in ANTIMONY_RESERVED_NAMES}:
+    if name.lower() in {n.lower() for n in ANTIMONY_RESERVED_KEYWORDS}:
         return f"{name}_var"
     return name
 

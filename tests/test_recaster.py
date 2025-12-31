@@ -1004,15 +1004,16 @@ class TestReservedKeywordSanitization:
         assert _sanitize_antimony_name("model") == "model_var"
         assert _sanitize_antimony_name("function") == "function_var"
 
-    def test_sanitize_antimony_name_reserved_function(self):
-        """Test that reserved function names are sanitized."""
+    def test_sanitize_antimony_name_non_reserved_functions(self):
+        """Test that function names are NOT sanitized (no modeler uses these)."""
         from ssys.recaster import _sanitize_antimony_name
 
-        # Reserved function names should get _var suffix
-        assert _sanitize_antimony_name("exp") == "exp_var"
-        assert _sanitize_antimony_name("log") == "log_var"
-        assert _sanitize_antimony_name("sin") == "sin_var"
-        assert _sanitize_antimony_name("time") == "time_var"
+        # Function names are NOT reserved - they're interpreted as function calls
+        # No reasonable modeler would name a variable "exp" or "sin"
+        assert _sanitize_antimony_name("exp") == "exp"
+        assert _sanitize_antimony_name("log") == "log"
+        assert _sanitize_antimony_name("sin") == "sin"
+        assert _sanitize_antimony_name("time") == "time"
 
     def test_sanitize_antimony_name_safe_names(self):
         """Test that safe names are not modified."""
@@ -1031,22 +1032,22 @@ class TestReservedKeywordSanitization:
         # Antimony is case-insensitive for keywords
         assert _sanitize_antimony_name("COMPARTMENT") == "COMPARTMENT_var"
         assert _sanitize_antimony_name("Compartment") == "Compartment_var"
-        assert _sanitize_antimony_name("EXP") == "EXP_var"
+        assert _sanitize_antimony_name("SPECIES") == "SPECIES_var"
 
     def test_build_name_sanitization_map(self):
         """Test building sanitization map for multiple names."""
         from ssys.recaster import _build_name_sanitization_map
 
-        names = {"X", "compartment", "k1", "exp", "cell"}
+        names = {"X", "compartment", "k1", "species", "cell"}
         name_map = _build_name_sanitization_map(names)
 
-        # Only reserved names should be in the map
+        # Only type keywords should be in the map (not function names)
         assert "compartment" in name_map
-        assert "exp" in name_map
+        assert "species" in name_map
         assert name_map["compartment"] == "compartment_var"
-        assert name_map["exp"] == "exp_var"
+        assert name_map["species"] == "species_var"
 
-        # Safe names should NOT be in the map
+        # Safe names and function names should NOT be in the map
         assert "X" not in name_map
         assert "k1" not in name_map
         assert "cell" not in name_map
@@ -1093,18 +1094,18 @@ class TestReservedKeywordSanitization:
         assert "compartment compartment = 1" not in output, \
             f"Should NOT have 'compartment compartment': {output}"
 
-    def test_parameter_sanitization_in_output(self):
-        """Test that reserved parameter names are sanitized in Antimony output."""
+    def test_species_keyword_sanitization_in_output(self):
+        """Test that 'species' as a param name is sanitized in Antimony output."""
         from ssys.recaster import SymSystem, recast_to_ssystem, ssystem_to_antimony
 
         X = sp.Symbol("X", positive=True)
-        exp_param = sp.Symbol("exp", positive=True)  # Reserved function name
+        species_param = sp.Symbol("species", positive=True)  # Reserved keyword
 
-        # System with parameter named 'exp' (reserved function name)
+        # System with parameter named 'species' (reserved type keyword)
         sym = SymSystem(
             vars=[X],
-            params={"exp": 0.5},  # Reserved function name as param
-            odes={X: -exp_param * X},
+            params={"species": 0.5},  # Reserved type keyword as param
+            odes={X: -species_param * X},
             initials={X: 1.0},
         )
 
@@ -1112,8 +1113,8 @@ class TestReservedKeywordSanitization:
         output = ssystem_to_antimony(result, model_name="test")
 
         # Should have sanitized parameter name
-        assert "exp_var = 0.5" in output, \
-            f"Should sanitize 'exp' to 'exp_var': {output}"
+        assert "species_var = 0.5" in output, \
+            f"Should sanitize 'species' to 'species_var': {output}"
 
 
 class TestVersionConsistency:
