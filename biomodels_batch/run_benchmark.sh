@@ -400,7 +400,7 @@ show_status() {
         local status
         
         if $check_func 2>/dev/null; then
-            status="${GREEN}✓ COMPLETE${NC}"
+            status="${GREEN}✓ READY${NC}"
         else
             status="${YELLOW}○ PENDING${NC}"
         fi
