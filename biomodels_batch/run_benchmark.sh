@@ -158,6 +158,11 @@ is_collect_complete() {
     [[ $count -ge 10 ]]
 }
 
+is_report_complete() {
+    # Report is never "complete" - always regenerate on request
+    return 1
+}
+
 # ===========================================================================
 # Stage Implementations
 # ===========================================================================
@@ -247,6 +252,15 @@ stage_collect() {
     log_success "Collection complete: $count validated models"
 }
 
+stage_report() {
+    log_stage "STAGE: Generate RESULTS.md report"
+    
+    log_info "Regenerating RESULTS.md from current data..."
+    python 7_generate_results_md.py --write
+    
+    log_success "Report generated: RESULTS.md"
+}
+
 # ===========================================================================
 # Clean Function
 # ===========================================================================
@@ -321,6 +335,9 @@ run_stage() {
         collect)
             stage_collect
             ;;
+        report)
+            stage_report
+            ;;
         *)
             log_error "Unknown stage: $stage"
             exit 1
@@ -339,7 +356,7 @@ Usage:
 Options:
   --from STAGE    Start from a specific stage (skip earlier stages)
                   Stages: fetch, filter, recast, validate, validate_jax, 
-                          validate_symbolic, collect
+                          validate_symbolic, collect, report
 
   --only STAGE    Run only a specific stage (no continuation)
 
@@ -367,6 +384,7 @@ Stages (in order):
   5. validate_jax       - Numerical validation (JAX cross-check)
   6. validate_symbolic  - Symbolic equivalence proof
   7. collect            - Collect validated models
+  8. report             - Generate RESULTS.md (optional, not in default pipeline)
 
 The pipeline auto-detects completed stages and skips them unless --force is used.
 EOF
@@ -375,7 +393,7 @@ EOF
 show_status() {
     log_stage "Pipeline Status"
     
-    local stages=("fetch" "filter" "recast" "validate_numerical" "validate_jax" "validate_symbolic" "collect")
+    local stages=("fetch" "filter" "recast" "validate_numerical" "validate_jax" "validate_symbolic" "collect" "report")
     
     for stage in "${stages[@]}"; do
         local check_func="is_${stage}_complete"
@@ -491,9 +509,12 @@ case "${START_FROM:-all}" in
     collect)
         STAGES=(collect)
         ;;
+    report)
+        STAGES=(report)
+        ;;
     *)
         log_error "Unknown start point: $START_FROM"
-        echo "Valid stages: fetch, filter, recast, validate, validate_jax, validate_symbolic, collect"
+        echo "Valid stages: fetch, filter, recast, validate, validate_jax, validate_symbolic, collect, report"
         exit 1
         ;;
 esac
