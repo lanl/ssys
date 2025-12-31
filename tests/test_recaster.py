@@ -1085,14 +1085,18 @@ class TestReservedKeywordSanitization:
         result = recast_to_ssystem(sym)
         output = ssystem_to_antimony(result, model_name="test")
 
-        # Should have sanitized compartment name to compartment_var
-        # Note: the Antimony keyword "compartment" may also get sanitized 
-        # but the important thing is the NAME is no longer just "compartment"
-        assert "compartment_var" in output, \
-            f"Should sanitize 'compartment' to 'compartment_var': {output}"
+        # Should have CORRECT Antimony syntax:
+        # "compartment compartment_var = 1" where:
+        # - First "compartment" is the Antimony keyword (preserved)
+        # - "compartment_var" is the sanitized identifier (renamed)
+        assert "compartment compartment_var = 1" in output, \
+            f"Should have 'compartment compartment_var = 1' (keyword + sanitized name): {output}"
         # Should NOT have the original invalid syntax "compartment compartment = 1"
         assert "compartment compartment = 1" not in output, \
             f"Should NOT have 'compartment compartment': {output}"
+        # Should NOT corrupt the keyword: "compartment_var compartment_var"
+        assert "compartment_var compartment_var" not in output, \
+            f"Should NOT corrupt keyword to 'compartment_var compartment_var': {output}"
 
     def test_species_keyword_sanitization_in_output(self):
         """Test that 'species' as a param name is sanitized in Antimony output."""

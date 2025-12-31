@@ -5251,9 +5251,11 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         lines.extend(sim_lines)
 
     # Convert ** to ^ for valid Antimony syntax
+    # NOTE: We do NOT apply global name sanitization here because it would corrupt
+    # Antimony keywords. For example, "compartment compartment_var = 1" would become
+    # "compartment_var compartment_var = 1" if we replaced all "compartment" occurrences.
+    # Instead, sanitization is applied during line construction using sanitize() calls.
     output = _sympy_to_antimony_syntax("\n".join(lines))
-    # Apply name sanitization to entire output (handles ODE expressions)
-    output = _apply_name_sanitization(output, name_map)
     return output
 
 
