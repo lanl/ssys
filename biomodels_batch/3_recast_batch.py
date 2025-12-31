@@ -352,13 +352,16 @@ def generate_batch_summary(results: list[dict]) -> str:
     # Common errors
     errors = [r["error"] for r in results if r["error"]]
 
+    # Safe percentage calculation
+    val_pct = f"{100 * val_pass / validated:.1f}%" if validated > 0 else "N/A"
+
     summary = f"""
 Batch Recast Summary
 ===================
 Total models: {total}
 Recast success: {recast_success} ({100 * recast_success / total:.1f}%)
 Validated: {validated}
-Validation pass: {val_pass} ({100 * val_pass / validated:.1f}% of validated)
+Validation pass: {val_pass} ({val_pct}'
 
 Performance:
 - Average recast time: {avg_time:.2f}s
