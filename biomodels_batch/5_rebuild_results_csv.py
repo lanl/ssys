@@ -63,8 +63,9 @@ def rebuild_results_csv(mode: str = "simplified") -> None:
     recast_ids = {f.stem.replace(f"_{mode}", "") for f in recast_files}
     logger.info(f"Found {len(recast_ids)} successful recast files")
 
-    # Scan failure files
+    # Scan failure files (may be .txt or .log extension)
     failure_files = list(failures_dir.glob(f"*_{mode}.txt"))
+    failure_files += list(failures_dir.glob(f"*_{mode}.log"))
     failure_ids = {f.stem.replace(f"_{mode}", "") for f in failure_files}
     logger.info(f"Found {len(failure_ids)} failure files")
 
@@ -83,9 +84,30 @@ def rebuild_results_csv(mode: str = "simplified") -> None:
     # Build results
     results = []
     for model_id in sorted(candidate_ids):
+        # Determine status
+        if model_id in recast_ids:
+            status = "success"
+        elif model_id in failure_ids:
+            # Check if it's a timeout or other error
+            failure_file = failures_dir / f"{model_id}_{mode}.log"
+            if not failure_file.exists():
+                failure_file = failures_dir / f"{model_id}_{mode}.txt"
+            try:
+                with open(failure_file) as f:
+                    error_text = f.read().strip()
+                    if "TimeoutError" in error_text or "timed out" in error_text:
+                        status = "timeout"
+                    else:
+                        status = "error"
+            except Exception:
+                status = "error"
+        else:
+            status = "filtered"
+
         row = {
             "model_id": model_id,
             "mode": mode,
+            "status": status,
             "recast_success": model_id in recast_ids,
             "recast_time": "",  # Not available from files
             "validation_attempted": model_id in validation_data,
@@ -100,7 +122,9 @@ def rebuild_results_csv(mode: str = "simplified") -> None:
 
         # Check failure reason
         if model_id in failure_ids:
-            failure_file = failures_dir / f"{model_id}_{mode}.txt"
+            failure_file = failures_dir / f"{model_id}_{mode}.log"
+            if not failure_file.exists():
+                failure_file = failures_dir / f"{model_id}_{mode}.txt"
             try:
                 with open(failure_file) as f:
                     error_text = f.read().strip()
@@ -117,6 +141,7 @@ def rebuild_results_csv(mode: str = "simplified") -> None:
         fieldnames = [
             "model_id",
             "mode",
+            "status",
             "recast_success",
             "recast_time",
             "validation_attempted",
@@ -130,19 +155,30 @@ def rebuild_results_csv(mode: str = "simplified") -> None:
     logger.info(f"Wrote {len(results)} rows to {output_file}")
 
     # Print summary
-    success_count = sum(1 for r in results if r["recast_success"])
+    success_count = sum(1 for r in results if r["status"] == "success")
+    timeout_count = sum(1 for r in results if r["status"] == "timeout")
+    error_count = sum(1 for r in results if r["status"] == "error")
+    filtered_count = sum(1 for r in results if r["status"] == "filtered")
+    processed_count = success_count + timeout_count + error_count
     validated_count = sum(1 for r in results if r["validation_attempted"])
     validation_pass_count = sum(1 for r in results if r["validation_pass"])
-    error_count = sum(1 for r in results if r["error"])
 
     print()
     print("Rebuild Summary")
     print("=" * 60)
-    print(f"Total candidates: {len(results)}")
-    print(f"Recast success: {success_count} ({100*success_count/len(results):.1f}%)")
-    print(f"Validated: {validated_count}")
-    print(f"Validation pass: {validation_pass_count}")
-    print(f"With errors: {error_count}")
+    print(f"Total SBML candidates: {len(results)}")
+    print(f"  Filtered out: {filtered_count}")
+    print(f"  Processed: {processed_count}")
+    print()
+    print(f"Processing Results:")
+    if processed_count > 0:
+        print(f"  Success: {success_count} ({100*success_count/processed_count:.1f}%)")
+        print(f"  Timeout: {timeout_count}")
+        print(f"  Error: {error_count}")
+    print()
+    print(f"Validation:")
+    print(f"  Attempted: {validated_count}")
+    print(f"  Passed: {validation_pass_count}")
     print()
     print(f"CSV written to: {output_file}")
 
