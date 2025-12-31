@@ -87,11 +87,33 @@ Output: `results/recasts/` (transformation output), `results/validation/`, `resu
 
 ### Phase 4: Analyze Results
 
+Generate statistics and visualizations:
+
 ```bash
 python 4_analyze_results.py
 ```
 
-Output: `results/summary.json`, `results/figures/`, `results/report.ipynb`
+**Output files:**
+- `results/summary.json` - Overall statistics (success rates, timing, etc.)
+- `results/report.ipynb` - Jupyter notebook with embedded visualizations
+- `results/figures/` - PNG visualizations (see below)
+
+**Generated figures:**
+
+| Figure | Description |
+|--------|-------------|
+| `pipeline_funnel.png` | Data flow: Downloaded → Filtered → Transformed → Validated |
+| `transformation_types.png` | Bar chart of General→S-system, GMA→S-system, etc. |
+| `error_breakdown.png` | Pie chart of failure categories (timeout, piecewise, etc.) |
+| `validation_errors.png` | Histogram of numerical validation error magnitudes |
+| `model_size_distribution.png` | Histograms of species/reactions/parameters counts |
+| `time_vs_complexity.png` | Scatter plots of transformation time vs model size |
+| `feature_prevalence.png` | Bar chart of exp/log/sin/cos usage in models |
+| `success_rates.png` | Overview pie/bar of success vs failure |
+| `timing_distribution.png` | Histogram of transformation times |
+| `complexity_analysis.png` | Success rate vs model complexity |
+
+**Note:** Some figures require validation data (`manifest.csv`) and will be skipped if validation hasn't been run yet.
 
 ## Incremental Fetching
 
