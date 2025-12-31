@@ -13,36 +13,20 @@ The benchmark suite operates in four phases:
 
 ## Setup
 
-You can set up the benchmark environment using either **conda** (recommended) or **pip**.
-
-### Option 1: Conda (Recommended)
-
-Conda handles binary dependencies better and avoids numpy compatibility issues:
+Install the benchmark dependencies using uv:
 
 ```bash
-# Create environment from file
-conda env create -f benchmarks/environment.yml
+cd biomodels_batch
+uv pip install -r requirements.txt
+```
 
-# Activate
-conda activate ssys_benchmarks
+Verify installation:
 
-# Verify
+```bash
 python -c "import bioservices; import tellurium; print('✓ Ready!')"
 ```
 
-### Option 2: Pip
-
-If you prefer pip or don't use conda:
-
-```bash
-cd benchmarks
-pip install -r requirements.txt
-
-# Verify
-python -c "import bioservices; import tellurium; print('✓ Ready!')"
-```
-
-**Important**: The numpy<2.0 constraint is critical for compatibility with scipy/pandas/tellurium.
+**Note**: The numpy<2.0 constraint in requirements.txt is critical for compatibility with scipy/pandas/tellurium.
 
 ## Usage
 
