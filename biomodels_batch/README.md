@@ -7,9 +7,19 @@ This directory contains tools for benchmarking the ssys recaster against real-wo
 The benchmark suite operates in four phases:
 
 1. **Fetch**: Download models from BioModels (SBML → Antimony)
-2. **Filter**: Apply heuristics to identify recast candidates
-3. **Recast**: Attempt recasts with validation
+2. **Filter**: Apply heuristics to identify transformation candidates
+3. **Transform**: Attempt S-system transformation and validate results
 4. **Analyze**: Generate statistics and reports
+
+## Terminology
+
+- **Candidate**: Model that passed heuristic filters (no blockers like events/delays)
+- **Transformation completed**: The algorithm produced output without crash/timeout
+- **Validated**: Numerical or symbolic tests confirmed mathematical equivalence
+
+**Important:** "Transformation completed" does NOT mean the output is correct!
+The transformation algorithm can produce syntactically valid output that is
+mathematically wrong. Only **validated** models are confirmed equivalent to the original.
 
 ## Setup
 
@@ -60,7 +70,7 @@ python 2_filter_models.py
 
 Output: `results/candidates.csv` and `results/filter_summary.txt`
 
-### Phase 3: Batch Recast
+### Phase 3: Batch Transform
 
 ```bash
 # Test with 10 S-system candidates
@@ -69,11 +79,11 @@ python 3_recast_batch.py --filter s_system --limit 10
 # All candidates, simplified mode
 python 3_recast_batch.py --mode simplified
 
-# Skip validation for speed
+# Skip validation for speed (transformation only)
 python 3_recast_batch.py --no-validate
 ```
 
-Output: `results/recasts/`, `results/validation/`, `results/failures/`
+Output: `results/recasts/` (transformation output), `results/validation/`, `results/failures/`
 
 ### Phase 4: Analyze Results
 
@@ -185,10 +195,10 @@ To regenerate all results from scratch:
 source ../ssys_dev/bin/activate
 
 # ============================================================
-# RECASTING PHASE
+# TRANSFORMATION PHASE
 # ============================================================
 
-# Step 1a: First pass - quick recast with 15s timeout (~90% of models)
+# Step 1a: First pass - quick transformation with 15s timeout (~90% of models)
 python 3_recast_batch.py --clean --mode simplified --timeout 15 --no-validate
 
 # Step 1b: Second pass - retry only timeout failures with 60s timeout
@@ -221,7 +231,7 @@ python 5_rebuild_results_csv.py
 ```
 
 **Time estimates (on 8-core machine):**
-- Recasting Phase: ~15-25 minutes total
+- Transformation Phase: ~15-25 minutes total
   - First pass (15s): ~10-15 minutes
   - Second pass (timeouts only): ~5-10 minutes
 - Validation Phase: ~30-60 minutes total
@@ -234,7 +244,7 @@ python 5_rebuild_results_csv.py
 **Stage 1: Non-JAX Numerical (fastest, most robust)**
 - Tests: Pointwise numerical comparison of ODEs
 - Speed: ~0.5s per model
-- Purpose: Fast screening to filter out bad recasts
+- Purpose: Fast screening to filter out incorrect transformations
 - Flags: `--numerical-only --workers -1`
 
 **Stage 2: JAX Numerical (independent implementation)**
@@ -272,7 +282,7 @@ For symbolic validation, use `--subprocess --workers 4` to:
 
 ## Understanding Failure Logs
 
-When a model fails to recast, an explanatory log is created in `results/failures/`:
+When a model transformation fails, an explanatory log is created in `results/failures/`:
 
 ```
 Model: BIOMD0000000123
