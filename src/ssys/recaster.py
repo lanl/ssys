@@ -4752,9 +4752,9 @@ def gma_to_antimony(
     # Use original compartment name if available, otherwise default to "cell"
     if result.compartments:
         for comp_name, comp_size in result.compartments.items():
-            lines.append(f"compartment {comp_name} = {comp_size:g};")
+            lines.append(f"compartment {sanitize(comp_name)} = {comp_size:g};")
         # Use first compartment name for species declarations
-        default_compartment = next(iter(result.compartments.keys()))
+        default_compartment = sanitize(next(iter(result.compartments.keys())))
     else:
         lines.append("compartment cell = 1;")
         default_compartment = "cell"
@@ -4766,7 +4766,7 @@ def gma_to_antimony(
     state_vars = [v for v in all_gma_vars if v.name not in lifted_aux_names]
     if state_vars:
         for v in state_vars:
-            lines.append(f"species {v.name} in {default_compartment};")
+            lines.append(f"species {sanitize(v.name)} in {default_compartment};")
         lines.append("")
 
     lines.append("// GMA (Generalized Mass Action) format")
@@ -4830,7 +4830,7 @@ def gma_to_antimony(
             if result.assignment_rules and param_name in result.assignment_rules:
                 continue
             param_val = result.params[param_name]
-            lines.append(f"{param_name} = {param_val:g};")
+            lines.append(f"{sanitize(param_name)} = {param_val:g};")
         lines.append("")
 
     # --- Assignment rules from original model (time-dependent quantities) ---
@@ -4838,7 +4838,8 @@ def gma_to_antimony(
         lines.append("// Assignment rules (from original model)")
         for var_name in sorted(result.assignment_rules.keys()):
             expr = result.assignment_rules[var_name]
-            lines.append(f"{var_name} := {expr};")
+            sanitized_expr = _apply_name_sanitization(str(expr), name_map)
+            lines.append(f"{sanitize(var_name)} := {sanitized_expr};")
         lines.append("")
 
     # Initial assignments - handle both Symbol and tuple keys
