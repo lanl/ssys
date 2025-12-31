@@ -328,12 +328,13 @@ class TestEpsInitMetadata:
         k = 0.5
         X = 0.0
         """
-        t_start, t_end, n_steps, eps_init = _extract_sim_metadata(text)
+        t_start, t_end, n_steps, eps_init, eps_slack = _extract_sim_metadata(text)
 
         assert t_start == 0.0
         assert t_end == 100.0
         assert n_steps == 500
         assert eps_init == 1e-6
+        assert eps_slack is None
 
     def test_extract_sim_metadata_eps_init_none(self):
         """Test that eps_init is None when not specified."""
@@ -345,12 +346,13 @@ class TestEpsInitMetadata:
         k = 0.5
         X = 1.0
         """
-        t_start, t_end, n_steps, eps_init = _extract_sim_metadata(text)
+        t_start, t_end, n_steps, eps_init, eps_slack = _extract_sim_metadata(text)
 
         assert t_start == 0.0
         assert t_end == 100.0
         assert n_steps == 500
         assert eps_init is None
+        assert eps_slack is None
 
     def test_extract_sim_metadata_eps_init_only(self):
         """Test parsing EPS_INIT alone without other metadata."""
@@ -362,12 +364,31 @@ class TestEpsInitMetadata:
         k = 0.5
         X = 0.0
         """
-        t_start, t_end, n_steps, eps_init = _extract_sim_metadata(text)
+        t_start, t_end, n_steps, eps_init, eps_slack = _extract_sim_metadata(text)
 
         assert t_start is None
         assert t_end is None
         assert n_steps is None
         assert eps_init == 1e-12
+        assert eps_slack is None
+
+    def test_extract_sim_metadata_eps_slack(self):
+        """Test parsing EPS_SLACK from @SIM comment."""
+        from ssys.recaster import _extract_sim_metadata
+
+        text = """
+        // @SIM T_START=0 T_END=100 EPS_SLACK=1e-8
+        X' = -k*X
+        k = 0.5
+        X = 0.0
+        """
+        t_start, t_end, n_steps, eps_init, eps_slack = _extract_sim_metadata(text)
+
+        assert t_start == 0.0
+        assert t_end == 100.0
+        assert n_steps is None
+        assert eps_init is None
+        assert eps_slack == 1e-8
 
     def test_eps_init_propagation_through_parsing(self):
         """Test eps_init is propagated through parse_antimony_via_sbml."""
@@ -810,6 +831,160 @@ class TestSymbolicExponents:
 
         assert result is not None
         assert len(result.variables) > 0
+
+
+class TestCanonicalModeFormatting:
+    """Tests for canonical mode S-system formatting."""
+
+    def test_assignment_rules_in_canonical_output(self):
+        """Test that assignment rules appear in canonical Antimony output."""
+        from ssys.recaster import SymSystem, recast_to_ssystem, ssystem_to_antimony
+
+        X = sp.Symbol("X", positive=True)
+        T = sp.Symbol("T", positive=True)
+        k = sp.Symbol("k", positive=True)
+
+        # Create system with assignment rule (like time-dependent beta)
+        sym = SymSystem(
+            vars=[X, T],
+            params={"k0": 0.5, "mu": 0.0},  # mu = 0 is the initial value
+            odes={X: k * X, T: sp.Integer(1)},  # T' = 1 (clock)
+            initials={X: 1.0, T: 0.0},
+            assignment_rules={"mu": "k0 * (1 + T)"},  # mu depends on time
+        )
+
+        result = recast_to_ssystem(sym, mode='canonical')
+        output = ssystem_to_antimony(result, model_name="test", mode='canonical')
+
+        # Assignment rule should appear in output
+        assert "mu :=" in output, "Assignment rule 'mu' should appear in canonical output"
+        assert "k0" in output, "Assignment rule should reference k0 parameter"
+
+    def test_identity_mapping_skipped(self):
+        """Test that X := X identity mappings are skipped to prevent loop errors.
+
+        Regression test for bug where canonical mode output X := X caused
+        Antimony "Loop detected" error. Identity mappings should be skipped.
+        """
+        from ssys.recaster import SymSystem, recast_to_ssystem, ssystem_to_antimony
+
+        X = sp.Symbol("X", positive=True)
+        k = sp.Symbol("k", positive=True)
+
+        # Simple system where X maps to itself (no pool construction needed)
+        sym = SymSystem(
+            vars=[X],
+            params={"k": 0.5},
+            odes={X: -k * X},
+            initials={X: 1.0},
+        )
+
+        result = recast_to_ssystem(sym, mode='canonical')
+        output = ssystem_to_antimony(result, model_name="test", mode='canonical')
+
+        # Should NOT contain X := X (that causes loop error)
+        # Use regex to match X followed by := and X (with any whitespace)
+        import re
+        has_identity_loop = re.search(r'\bX\s*:=\s*X\s*;', output)
+        assert not has_identity_loop, \
+            f"Output should NOT contain 'X := X' identity mapping: {output}"
+
+    def test_eps_slack_in_canonical_output(self):
+        """Test that eps_slack appears in canonical output and uses user value."""
+        from ssys.recaster import SymSystem, recast_to_ssystem, ssystem_to_antimony
+
+        X = sp.Symbol("X", positive=True)
+        k = sp.Symbol("k", positive=True)
+
+        # System with pure decay (needs epsilon slack)
+        sym = SymSystem(
+            vars=[X],
+            params={"k": 0.5},
+            odes={X: -k * X},  # Pure decay, growth is 0
+            initials={X: 1.0},
+            eps_slack=1e-8,  # User-specified eps_slack
+        )
+
+        result = recast_to_ssystem(sym, mode='canonical')
+        output = ssystem_to_antimony(result, model_name="test", mode='canonical')
+
+        # Should contain epsilon declaration with user value
+        assert "epsilon = 1e-08" in output, \
+            f"Should have 'epsilon = 1e-08' in output: {output}"
+
+        # Should also appear in @SIM metadata
+        assert "EPS_SLACK=1e-08" in output, \
+            f"Should have 'EPS_SLACK=1e-08' in @SIM metadata: {output}"
+
+    def test_eps_slack_default_value_in_canonical(self):
+        """Test that default eps_slack (1.0) is used when not specified."""
+        from ssys.recaster import SymSystem, recast_to_ssystem, ssystem_to_antimony
+
+        X = sp.Symbol("X", positive=True)
+        k = sp.Symbol("k", positive=True)
+
+        # System with pure decay (needs epsilon slack), no eps_slack specified
+        sym = SymSystem(
+            vars=[X],
+            params={"k": 0.5},
+            odes={X: -k * X},  # Pure decay, growth is 0
+            initials={X: 1.0},
+            # eps_slack not specified - should use default 1.0
+        )
+
+        result = recast_to_ssystem(sym, mode='canonical')
+        output = ssystem_to_antimony(result, model_name="test", mode='canonical')
+
+        # Should contain epsilon declaration with default value
+        assert "epsilon = 1" in output, \
+            f"Should have 'epsilon = 1' (default) in output: {output}"
+
+    def test_observable_variables_in_canonical(self):
+        """Test that observable variables are defined for non-trivial mappings."""
+        from ssys.recaster import SymSystem, recast_to_ssystem, ssystem_to_antimony
+
+        X = sp.Symbol("X", positive=True)
+        a = sp.Symbol("a", positive=True)
+        b = sp.Symbol("b", positive=True)
+
+        # System with two-term ODE creates pool variables
+        # X = Z_1 * Z_2 (non-trivial mapping)
+        sym = SymSystem(
+            vars=[X],
+            params={"a": 1.0, "b": 0.5},
+            odes={X: a * X - b * X**2},  # Two terms = pool construction
+            initials={X: 1.0},
+        )
+
+        result = recast_to_ssystem(sym, mode='canonical')
+        output = ssystem_to_antimony(result, model_name="test", mode='canonical')
+
+        # Should have observable definition for X (non-trivial mapping)
+        # X := Z_1 * Z_2 (or similar)
+        assert "X :=" in output, \
+            f"Should have 'X :=' observable definition: {output}"
+        assert "Observable" in output, \
+            f"Should have 'Observable' comment section: {output}"
+
+    def test_eps_slack_propagation_through_recast(self):
+        """Test eps_slack is propagated through recast_to_ssystem."""
+        from ssys.recaster import SymSystem, recast_to_ssystem
+
+        X = sp.Symbol("X", positive=True)
+        k = sp.Symbol("k", positive=True)
+
+        sym = SymSystem(
+            vars=[X],
+            params={"k": 0.5},
+            odes={X: -k * X},
+            initials={X: 1.0},
+            eps_slack=1e-10,
+        )
+
+        result = recast_to_ssystem(sym, mode='canonical')
+
+        assert result.eps_slack == 1e-10, \
+            f"eps_slack should propagate to result: {result.eps_slack}"
 
 
 class TestVersionConsistency:
