@@ -289,6 +289,11 @@ def _subprocess_validate(args_tuple):
 
 def _parallel_validate_worker(args):
     """Worker function for parallel validation."""
+    # Suppress NumPy warnings in worker process
+    import warnings
+    warnings.filterwarnings("ignore", category=RuntimeWarning)
+    np.seterr(invalid="ignore", divide="ignore")
+    
     (model_id, sbml_path, recast_path, mode,
      symbolic_only, numerical_only, use_jax, timeout, use_subprocess) = args
     
