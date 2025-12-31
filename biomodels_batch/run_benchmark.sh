@@ -38,7 +38,7 @@ TIMEOUT_JAX=120
 TIMEOUT_SYMBOLIC=120
 
 # Parallelism
-WORKERS_ALL=-1      # All CPUs
+WORKERS_ALL=8       # Limit to 8 CPUs (leave 2 for system)
 WORKERS_SYMBOLIC=4  # Limited for memory
 
 # Colors for output
