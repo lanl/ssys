@@ -19,7 +19,7 @@ The collection contains **117 models** organized into four directories:
 | `test_models3/` | 40 | Models with published recastings |
 | `test_models4/` | 20 | Additional systems biology models |
 
-All 117 models are successfully processed by `ssys`. Model initial conditions, parameter values, and integration intervals were chosen to avoid numerical issues during validation testing.
+All 117 models are successfully processed and validated by `ssys` in both `--mode simplified` (default) and `--mode canonical`. Model initial conditions, parameter values, and integration intervals were chosen to avoid numerical issues during validation testing.
 
 ## Recasting Summary
 
@@ -410,8 +410,15 @@ Models are specified in [Antimony](https://antimony.sourceforge.io/) format, a h
 
 Model files may include simulation metadata in comments:
 ```
-// @SIM T_START=0 T_END=20 N_STEPS=400
+// @SIM T_START=0 T_END=20 N_STEPS=400 EPS_INIT=1e-6 EPS_SLACK=1e-10
 ```
+
+Available parameters:
+- `T_START`: Simulation start time (default: 0)
+- `T_END`: Simulation end time (required for validation)
+- `N_STEPS`: Number of integration steps (default: 500)
+- `EPS_INIT`: Small positive value for zero initial conditions to prevent division by zero in power-law terms (default: 1e-6)
+- `EPS_SLACK`: Slack constant for canonical mode ε-splitting (default: 1.0)
 
 ---
 
