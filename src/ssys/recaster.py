@@ -17,20 +17,30 @@ func_call_pat = re.compile(r"([A-Za-z_]\w*)\s*\(([^()]*)\)")
 EPS_INIT = 1e-6
 EPS_SLACK = 1.0  # Default slack for canonical mode
 
-# Antimony reserved keywords that cannot be used as identifiers
-# These cause parsing errors like: "unexpected 'compartment', expecting '$' or element name"
-# when used as compartment/species/parameter names.
+# Antimony reserved keywords that require sanitization
 #
-# NOTE: Only type declaration keywords are problematic in practice. Function names
-# (exp, log, sin, etc.) are NOT included because:
-# 1. No modeler would name a variable "exp" or "sin"
-# 2. Antimony would parse them as function calls, giving a different error
-# Antimony reserved keywords that have EMPIRICALLY caused parsing errors in BioModels.
-# We only sanitize keywords where we have seen real-world failures, not speculative ones.
-# Additional keywords can be added if new parsing errors are observed.
+# MOTIVATION: Models in BioModels commonly use variable names (compartment, species,
+# parameter names) that conflict with Antimony's reserved keywords. When ssys outputs
+# recast models to Antimony format, these names cause parsing errors like:
+#   "unexpected 'compartment', expecting '$' or element name"
+#
+# SOLUTION: We rename conflicting identifiers by appending '_var' suffix:
+#   "compartment" -> "compartment_var"
+#   "DNA" -> "DNA_var"
+#
+# CONSERVATIVE APPROACH: We only sanitize keywords that have EMPIRICALLY caused
+# parsing errors in the BioModels benchmark, not speculative ones. This avoids
+# unnecessary renaming while fixing real-world issues.
+#
+# Evidence from BioModels parsing failures:
+#   - "compartment": BIOMD0000000078 (259 models use this name in BioModels)
+#   - "DNA", "RNA": BIOMD0000000090 (common gene expression model species names)
+#
+# To add new keywords: If you encounter an Antimony parsing error for a specific
+# identifier name, add it to this set with a comment citing the failing model.
 ANTIMONY_RESERVED_KEYWORDS = frozenset({
-    "compartment",  # Very common compartment name (259 cases in BioModels)
-    "DNA", "RNA",   # Common species names that conflict with Antimony built-ins
+    "compartment",  # BIOMD0000000078 - most common conflicting name (259 models)
+    "DNA", "RNA",   # BIOMD0000000090 - common gene expression species names
 })
 
 
@@ -38,18 +48,27 @@ def _sanitize_antimony_name(name: str) -> str:
     """
     Sanitize a name to avoid Antimony reserved keyword conflicts.
     
-    If the name (case-insensitive) matches a reserved keyword,
-    append '_var' suffix to make it a valid identifier.
+    Models in BioModels commonly use variable names (compartment, species,
+    parameter names) that conflict with Antimony reserved keywords. When ssys
+    outputs recast models, these cause parsing errors. We fix this by appending
+    '_var' suffix to conflicting names.
     
-    Only type declaration keywords (compartment, species, model, etc.) are
-    problematic in practice. Function names are NOT sanitized because no
-    reasonable modeler would name a variable "exp" or "sin".
+    The comparison is case-insensitive: "Compartment", "COMPARTMENT", and
+    "compartment" are all sanitized to "Compartment_var", "COMPARTMENT_var", etc.
     
     Args:
         name: Original identifier name
         
     Returns:
-        Sanitized name safe for use in Antimony output
+        Sanitized name with '_var' suffix if it conflicts, otherwise unchanged
+    
+    Examples:
+        >>> _sanitize_antimony_name("compartment")
+        'compartment_var'
+        >>> _sanitize_antimony_name("DNA")
+        'DNA_var'
+        >>> _sanitize_antimony_name("X")
+        'X'
     """
     if name.lower() in {n.lower() for n in ANTIMONY_RESERVED_KEYWORDS}:
         return f"{name}_var"
