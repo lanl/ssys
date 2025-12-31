@@ -118,27 +118,38 @@ python 1_fetch_models.py --n 500 --strategy sequential --mode expand
 ## Directory Structure
 
 ```
-benchmarks/
-  config.py              # Configuration settings
-  utils.py               # Shared utilities
-  1_fetch_models.py      # Download from BioModels
-  2_filter_models.py     # Apply heuristics (TODO)
-  3_recast_batch.py      # Batch recast with validation (TODO)
-  4_analyze_results.py   # Generate reports (TODO)
+biomodels_batch/
+  run_benchmark.sh        # Main pipeline runner (recommended)
+  config.py               # Configuration settings
+  utils.py                # Shared utilities
   
-  data/                  # Downloaded models (git-ignored)
-    sbml/                # Original SBML files
-    antimony/            # Converted Antimony files
-    fetch_history.json   # Fetch tracking
-    model_registry.json  # BioModels catalog cache
+  # Pipeline scripts
+  1_fetch_models.py       # Download from BioModels
+  2_filter_models.py      # Apply heuristic filters
+  3_recast_batch.py       # Batch transformation
+  3b_validate_batch.py    # Batch validation (3-stage)
+  4_analyze_results.py    # Generate reports/plots
+  5_rebuild_results_csv.py # Rebuild CSV from files
+  6_collect_validated.py  # Collect validated models
+  7_generate_results_md.py # Generate RESULTS.md
   
-  results/               # Outputs (git-ignored)
-    candidates.csv       # Filtered models
-    recasts/             # Successful recasts
-    validation/          # Validation reports
-    failures/            # Failed models
-    summary.json         # Statistics
-    report.ipynb         # Analysis notebook
+  # Documentation
+  README.md               # This file
+  RESULTS.md              # Auto-generated results summary
+  PARSING_ERRORS.md       # Known parsing issues
+  
+  data/                   # Downloaded models (git-ignored)
+    sbml_downloads/       # Original SBML files
+    sbml_candidates/      # Filtered candidates
+    fetch_history.json    # Fetch tracking
+  
+  results/                # Outputs (git-ignored)
+    candidates.csv        # Filtered models metadata
+    recasts/              # Successful transformation .ant files
+    validation/           # Validation JSON reports
+    validated/            # Final validated model pairs
+    failures/             # Failure log files
+    summary.json          # Statistics
 ```
 
 ## Configuration
@@ -167,28 +178,52 @@ Edit `config.py` to adjust:
 
 ## Download Success Rate
 
-Not all models in BioModels can be downloaded. Typical download success is ~60-65%:
+| BioModels ODE Models | 1,644 |
+|----------------------|-------|
+| Successfully downloaded | 1,644 (100%) |
 
-| BioModels ODE Models | ~1,700 |
-|----------------------|--------|
-| Successfully downloaded | ~1,056 (62%) |
-| Download failures | ~644 (38%) |
+**Note:** Earlier runs (~2023) had ~60% download success due to API changes. The current fetch script handles COMBINE archive formats correctly.
 
-**Reasons for download failures:**
+## Quick Start: run_benchmark.sh
 
-1. **COMBINE Archive Format Variations**: BioModels provides models as OMEX/COMBINE archives (zip files). The script looks for SBML files named `{model_id}_url.xml` or files containing "sbml". Some archives use different naming conventions.
+The easiest way to run the full pipeline:
 
-2. **API/Network Issues**: Rate limiting, temporary 404 errors, or server issues. The script includes 50ms delays between requests to avoid rate limits.
+```bash
+# Activate environment
+source ../ssys_dev/bin/activate
 
-3. **Missing SBML Content**: Some BioModels entries are curated metadata without downloadable SBML files. Others may be deprecated or use alternative formats (CellML, etc.).
+# Run entire pipeline (auto-skips completed stages)
+./run_benchmark.sh
 
-4. **Model ID Filtering**: Only models classified as "ordinary differential equation" in BioModels metadata are fetched. Non-ODE models (stochastic, spatial, etc.) are filtered out.
+# Check status
+./run_benchmark.sh --status
 
-**The ~1,056 downloadable models represent the "actually usable" subset** for S-system recasting. This is a strong benchmark - many published validation studies use far fewer models.
+# Start from a specific stage
+./run_benchmark.sh --from validate
 
-## Re-Running the Full Pipeline
+# Run only one stage
+./run_benchmark.sh --only report
 
-To regenerate all results from scratch:
+# Force re-run even if stage appears ready
+./run_benchmark.sh --force
+
+# Clean all outputs and start fresh
+./run_benchmark.sh --clean --force
+```
+
+**Pipeline stages:**
+1. `fetch` - Download SBML from BioModels
+2. `filter` - Identify transformation candidates
+3. `recast` - Convert to S-system form (two-pass)
+4. `validate_numerical` - Fast numerical screening
+5. `validate_jax` - JAX cross-check
+6. `validate_symbolic` - Symbolic proof
+7. `collect` - Collect validated models
+8. `report` - Generate RESULTS.md (optional, not in default pipeline)
+
+## Manual Pipeline Commands
+
+For more control, run individual Python scripts:
 
 ```bash
 # Activate environment
