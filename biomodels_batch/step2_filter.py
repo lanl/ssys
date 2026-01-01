@@ -434,8 +434,10 @@ def generate_summary(df: pd.DataFrame) -> str:
     blocker_counts = Counter(all_blockers)
 
     # Calculate key metrics
-    excluded = total - df["can_attempt"].sum()
+    excluded = int(total - df["can_attempt"].sum())
     eligible = int(df["can_attempt"].sum())
+    candidates = int(df["gma_candidate"].sum())
+    excluded_by_size = eligible - candidates
 
     # Size categories (among eligible models)
     eligible_df = df[df["can_attempt"]]
@@ -448,7 +450,7 @@ def generate_summary(df: pd.DataFrame) -> str:
         int(eligible_df["is_already_gma"].sum()) if "is_already_gma" in eligible_df.columns else 0
     )
 
-    # Special features
+    # Special features (among all models)
     has_exp = int(df["has_exp"].sum())
     has_log = int(df["has_log"].sum())
     has_sin_cos = int(df["has_sin_cos"].sum())
@@ -460,45 +462,60 @@ def generate_summary(df: pd.DataFrame) -> str:
     lines.append("BioModels Filtering Summary")
     lines.append("===========================")
     lines.append("")
-    lines.append(f"TOTAL MODELS ANALYZED: {total}")
+    lines.append(f"INPUT:  {total} models analyzed")
     lines.append("")
-    lines.append(f"EXCLUDED FROM RECASTING ({excluded} models, {100 * excluded / total:.1f}%)")
-    lines.append("  Reasons:")
 
-    # Add blocker breakdown
+    # Funnel visualization
+    lines.append("FILTERING FUNNEL:")
+    lines.append(f"  {total:4d}  Total models")
+    lines.append(f"  -{excluded:4d}  Excluded (blockers)")
+    lines.append(f"  -----")
+    lines.append(f"  {eligible:4d}  Eligible (no blockers)")
+    lines.append(f"  -{excluded_by_size:4d}  Excluded (too large)")
+    lines.append(f"  -----")
+    lines.append(f"  {candidates:4d}  CANDIDATES for transformation")
+    lines.append("")
+
+    # Blocker breakdown
+    lines.append(f"BLOCKER DETAILS ({excluded} models excluded):")
+    lines.append("  Note: Models may have multiple blockers (counts overlap)")
+
     blocker_labels = {
-        "no_dynamics": "No ODEs (0 species)",
+        "no_dynamics": "No ODEs (0 floating species)",
         "events": "Contains discrete events",
         "parse_error": "SBML parse errors",
         "delays": "Contains delay functions",
         "algebraic_rules": "Algebraic constraints",
+        "sbml_l3_packages": "Uses SBML L3 packages",
+        "unsupported_trig": "Unsupported trig (tan/tanh)",
     }
 
-    for blocker in ["no_dynamics", "events", "parse_error", "delays", "algebraic_rules"]:
+    for blocker in ["no_dynamics", "events", "parse_error", "delays", 
+                    "algebraic_rules", "sbml_l3_packages", "unsupported_trig"]:
         if blocker in blocker_counts:
             label = blocker_labels.get(blocker, blocker)
             count = blocker_counts[blocker]
-            lines.append(f"    - {label}: {count}")
+            lines.append(f"    {count:4d}  {label}")
 
-    for blocker, count in blocker_counts.items():
+    # Any unlisted blockers
+    for blocker, count in sorted(blocker_counts.items()):
         if blocker not in blocker_labels:
-            lines.append(f"    - {blocker}: {count}")
+            lines.append(f"    {count:4d}  {blocker}")
 
     lines.append("")
-    lines.append(f"ELIGIBLE FOR RECASTING ({eligible} models, {100 * eligible / total:.1f}%)")
+
+    # Size distribution
+    lines.append(f"SIZE DISTRIBUTION ({eligible} eligible models):")
+    lines.append(f"    {small:4d}  Small (≤10 species, ≤20 reactions)")
+    lines.append(f"    {medium:4d}  Medium (11-100 species)")
+    lines.append(f"    {large:4d}  Large (>100 species) - may be slow")
     lines.append("")
-    lines.append("  By model size:")
-    lines.append(f"    - Small (<=10 species, <=20 rxns): {small:4d}  (best for S-system recast)")
-    lines.append(f"    - Medium (11-100 species):         {medium:4d}  (GMA recast)")
-    lines.append(f"    - Large (>100 species):            {large:4d}  (may be slow)")
-    lines.append("")
-    lines.append(
-        f"  Already in GMA form:                 {already_gma_eligible:4d}  (no recasting needed!)"
-    )
+    lines.append(f"    {already_gma_eligible:4d}  Already in GMA form (no transformation needed)")
     lines.append("")
 
+    # Complexity stats
     if len(eligible_df) > 0:
-        lines.append("COMPLEXITY (eligible models only):")
+        lines.append("COMPLEXITY STATISTICS (eligible models):")
         lines.append(
             f"    Species:    median={eligible_df['n_species'].median():.0f}, "
             f"range=[{eligible_df['n_species'].min()}, {eligible_df['n_species'].max()}]"
@@ -513,11 +530,12 @@ def generate_summary(df: pd.DataFrame) -> str:
         )
         lines.append("")
 
-    lines.append("SPECIAL FEATURES (may need transformation):")
-    lines.append(f"    - Contains exp():      {has_exp:4d} models")
-    lines.append(f"    - Contains log/ln():   {has_log:4d} models")
-    lines.append(f"    - Sin/cos (supported): {has_sin_cos:4d} models")
-    lines.append(f"    - Piecewise functions: {has_piecewise:4d} models")
+    # Special features
+    lines.append("SPECIAL FEATURES (all models):")
+    lines.append(f"    {has_exp:4d}  Contains exp()")
+    lines.append(f"    {has_log:4d}  Contains log/ln()")
+    lines.append(f"    {has_sin_cos:4d}  Contains sin/cos (supported)")
+    lines.append(f"    {has_piecewise:4d}  Contains piecewise functions")
     lines.append("")
 
     return "\n".join(lines)
