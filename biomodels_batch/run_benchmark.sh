@@ -171,10 +171,10 @@ is_report_complete() {
 # ===========================================================================
 
 stage_fetch() {
-    log_stage "STAGE: Fetch SBML models from BioModels"
+    log_stage "STAGE 1: Fetch SBML models from BioModels"
     
     log_info "Fetching ODE models from BioModels API..."
-    python 1_fetch_models.py --target-total 2000 --strategy random
+    python step1_fetch.py --target-total 2000 --strategy random
     
     local count
     count=$(count_files "$SBML_DIR" "*.xml")
@@ -182,10 +182,10 @@ stage_fetch() {
 }
 
 stage_filter() {
-    log_stage "STAGE: Filter candidates for S-system recasting"
+    log_stage "STAGE 2: Filter candidates for S-system recasting"
     
     log_info "Applying heuristic filters..."
-    python 2_filter_models.py
+    python step2_filter.py
     
     local count
     count=$(count_files "$CANDIDATES_DIR" "*.xml")
@@ -193,11 +193,11 @@ stage_filter() {
 }
 
 stage_recast() {
-    log_stage "STAGE: Recast to S-system form"
+    log_stage "STAGE 3: Recast to S-system form"
     
     # Pass 1: Quick timeout
     log_info "Pass 1: Quick recast (${TIMEOUT_QUICK}s timeout)..."
-    python 3_recast_batch.py --mode simplified --timeout "$TIMEOUT_QUICK" --no-validate
+    python step3_recast.py --mode simplified --timeout "$TIMEOUT_QUICK" --no-validate
     
     local pass1_count
     pass1_count=$(count_files "$RECASTS_DIR" "*.ant")
@@ -205,7 +205,7 @@ stage_recast() {
     
     # Pass 2: Retry timeouts only
     log_info "Pass 2: Retry timeouts (${TIMEOUT_LONG}s timeout)..."
-    python 3_recast_batch.py --mode simplified --timeout "$TIMEOUT_LONG" --retry-timeouts --no-validate
+    python step3_recast.py --mode simplified --timeout "$TIMEOUT_LONG" --retry-timeouts --no-validate
     
     local final_count
     final_count=$(count_files "$RECASTS_DIR" "*.ant")
@@ -213,10 +213,10 @@ stage_recast() {
 }
 
 stage_validate_numerical() {
-    log_stage "STAGE: Validate (numerical, non-JAX)"
+    log_stage "STAGE 4: Validate (numerical, non-JAX)"
     
     log_info "Running numerical validation on all recasts..."
-    python 3b_validate_batch.py --numerical-only --timeout "$TIMEOUT_VALIDATION" --workers "$WORKERS_ALL"
+    python step4_validate.py --numerical-only --timeout "$TIMEOUT_VALIDATION" --workers "$WORKERS_ALL"
     
     local count
     count=$(count_files "$VALIDATION_DIR" "*_validation.json")
@@ -224,31 +224,28 @@ stage_validate_numerical() {
 }
 
 stage_validate_jax() {
-    log_stage "STAGE: Validate (numerical, JAX cross-check)"
+    log_stage "STAGE 4b: Validate (numerical, JAX cross-check)"
     
     log_info "Running JAX numerical validation on passed models..."
-    python 3b_validate_batch.py --numerical-only --use-jax --passed-only --timeout "$TIMEOUT_JAX" --workers "$WORKERS_ALL"
+    python step4_validate.py --numerical-only --use-jax --passed-only --timeout "$TIMEOUT_JAX" --workers "$WORKERS_ALL"
     
     log_success "JAX validation complete"
 }
 
 stage_validate_symbolic() {
-    log_stage "STAGE: Validate (symbolic proof)"
+    log_stage "STAGE 4c: Validate (symbolic proof)"
     
     log_info "Running symbolic validation on passed models (subprocess isolation)..."
-    python 3b_validate_batch.py --symbolic-only --passed-only --subprocess --timeout "$TIMEOUT_SYMBOLIC" --workers "$WORKERS_SYMBOLIC"
+    python step4_validate.py --symbolic-only --passed-only --subprocess --timeout "$TIMEOUT_SYMBOLIC" --workers "$WORKERS_SYMBOLIC"
     
     log_success "Symbolic validation complete"
 }
 
 stage_collect() {
-    log_stage "STAGE: Collect validated models"
+    log_stage "STAGE 5: Collect validated models"
     
     log_info "Collecting validated model pairs..."
-    python 6_collect_validated.py
-    
-    log_info "Rebuilding results CSV..."
-    python 5_rebuild_results_csv.py
+    python step5_collect.py
     
     local count
     count=$(count_files "$VALIDATED_DIR" "*.ant")
@@ -256,12 +253,12 @@ stage_collect() {
 }
 
 stage_report() {
-    log_stage "STAGE: Generate RESULTS.md report"
+    log_stage "STAGE 6: Generate reports"
     
-    log_info "Regenerating RESULTS.md from current data..."
-    python 7_generate_results_md.py --write
+    log_info "Rebuilding CSV and generating RESULTS.md..."
+    python step6_report.py
     
-    log_success "Report generated: RESULTS.md"
+    log_success "Reports generated: batch_recast_results.csv, RESULTS.md"
 }
 
 # ===========================================================================
