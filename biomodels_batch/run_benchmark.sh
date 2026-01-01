@@ -11,7 +11,10 @@
 # 5. Collect validated models
 #
 # Usage:
-#   ./run_benchmark.sh              # Full pipeline (auto-skip completed)
+#   ./run_benchmark.sh              # Default pipeline (numerical validation only)
+#   ./run_benchmark.sh --jax        # Include JAX validation (passed models only)
+#   ./run_benchmark.sh --symbolic   # Include symbolic validation (passed models only)
+#   ./run_benchmark.sh --full       # Full pipeline (numerical + JAX + symbolic)
 #   ./run_benchmark.sh --from recast     # Start from recasting
 #   ./run_benchmark.sh --from validate   # Start from validation
 #   ./run_benchmark.sh --only fetch      # Run only fetch step
@@ -354,6 +357,12 @@ Usage:
   ./run_benchmark.sh [OPTIONS]
 
 Options:
+  --jax           Include JAX numerical validation (on passed models only)
+  
+  --symbolic      Include symbolic equivalence proof (on passed models only)
+  
+  --full          Full validation (numerical + JAX + symbolic)
+
   --from STAGE    Start from a specific stage (skip earlier stages)
                   Stages: fetch, filter, recast, validate, validate_jax, 
                           validate_symbolic, collect, report
@@ -369,9 +378,13 @@ Options:
   --help          Show this help message
 
 Examples:
-  ./run_benchmark.sh              # Full pipeline (auto-skip completed)
+  ./run_benchmark.sh              # Default: numerical validation only (fast)
+  ./run_benchmark.sh --jax        # Add JAX cross-check on passed models
+  ./run_benchmark.sh --symbolic   # Add symbolic proof on passed models
+  ./run_benchmark.sh --full       # Full validation (old default behavior)
   ./run_benchmark.sh --from recast     # Start from recasting
-  ./run_benchmark.sh --from validate   # Start from validation (stage 1)
+  ./run_benchmark.sh --from validate   # Start from validation
+  ./run_benchmark.sh --from recast --jax  # Recast + numerical + JAX
   ./run_benchmark.sh --only fetch      # Only fetch models
   ./run_benchmark.sh --force           # Re-run everything
   ./run_benchmark.sh --clean --force   # Fresh start
@@ -380,13 +393,17 @@ Stages (in order):
   1. fetch              - Download SBML from BioModels
   2. filter             - Identify recast candidates
   3. recast             - Convert to S-system form
-  4. validate           - Numerical validation (non-JAX)
-  5. validate_jax       - Numerical validation (JAX cross-check)
-  6. validate_symbolic  - Symbolic equivalence proof
+  4. validate_numerical - Numerical validation (non-JAX) [DEFAULT]
+  5. validate_jax       - JAX cross-check [optional: --jax]
+  6. validate_symbolic  - Symbolic proof [optional: --symbolic]
   7. collect            - Collect validated models
   8. report             - Generate RESULTS.md (optional, not in default pipeline)
 
+Default pipeline: fetch → filter → recast → validate_numerical → collect
+With --full:      fetch → filter → recast → validate_numerical → validate_jax → validate_symbolic → collect
+
 The pipeline auto-detects completed stages and skips them unless --force is used.
+JAX and symbolic validation only process models that passed numerical validation.
 EOF
 }
 
@@ -425,6 +442,8 @@ FORCE=false
 CLEAN=false
 START_FROM=""
 ONLY_STAGE=""
+INCLUDE_JAX=false
+INCLUDE_SYMBOLIC=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -442,6 +461,19 @@ while [[ $# -gt 0 ]]; do
             ;;
         --clean)
             CLEAN=true
+            shift
+            ;;
+        --jax)
+            INCLUDE_JAX=true
+            shift
+            ;;
+        --symbolic)
+            INCLUDE_SYMBOLIC=true
+            shift
+            ;;
+        --full)
+            INCLUDE_JAX=true
+            INCLUDE_SYMBOLIC=true
             shift
             ;;
         --status)
@@ -467,6 +499,8 @@ done
 log_stage "BioModels Benchmark Pipeline"
 echo "Working directory: $SCRIPT_DIR"
 echo "Force mode: $FORCE"
+echo "JAX validation: $INCLUDE_JAX"
+echo "Symbolic validation: $INCLUDE_SYMBOLIC"
 echo ""
 
 # Clean if requested
@@ -484,24 +518,47 @@ fi
 # Determine which stages to run
 STAGES=()
 
+# Build stages array based on options
+# Default: numerical validation only (fast, no JAX dependencies)
+# --jax: adds JAX validation on passed models
+# --symbolic: adds symbolic validation on passed models
+# --full: both JAX and symbolic
+
 case "${START_FROM:-all}" in
     all|"")
-        STAGES=(fetch filter recast validate_numerical validate_jax validate_symbolic collect)
+        STAGES=(fetch filter recast validate_numerical)
+        $INCLUDE_JAX && STAGES+=(validate_jax)
+        $INCLUDE_SYMBOLIC && STAGES+=(validate_symbolic)
+        STAGES+=(collect)
         ;;
     fetch)
-        STAGES=(fetch filter recast validate_numerical validate_jax validate_symbolic collect)
+        STAGES=(fetch filter recast validate_numerical)
+        $INCLUDE_JAX && STAGES+=(validate_jax)
+        $INCLUDE_SYMBOLIC && STAGES+=(validate_symbolic)
+        STAGES+=(collect)
         ;;
     filter)
-        STAGES=(filter recast validate_numerical validate_jax validate_symbolic collect)
+        STAGES=(filter recast validate_numerical)
+        $INCLUDE_JAX && STAGES+=(validate_jax)
+        $INCLUDE_SYMBOLIC && STAGES+=(validate_symbolic)
+        STAGES+=(collect)
         ;;
     recast)
-        STAGES=(recast validate_numerical validate_jax validate_symbolic collect)
+        STAGES=(recast validate_numerical)
+        $INCLUDE_JAX && STAGES+=(validate_jax)
+        $INCLUDE_SYMBOLIC && STAGES+=(validate_symbolic)
+        STAGES+=(collect)
         ;;
     validate|validate_numerical)
-        STAGES=(validate_numerical validate_jax validate_symbolic collect)
+        STAGES=(validate_numerical)
+        $INCLUDE_JAX && STAGES+=(validate_jax)
+        $INCLUDE_SYMBOLIC && STAGES+=(validate_symbolic)
+        STAGES+=(collect)
         ;;
     validate_jax)
-        STAGES=(validate_jax validate_symbolic collect)
+        STAGES=(validate_jax)
+        $INCLUDE_SYMBOLIC && STAGES+=(validate_symbolic)
+        STAGES+=(collect)
         ;;
     validate_symbolic)
         STAGES=(validate_symbolic collect)
