@@ -2154,7 +2154,7 @@ class RecastValidator:
             required_tests.append(numerical_pass)
         if run_trajectory:
             required_tests.append(trajectory_pass)
-        
+
         # All REQUESTED tests must pass for overall pass
         report.overall_pass = all(required_tests) if required_tests else False
 

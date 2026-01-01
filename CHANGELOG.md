@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5] - 2025-12-31
+
+### Added
+- **BioModels database benchmark results**: 204 validated models from 978 candidates
+  - 66 General → GMA transformations (functional lifting)
+  - 18 GMA → S-system transformations (sum-to-product reduction)
+  - 1 General → S-system (full simplification)
+- Reorganized `biomodels_batch/` scripts to sequential `stepN_` naming
+- Consolidated report generation into `step6_report.py`
+
+### Changed
+- Updated paper.md with benchmark results
+- Improved filter summary output with clear funnel visualization
+- Default benchmark pipeline now uses numerical-only validation (faster)
+
+### Fixed
+- Antimony reserved keyword sanitization for `compartment`, `DNA`, `RNA`, etc.
+- Validation file pattern matching in report generation
+
 ## [0.5.4] - 2025-12-30
 
 ### Added
@@ -192,7 +211,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - matplotlib >=3.7
 - nbformat >=5.9
 
-[Unreleased]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.4...main
+[Unreleased]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.5...main
+[0.5.5]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.4...v0.5.5
 [0.5.4]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.3...v0.5.4
 [0.5.3]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.2...v0.5.3
 [0.5.2]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.1...v0.5.2

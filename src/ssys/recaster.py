@@ -47,21 +47,21 @@ ANTIMONY_RESERVED_KEYWORDS = frozenset({
 def _sanitize_antimony_name(name: str) -> str:
     """
     Sanitize a name to avoid Antimony reserved keyword conflicts.
-    
+
     Models in BioModels commonly use variable names (compartment, species,
     parameter names) that conflict with Antimony reserved keywords. When ssys
     outputs recast models, these cause parsing errors. We fix this by appending
     '_var' suffix to conflicting names.
-    
+
     The comparison is case-insensitive: "Compartment", "COMPARTMENT", and
     "compartment" are all sanitized to "Compartment_var", "COMPARTMENT_var", etc.
-    
+
     Args:
         name: Original identifier name
-        
+
     Returns:
         Sanitized name with '_var' suffix if it conflicts, otherwise unchanged
-    
+
     Examples:
         >>> _sanitize_antimony_name("compartment")
         'compartment_var'
@@ -78,12 +78,12 @@ def _sanitize_antimony_name(name: str) -> str:
 def _build_name_sanitization_map(names: set[str]) -> dict[str, str]:
     """
     Build a mapping of original names to sanitized names.
-    
+
     Only includes entries for names that need sanitization.
-    
+
     Args:
         names: Set of all identifier names used in the model
-        
+
     Returns:
         Dict mapping original_name -> sanitized_name for conflicting names
     """
@@ -98,13 +98,13 @@ def _build_name_sanitization_map(names: set[str]) -> dict[str, str]:
 def _apply_name_sanitization(text: str, name_map: dict[str, str]) -> str:
     """
     Apply name sanitization to a text string (expression or identifier).
-    
+
     Uses word-boundary matching to avoid partial replacements.
-    
+
     Args:
         text: Original text
         name_map: Mapping of original_name -> sanitized_name
-        
+
     Returns:
         Text with names sanitized
     """
@@ -4532,7 +4532,7 @@ def product_to_antimony(
     Format coefficient and exponents as Antimony expression string.
     coeff can be either float or sp.Expr (symbolic).
     Exponents can also be symbolic expressions.
-    
+
     Args:
         coeff: Coefficient (numeric or symbolic)
         exps: Dictionary mapping symbols to exponents
@@ -4540,7 +4540,7 @@ def product_to_antimony(
                   (for Antimony reserved keyword handling)
     """
     parts: list[str] = []
-    
+
     def sanitize(name: str) -> str:
         """Apply name sanitization if name_map is provided."""
         if name_map and name in name_map:
@@ -4587,7 +4587,7 @@ def product_to_antimony(
         # Special case: dummy_const with exponent 0 should always be shown
         # This represents constant terms as C * dummy_const^0
         is_dummy_const = s.name == "dummy_const"
-        
+
         # Get sanitized name for this symbol
         s_name = sanitize(s.name) if hasattr(s, "name") else str(s)
 
@@ -5381,7 +5381,7 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
     # These define quantities like mu := mu_max * S / (K_S + S + S^2/K_I)
     # CRITICAL: Must come AFTER observable definitions so referenced variables exist
     # But we need to define observables first - do that now with original names
-    
+
     # Define original variables as observables with original names (not _obs suffix)
     # This is needed so assignment rules that reference them (like mu := f(S)) work
     # CRITICAL: Skip identity mappings (X = X) - these cause "Loop detected" errors
@@ -5394,7 +5394,7 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
                 continue
             rhs = " * ".join([a.name for a in aux_list]) if aux_list else "1"
             non_identity_mappings.append((orig, rhs))
-        
+
         if non_identity_mappings:
             lines.append("  // Observable variables (reconstructed from auxiliaries)")
             for orig, rhs in non_identity_mappings:
