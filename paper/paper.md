@@ -15,7 +15,7 @@ authors:
 affiliations:
   - name: Theoretical Biology & Biophysics Group, Theoretical Division, Los Alamos National Laboratory, Los Alamos, NM 87545, USA
     index: 1
-date: 2025-12-28
+date: 2025-12-31
 bibliography: paper.bib
 header-includes:
   - \hyphenpenalty=10000
@@ -38,7 +38,7 @@ The software provides a command-line interface for batch processing, a three-tes
 
 # Statement of need
 
-S-systems and GMA systems are canonical ODE forms developed within Biochemical Systems Theory [@Savageau1976; @SavageauVoit1987]. Savageau & Voit (1987) proved that systems built from sums, products, and compositions of elementary functions can be recast into S-system form; their theorem provides a minimum estimate of the class of recastable systems. These canonical representations offer several advantages: steady-state equations become linear in log-space, enabling algebraic analysis of identifiability and sensitivity; the uniform power-law structure facilitates parameter estimation via linear regression techniques [@Daniels2015]; and exact recast models can serve as ground truth for validating structure-learning algorithms that infer governing equations from data [@Daniels2015b].
+S-systems and GMA systems are canonical ODE forms developed within Biochemical Systems Theory (BST) [@Savageau1976; @SavageauVoit1987]. Savageau & Voit (1987) proved that systems built from sums, products, and compositions of elementary functions can be recast into S-system form; their theorem provides a minimum estimate of the class of recastable systems. These canonical representations offer several advantages: steady-state equations become linear in log-space, enabling algebraic analysis of identifiability and sensitivity; the uniform power-law structure facilitates parameter estimation via linear regression techniques [@Daniels2015]; and exact recast models can serve as ground truth for validating structure-learning algorithms that infer governing equations from data [@Daniels2015b].
 
 Despite the theoretical utility of S-systems and GMA systems, no general-purpose, open-source tool previously existed to perform exact recasting of arbitrary ODE models. `ssys` fills this gap by providing:
 
@@ -51,7 +51,7 @@ The package enables researchers to convert published models into canonical form 
 
 # State of the field
 
-Antimony is a widely used human-readable modeling language for systems biology [@Smith2009Antimony; @Smith2024Antimony], with transparent interoperability to SBML [@Keating2020SBML]. The S-system and GMA formalisms are classical [@Savageau1976; @Voit2013], but general-purpose recasting tools are scarce. Classical BST tools such as PLAS [@Voit1991PLAS] focus on analyzing systems already expressed in S-system or GMA form. PLMaddon [@Villaverde2007] can generate power-law approximations via Taylor expansion, but such local approximations differ fundamentally from exact recasting with auxiliary variables. More recently, BSTModelKit.jl [@Sund2025BSTModelKit] provides Julia tools for constructing and analyzing BST models, though it emphasizes model construction from network descriptions rather than recasting arbitrary ODEs. To the best of our knowledge, no existing open-source tool performs exact algebraic recasting from arbitrary SBML/Antimony ODEs to S-system or GMA form with explicit constraint-manifold handling and validation certificates. `ssys` aims to fill that gap.
+Antimony is a human-readable modeling language for systems biology [@Smith2009Antimony; @Smith2024Antimony], with transparent interoperability with SBML [@Keating2020SBML]. The S-system and GMA formalisms are classical [@Savageau1976; @Voit2013], but general-purpose recasting tools are scarce. Classical BST tools such as PLAS [@Voit1991PLAS] focus on analyzing systems already expressed in S-system or GMA form. PLMaddon [@Villaverde2007] can generate power-law approximations via Taylor expansion, but such local approximations differ fundamentally from exact recasting with auxiliary variables. More recently, BSTModelKit.jl [@Sund2025BSTModelKit] provides Julia tools for constructing and analyzing BST models, though it emphasizes model construction from network descriptions rather than recasting arbitrary ODEs. To the best of our knowledge, no existing open-source tool performs exact algebraic recasting from arbitrary SBML/Antimony ODEs to S-system or GMA form with explicit constraint-manifold handling and validation certificates.
 
 # Functionality
 
@@ -63,17 +63,17 @@ Antimony is a widely used human-readable modeling language for systems biology [
 
 # Quality control
 
-The package includes more than 200 unit tests covering parsing, recasting, validation, and CLI functionality. Integration tests entail transformation and validation of more than 100 models.
+The package includes 288 unit tests covering parsing, recasting, validation, and CLI functionality. Integration tests entail transformation and validation of 117 models.
 
 # BioModels database benchmark
 
-To assess applicability to real-world models, we applied `ssys` to ODE models from the BioModels database [@Malik2020]. The benchmark suite (included in the repository under `biomodels_batch/`) operates in three phases: (1) fetch SBML models from BioModels, filtering for ODE-based models; (2) identify transformation candidates by applying filters that exclude models with unsupported features (discrete events, delay equations) or excessive complexity (species or reaction counts above specified thresholds); and (3) batch transform the candidates. After filtering 1,644 ODE models from BioModels, 978 candidates remained. Of these, the transformation algorithm completed for 896 (92%), and numerical validation confirmed mathematical equivalence for 204 models. Among the validated models, 85 achieved meaningful structural simplification: 66 models in general form were lifted to GMA form via functional decomposition, 18 models in GMA form were reduced to S-system form via sum-to-product factorization, and 1 model in general form was recast into S-system form. The remaining validated models were already in canonical form or matched their input structure. Most transformation failures (82 models) were due to processing timeouts (>60s per model) on complex rate expressions. Validation was not obtained for the remaining 692 transformed models for various reasons, including crashes of the validation procedure (295), failures to convert symbolic expressions to floats (270), numerical mismatch (91), and unrecognized comparison operators from piecewise expressions (36). Benchmark scripts are in `biomodels_batch/` and results are in `biomodels_batch/results/` (see also `RESULTS.md`).
+To assess applicability to real-world models, we applied `ssys` to ODE models from the BioModels database [@Malik2020]. The benchmark suite (included in the repository under `biomodels_batch/`) operates in three phases: (1) fetch SBML models from BioModels, filtering for ODE-based models; (2) identify transformation candidates by applying filters that exclude models with unsupported features (discrete events, delay equations) or excessive complexity (species or reaction counts above specified thresholds); and (3) batch transform the candidates. After filtering 1,644 ODE models from BioModels, 978 candidates remained. Of these, the transformation algorithm completed for 896 (92%), and numerical validation confirmed mathematical equivalence for 204 models. Among the validated models, 85 achieved meaningful structural canonization: 66 models in general form were converted to GMA, 18 models in GMA form were converted to S-system form, and 1 model in general form was converted to S-system form. The remaining validated models were already in canonical form or matched their input structure. Most transformation failures (82 models) were due to processing timeouts (>60s per model). Validation was not obtained for 692 transformed models for various reasons, including crashes of the validation procedure (295), failures to convert symbolic expressions to floats (270), numerical mismatch (91), and unrecognized comparison operators from piecewise expressions (36). Benchmark scripts are in `biomodels_batch/` and results are in `biomodels_batch/results/` (see also `RESULTS.md`).
 
 # Availability
 
 `ssys` is available on GitHub at https://github.com/lanl/ssys. Installation requires Python >= 3.10, SymPy, NumPy, libRoadRunner, and the Antimony library. The repository includes comprehensive documentation: theoretical background and recasting rules (`RECASTING.md`), test model descriptions (`TEST_MODELS.md`), and usage instructions (`README.md`).
 
-Installation: `pip install -e ".[dev]"`. A working example that recasts 29 models from the test suite with validation: `python recast_models.py test_models1 --validate`.
+Installation: `uv pip install -e ".[dev]"`. A working example that recasts 29 models from the test suite with validation: `python recast_models.py test_models1 --validate`.
 
 # Acknowledgments
 
