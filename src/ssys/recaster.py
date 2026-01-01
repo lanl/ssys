@@ -4525,13 +4525,27 @@ def _pool_ssystem_recast(sym: "SymSystem", mode: str = "simplified") -> "RecastR
     return canonicalize_aux_names(res, prefix="Z")
 
 
-def product_to_antimony(coeff, exps: dict[sp.Symbol, float]) -> str:
+def product_to_antimony(
+    coeff, exps: dict[sp.Symbol, float], name_map: dict[str, str] | None = None
+) -> str:
     """
     Format coefficient and exponents as Antimony expression string.
     coeff can be either float or sp.Expr (symbolic).
     Exponents can also be symbolic expressions.
+    
+    Args:
+        coeff: Coefficient (numeric or symbolic)
+        exps: Dictionary mapping symbols to exponents
+        name_map: Optional mapping of original names to sanitized names
+                  (for Antimony reserved keyword handling)
     """
     parts: list[str] = []
+    
+    def sanitize(name: str) -> str:
+        """Apply name sanitization if name_map is provided."""
+        if name_map and name in name_map:
+            return name_map[name]
+        return name
 
     # Check if we have dummy_const with exponent 0 (special case for constants)
     has_dummy_const_zero = any(
@@ -4573,6 +4587,9 @@ def product_to_antimony(coeff, exps: dict[sp.Symbol, float]) -> str:
         # Special case: dummy_const with exponent 0 should always be shown
         # This represents constant terms as C * dummy_const^0
         is_dummy_const = s.name == "dummy_const"
+        
+        # Get sanitized name for this symbol
+        s_name = sanitize(s.name) if hasattr(s, "name") else str(s)
 
         # Handle both numeric and symbolic exponents
         if isinstance(e, sp.Expr):
@@ -4583,27 +4600,26 @@ def product_to_antimony(coeff, exps: dict[sp.Symbol, float]) -> str:
             elif e_simplified == 1 or (
                 e_simplified.is_Number and abs(float(e_simplified) - 1.0) < 1e-10
             ):
-                parts.append(s.name)
+                parts.append(s_name)
             else:
                 # Format as integer if it's an integer value
                 if e_simplified.is_Number:
                     e_val = float(e_simplified)
                     if abs(e_val - round(e_val)) < 1e-10:
-                        parts.append(f"{s.name}^{int(round(e_val))}")
+                        parts.append(f"{s_name}^{int(round(e_val))}")
                     else:
-                        parts.append(f"{s.name}^{e_simplified}")
+                        parts.append(f"{s_name}^{e_simplified}")
                 else:
                     # Symbolic exponent - add parentheses if it's a sum/difference
                     if e_simplified.is_Add:
-                        parts.append(f"{s.name}^({e_simplified})")
+                        parts.append(f"{s_name}^({e_simplified})")
                     else:
-                        parts.append(f"{s.name}^{e_simplified}")
+                        parts.append(f"{s_name}^{e_simplified}")
         else:
             # Numeric exponent
             # Always show dummy_const even with exponent 0
             if abs(e) < 1e-14 and not is_dummy_const:
                 continue
-            s_name = s.name if hasattr(s, "name") else str(s)
             if abs(e - 1.0) < 1e-14:
                 parts.append(f"{s_name}")
             else:
@@ -4890,14 +4906,14 @@ def gma_to_antimony(
 
         # Format production terms
         if eq.production:
-            prod_strs = [product_to_antimony(c, e) for c, e in eq.production]
+            prod_strs = [product_to_antimony(c, e, name_map) for c, e in eq.production]
             production = " + ".join(prod_strs)
         else:
             production = "0"
 
         # Format degradation terms
         if eq.degradation:
-            deg_strs = [product_to_antimony(c, e) for c, e in eq.degradation]
+            deg_strs = [product_to_antimony(c, e, name_map) for c, e in eq.degradation]
             degradation = " + ".join(deg_strs)
         else:
             degradation = "0"
@@ -5219,7 +5235,7 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
                     g_str = str(g_coeff_simplified)
             else:
                 g_str = f"{float(g_coeff):g}"
-            h = product_to_antimony(eq.decay[0], h_exps)
+            h = product_to_antimony(eq.decay[0], h_exps, name_map)
             lines.append(f"{eq.var.name}' = {g_str} - {h};")
         elif h_is_const and not g_is_const:
             # Pure constant decay: X' = g(vars) - C
@@ -5234,7 +5250,7 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
                     h_str = str(h_coeff_simplified)
             else:
                 h_str = f"{float(h_coeff):g}"
-            g = product_to_antimony(eq.growth[0], g_exps)
+            g = product_to_antimony(eq.growth[0], g_exps, name_map)
             lines.append(f"{eq.var.name}' = {g} - {h_str};")
         elif g_is_const and h_is_const:
             # Both constants: X' = C1 - C2
@@ -5260,8 +5276,8 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
             lines.append(f"{eq.var.name}' = {g_str} - {h_str};")
         else:
             # Normal monomial form
-            g = product_to_antimony(eq.growth[0], g_exps)
-            h = product_to_antimony(eq.decay[0], h_exps)
+            g = product_to_antimony(eq.growth[0], g_exps, name_map)
+            h = product_to_antimony(eq.decay[0], h_exps, name_map)
             lines.append(f"{eq.var.name}' = {g} - {h};")
 
     lines.append("end")
