@@ -1,87 +1,54 @@
 # BioModels Batch Transformation Results
 
-*Auto-generated on 2025-12-31 17:12*
+*Auto-generated on 2025-12-31 21:13*
 
 ## Pipeline Summary
 
 | Stage | Count | Notes |
 |-------|-------|-------|
-| BioModels ODE models | 1,644 | Matched fetch query |
 | SBML downloads | 1,644 | Successfully downloaded |
 | Filtered out | 666 | No ODEs, events, delays, etc. |
 | **Transformation candidates** | **978** | Passed heuristic filters |
-| Successful transformations | 895 | 91.5% success rate |
-| Failed (timeout) | 0 | >60s processing time |
-| Failed (error) | 105 | Various parsing/transformation errors |
-| Validation reports | 895 | Numerical validation attempted |
-| **Validated models** | **106** | Numerical validation passed |
+| Successful transformations | 896 | 91.6% success rate |
+| Failed (error) | 103 | Various errors |
+| **Validated models** | **204** | Numerical validation passed |
 
 ## Transformation Achievements
-
-The following table shows successful transformations by type.
-**Highlights:** General → S-system/GMA transformations demonstrate ssys lifting
-non-polynomial ODEs to canonical forms.
 
 | Transformation | Count | Significance |
 |----------------|-------|--------------|
 | General → S-system | 1 | Full simplification achieved |
-| General → GMA | 44 | Functional lifting to GMA form |
-| GMA → S-system | 14 | Sum-to-product reduction |
-| GMA → GMA | 39 | Already in GMA form (identity) |
+| General → GMA | 66 | Functional lifting to GMA form |
+| GMA → S-system | 18 | Sum-to-product reduction |
+| GMA → GMA | 74 | Already in GMA form |
+| S-system → S-system | 4 | Already in S-system form |
 | Canonical S-system → S-system | 4 | - |
-| General → General | 4 | - |
-| **Total validated** | **106** | |
+| General → General | 37 | - |
+| **Total validated** | **204** | |
 
 ## Sample Validated Models
-
-Examples of successfully transformed and validated models:
 
 | Model ID | Original Type | Transformed Type | Max Error |
 |----------|---------------|------------------|-----------|
 | BIOMD0000000732 | General | S-system | 0.00e+00 |
-| BIOMD0000000461 | General | GMA | 1.90e-10 |
-| BIOMD0000000298 | General | GMA | 2.21e-07 |
-| BIOMD0000000299 | General | GMA | 1.49e-07 |
-| BIOMD0000000305 | General | GMA | 0.00e+00 |
-| BIOMD0000000325 | General | GMA | 1.37e-07 |
-| BIOMD0000000328 | General | GMA | 5.56e-07 |
-| BIOMD0000000330 | General | GMA | 2.50e-07 |
-| BIOMD0000000331 | General | GMA | 8.93e-07 |
-| BIOMD0000000354 | General | GMA | 4.09e-07 |
+| MODEL8236520494 | General | GMA | 4.71e-16 |
+| BIOMD0000000274 | General | GMA | 3.00e-16 |
+| MODEL1108260015 | General | GMA | 0.00e+00 |
+| BIOMD0000000414 | General | GMA | 0.00e+00 |
+| BIOMD0000000423 | General | GMA | 1.76e-15 |
+| BIOMD0000000424 | General | GMA | 4.49e-16 |
+| BIOMD0000000254 | General | GMA | 2.80e-16 |
+| BIOMD0000000448 | General | GMA | 1.16e-16 |
+| BIOMD0000000245 | General | GMA | 4.65e-16 |
 
-See `results/validated/manifest.csv` for the complete list of 106 validated models.
-
-## Transformation Failures
-
-| Failure Category | Count |
-|------------------|-------|
-| Other errors | 105 |
-| **Total failures** | **105** |
-
-## Files
-
-- `results/batch_recast_results.csv` - Complete results for all candidates
-- `results/recasts/` - Successful transformation .ant files
-- `results/failures/` - Failure log files
-- `results/validation/` - Validation JSON reports
-- `results/validated/` - Validated model pairs (SBML + Antimony)
+See `results/validated/manifest.csv` for complete list (204 models).
 
 ## Reproducing Results
 
 ```bash
-# Activate environment
-source activate_dev_env.sh
-
-# Run full pipeline
 cd biomodels_batch
-./run_benchmark.sh
-
-# Or run individual stages
-./run_benchmark.sh --only fetch
-./run_benchmark.sh --only filter
-./run_benchmark.sh --only recast
-./run_benchmark.sh --from validate
-
-# Regenerate this file
-python 7_generate_results_md.py --write
+./run_benchmark.sh              # Default: numerical validation only
+./run_benchmark.sh --full       # Full validation (+ JAX + symbolic)
+./run_benchmark.sh --from recast  # Re-run from transformation step
+python step6_report.py --figures  # Regenerate this file with figures
 ```

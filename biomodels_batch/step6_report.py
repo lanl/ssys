@@ -71,11 +71,14 @@ def rebuild_results_csv(mode: str = "simplified") -> None:
     failure_ids = {f.stem.replace(f"_{mode}", "") for f in failure_files}
     logger.info(f"Found {len(failure_ids)} failure files")
 
-    # Scan validation files
-    validation_files = list(validation_dir.glob(f"*_{mode}_validation.json"))
+    # Scan validation files (try both patterns for compatibility)
+    validation_files = list(validation_dir.glob(f"*_{mode}_numerical.json"))
+    if not validation_files:
+        # Fallback to old pattern
+        validation_files = list(validation_dir.glob(f"*_{mode}_validation.json"))
     validation_data = {}
     for vf in validation_files:
-        model_id = vf.stem.replace(f"_{mode}_validation", "")
+        model_id = vf.stem.replace(f"_{mode}_numerical", "").replace(f"_{mode}_validation", "")
         try:
             with open(vf) as f:
                 validation_data[model_id] = json.load(f)
