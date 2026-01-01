@@ -41,15 +41,17 @@ def collect_validated_models():
     print("Collecting Validated Models")
     print("=" * 60)
 
-    # Find all passing validation files
+    # Find all passing validation files (Stage 1 numerical results)
+    # New naming: {model_id}_{mode}_numerical.json
     validated = []
-    for vfile in sorted(validation_dir.glob("*_validation.json")):
+    for vfile in sorted(validation_dir.glob("*_numerical.json")):
         with open(vfile) as f:
             data = json.load(f)
 
         if data.get("overall_pass"):
-            model_id = vfile.stem.replace("_simplified_validation", "")
-            model_id = model_id.replace("_canonical_validation", "")
+            # Extract model_id from filename: MODEL_simplified_numerical.json
+            model_id = vfile.stem.replace("_simplified_numerical", "")
+            model_id = model_id.replace("_canonical_numerical", "")
             validated.append((model_id, data))
 
     print(f"Found {len(validated)} validated models")

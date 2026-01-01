@@ -101,13 +101,14 @@ def filter_passed_models(
     pairs: list[tuple[str, Path, Path]], mode: str
 ) -> list[tuple[str, Path, Path]]:
     """
-    Filter to only models that passed numerical validation.
+    Filter to only models that passed numerical validation (Stage 1).
     
-    Checks existing validation reports for numerical test pass.
+    Checks _numerical.json files for pass status.
     """
     filtered = []
     for model_id, sbml_path, recast_path in pairs:
-        val_path = Path(config.VALIDATION_DIR) / f"{model_id}_{mode}_validation.json"
+        # Check Stage 1 numerical validation file
+        val_path = Path(config.VALIDATION_DIR) / f"{model_id}_{mode}_numerical.json"
         if not val_path.exists():
             continue
         
@@ -116,9 +117,7 @@ def filter_passed_models(
                 report = json.load(f)
             
             # Check if numerical test passed
-            tests = report.get("tests", {})
-            num_test = tests.get("numerical", {})
-            if num_test.get("result") == "pass":
+            if report.get("overall_pass", False):
                 filtered.append((model_id, sbml_path, recast_path))
         except Exception:
             continue
@@ -196,9 +195,22 @@ def validate_model(
         }
 
 
-def save_validation_report(model_id: str, mode: str, report: dict):
-    """Save validation report to JSON."""
-    output_path = Path(config.VALIDATION_DIR) / f"{model_id}_{mode}_validation.json"
+def save_validation_report(
+    model_id: str, mode: str, report: dict, test_type: str = "numerical"
+):
+    """
+    Save validation report to JSON with stage-specific filename.
+    
+    Args:
+        model_id: Model identifier
+        mode: Recast mode ('simplified' or 'canonical')
+        report: Validation report dict
+        test_type: One of 'numerical', 'numerical_jax', 'symbolic'
+    """
+    # Use stage-specific filename to avoid overwriting between stages
+    output_path = (
+        Path(config.VALIDATION_DIR) / f"{model_id}_{mode}_{test_type}.json"
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(output_path, "w") as f:
@@ -448,6 +460,16 @@ def main():
     if n_workers == -1:
         n_workers = os.cpu_count() or 1
     
+    # Determine test_type for file naming (avoid overwriting between stages)
+    if args.symbolic_only:
+        test_type = "symbolic"
+    elif args.use_jax:
+        test_type = "numerical_jax"
+    else:
+        test_type = "numerical"
+    
+    logger.info(f"Test type: {test_type}")
+    
     # Validate each model with progress indicators
     pass_count = 0
     fail_count = 0
@@ -475,7 +497,7 @@ def main():
         
         # Process results
         for model_id, report in results:
-            save_validation_report(model_id, args.mode, report)
+            save_validation_report(model_id, args.mode, report, test_type)
             
             if "error" in report:
                 error_count += 1
@@ -513,7 +535,7 @@ def main():
                     }
 
             # Save report
-            save_validation_report(model_id, args.mode, report)
+            save_validation_report(model_id, args.mode, report, test_type)
 
             # Update counts
             if "error" in report:

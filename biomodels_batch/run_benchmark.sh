@@ -125,7 +125,7 @@ is_recast_complete() {
 
 is_validate_numerical_complete() {
     local count
-    count=$(count_files "$VALIDATION_DIR" "*_validation.json")
+    count=$(count_files "$VALIDATION_DIR" "*_numerical.json")
     [[ $count -ge $MIN_VALIDATION_FILES ]]
 }
 
