@@ -24,7 +24,7 @@ header-includes:
 
 # Summary
 
-`ssys` is a Python toolkit for exact algebraic transformation of ordinary differential equation (ODE) models into canonical S-system or Generalized Mass Action (GMA) form. Given a model in Antimony or SBML format, `ssys` produces a mathematically equivalent representation where each equation has one of the following forms:
+`ssys` is a Python toolkit for exact algebraic transformation of ordinary differential equation (ODE) models into canonical S-system or Generalized Mass Action (GMA) form. Given a model in Antimony format (or SBML through the Python API), `ssys` produces a mathematically equivalent representation where each equation has one of the following forms:
 
 **S-system form** (difference of two monomials):
 $$\frac{dX_i}{dt} = \alpha_i \prod_j X_j^{g_{ij}} - \beta_i \prod_j X_j^{h_{ij}}$$
@@ -34,7 +34,7 @@ $$\frac{dX_i}{dt} = \sum_k \gamma_{ik} \prod_j X_j^{f_{ijk}}$$
 
 The transformation introduces auxiliary variables as needed to decompose a broad class of nonlinearities---including rational functions, exponentials, logarithms, and trigonometric functions (excluding events and delays)---into products of power-law terms. The recast is exact: the original and transformed systems have identical dynamics on the invariant constraint manifold defined by auxiliary variable definitions, given consistent initial conditions.
 
-The software provides a command-line interface for batch processing, a three-test validation suite (symbolic, numerical, trajectory), and generates Jupyter notebooks with LaTeX renderings and trajectory comparisons. It parses models via the reference Antimony library and libRoadRunner, ensuring compatibility with standard SBML semantics.
+The software provides a command-line interface for batch processing Antimony models, a three-test validation suite (symbolic, numerical, trajectory), and generates Jupyter notebooks with LaTeX renderings and trajectory comparisons. It parses Antimony models through the reference Antimony-to-SBML conversion path and can parse SBML directly through libSBML in the Python API.
 
 # Statement of need
 
@@ -51,11 +51,11 @@ The package enables researchers to convert published models into canonical form 
 
 # State of the field
 
-Antimony is a human-readable modeling language for systems biology [@Smith2009Antimony; @Smith2024Antimony], with transparent interoperability with SBML [@Keating2020SBML]. The S-system and GMA formalisms are classical [@Savageau1976; @Voit2013], but general-purpose recasting tools are scarce. Classical BST tools such as PLAS [@Voit1991PLAS] focus on analyzing systems already expressed in S-system or GMA form. PLMaddon [@Villaverde2007] can generate power-law approximations via Taylor expansion, but such local approximations differ fundamentally from exact recasting with auxiliary variables. More recently, BSTModelKit.jl [@Sund2025BSTModelKit] provides Julia tools for constructing and analyzing BST models, though it emphasizes model construction from network descriptions rather than recasting arbitrary ODEs. To the best of our knowledge, no existing open-source tool performs exact algebraic recasting from arbitrary SBML/Antimony ODEs to S-system or GMA form with explicit constraint-manifold handling and validation certificates.
+Antimony is a human-readable modeling language for systems biology [@Smith2009Antimony; @Smith2024Antimony], with transparent interoperability with SBML [@Keating2020SBML]. The S-system and GMA formalisms are classical [@Savageau1976; @Voit2017], but general-purpose recasting tools are scarce. Classical BST workflows described by Voit [@Voit2000ComputationalAnalysis] focus on analyzing systems already expressed in S-system or GMA form. PLMaddon [@Villaverde2007] can generate power-law approximations via Taylor expansion, but such local approximations differ fundamentally from exact recasting with auxiliary variables. More recently, BSTModelKit.jl [@Varner2026BSTModelKit] provides Julia tools for constructing and analyzing BST models, though it emphasizes model construction from network descriptions rather than recasting arbitrary ODEs. To the best of our knowledge, no existing open-source tool performs exact algebraic recasting from arbitrary SBML/Antimony ODEs to S-system or GMA form with explicit constraint-manifold handling and validation certificates.
 
 # Functionality
 
-- **SBML-first parsing.** Models are parsed via the Antimony library and libRoadRunner, then converted to SymPy [@Meurer2017SymPy] symbolic expressions for manipulation.
+- **SBML-first parsing.** Antimony models are parsed through the reference Antimony-to-SBML conversion path, and SBML files can be parsed directly through the Python API; both paths produce SymPy [@Meurer2017SymPy] symbolic expressions for manipulation.
 - **Function lifting.** Composite functions (exp, log, sin, cos, etc.) and rational denominators are lifted to auxiliary variables with chain-rule-derived ODEs, preserving exactness.
 - **Sum splitting.** Sums of monomials are factored into products via pool-auxiliary construction, yielding the canonical two-term S-system form when feasible without excessive auxiliary-variable expansion.
 - **Validation.** Three independent tests verify correctness: symbolic Jacobian chain-rule verification, numerical sampling at random positive points, and trajectory comparison via libRoadRunner simulation.
@@ -63,7 +63,7 @@ Antimony is a human-readable modeling language for systems biology [@Smith2009An
 
 # Quality control
 
-The package includes 288 unit tests covering parsing, recasting, validation, and CLI functionality. Integration tests entail transformation and validation of 117 models.
+The package includes 288 pytest tests covering parsing, recasting, validation, and CLI functionality. Of these, 8 integration tests entail transformation and validation of 117 models across two output modes.
 
 # BioModels database benchmark
 
@@ -73,7 +73,7 @@ To assess applicability to real-world models, we applied `ssys` to ODE models fr
 
 `ssys` is available on GitHub at https://github.com/lanl/ssys. Installation requires Python >= 3.10, SymPy, NumPy, libRoadRunner, and the Antimony library. The repository includes comprehensive documentation: theoretical background and recasting rules (`RECASTING.md`), test model descriptions (`TEST_MODELS.md`), and usage instructions (`README.md`).
 
-Installation: `uv pip install -e ".[dev]"`. A working example that recasts 29 models from the test suite with validation: `python recast_models.py test_models1 --validate`.
+Installation: `uv pip install -e ".[dev]"`. A working example that recasts 29 models from the test suite with validation: `python recast_models.py test_models1`.
 
 # Acknowledgments
 
