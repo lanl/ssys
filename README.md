@@ -1,7 +1,7 @@
-# ODE → S‑System Recast (Antimony → Antimony)
-*Source: README.md | v0.5.3 | 2025-12-30*
+# ODE → GMA or S‑System Recast (Antimony → Antimony, with SBML library support)
+*Source: README.md | v0.5.5 | 2025-12-31*
 
-This toolkit converts ordinary differential equation (ODE) models written in **Antimony** into **S‑System** or **GMA** form and writes the result back to Antimony. It provides both a **Python library** and a **command-line interface** for batch processing models and generating **Jupyter notebook** verification reports.
+This toolkit converts ordinary differential equation (ODE) models into **S‑System** or **GMA** form and writes the result back to Antimony. The command-line interface batch-processes **Antimony** models and generates **Jupyter notebook** verification reports; the Python library can also parse SBML files directly.
 
 ---
 
@@ -88,13 +88,13 @@ ssys-recast --manifest test_models1/models.manifest \
 
 ### Arguments
 
-- `--manifest`: Path to manifest file (one `.ant` file path per line)
+- `--manifest`: Path to manifest file (one Antimony `.ant` file path per line)
 - `--outdir`: Output directory for recast models and notebook
 - `--mode`: Output mode (default: `simplified`)
   - `simplified`: Flexible S-system form, preserves zeros
   - `canonical`: Strict 2-term form with epsilon slack variables
 - `--parser`: Antimony parser to use (default: `sbml`)
-  - `sbml`: SBML-based parser (recommended, uses reference Antimony implementation)
+  - `sbml`: Parses Antimony by converting through SBML with the reference Antimony implementation
   - `legacy`: Hand-rolled parser (deprecated)
 - `--validate`: Run mathematical correctness validation on each recast
 
@@ -106,6 +106,8 @@ m01_exp_decay.ant
 m02_logistic.ant
 # Lines starting with # are ignored
 ```
+
+Raw SBML files are supported through the Python API (`ssys.parse_sbml(...)`) and the BioModels batch workflow, not through `ssys-recast --manifest`.
 
 ### Output
 
@@ -130,7 +132,7 @@ The validator performs three independent tests to verify mathematical correctnes
 
 ### Validation Logic
 
-**Overall verdict uses AND logic**: A recast is considered **valid only if ALL THREE tests pass**. This strict criterion ensures high confidence in recasting correctness.
+**Default verdict uses AND logic**: A recast is considered **valid only if all requested tests pass**. The CLI and default API call request all three tests, so symbolic, numerical, and trajectory checks must all pass.
 
 **Example output**:
 ```
@@ -151,8 +153,8 @@ Overall: ✓ PASS
 # Run test_models1 (29 core models)
 python recast_models.py test_models1
 
-# Run with validation
-python recast_models.py test_models1 --validate
+# Run a specific mode; this helper always runs validation
+python recast_models.py test_models1 --mode canonical
 ```
 
 ### Helper Script Usage
@@ -165,6 +167,9 @@ python recast_models.py <directory> [options]
 
 Options:
 - `--mode {simplified,canonical}`: Output mode (default: simplified)
+- `--both`: Run both simplified and canonical modes
+- `--outdir DIR`: Output directory (default: `out_<input_dir>`)
+- `--parser {sbml,legacy}`: Antimony parser (default: `sbml`)
 
 ### Test Model Sets
 
@@ -242,10 +247,11 @@ Each model entry shows:
 
 ```python
 import ssys
+from ssys.recaster import parse_antimony_via_sbml
 
 # Load and parse model (SBML-based parser)
 text = open("test_models1/m01_exp_decay.ant").read()
-sym = ssys.parse_antimony_via_sbml(text)
+sym = parse_antimony_via_sbml(text)
 
 # Recast to S-system (simplified mode)
 result = ssys.recast_to_ssystem(sym, mode="simplified")
@@ -259,6 +265,17 @@ out = ssys.ssystem_to_antimony(result,
 open("m01_exp_decay_recast.ant", "w").write(out)
 ```
 
+### SBML Input
+
+```python
+import ssys
+
+# Parse an SBML file directly through libSBML
+sym = ssys.parse_sbml("model.xml")
+result = ssys.recast_to_ssystem(sym, mode="simplified")
+out = ssys.ssystem_to_antimony(result, model_name="model_recast", mode="simplified")
+```
+
 ### Classification
 
 ```python
@@ -267,7 +284,8 @@ from ssys.recaster import classify_system, classify_result
 # Classify input system
 input_class = classify_system(sym)
 print(f"Input: {input_class.value}")
-# Output: "General", "S-system", "Canonical S-system", or "GMA"
+# Output: "General", "S-system", "Canonical S-system", "GMA",
+# or "GMA with time-varying coefficients"
 
 # Classify output (mode-aware)
 output_class = classify_result(result, mode="simplified")
@@ -304,19 +322,19 @@ A **GMA system** has equations where each right-hand side is a sum of power-law 
 
 ### S-system Form
 
-An **S-system** has exactly two terms per equation—one for production, one for degradation:
+An **S-system** has at most two terms per equation—one production term and one degradation term:
 
 ```
 Ẋᵢ = αᵢ ∏ⱼ Xⱼ^(gᵢⱼ) - βᵢ ∏ⱼ Xⱼ^(hᵢⱼ)
 ```
 
-*Note:* The form is **S-system** if αᵢ, βᵢ ≥ 0. The form is **Strict canonical S-system** if αᵢ, βᵢ > 0 (achieved via ε-splitting).
+*Note:* The form is **S-system** if αᵢ, βᵢ ≥ 0. The form is **Strict canonical S-system** if both terms are present with αᵢ, βᵢ > 0 (achieved via ε-splitting).
 
 See [RECASTING.md](RECASTING.md) for detailed recasting theory, rules, and worked examples.
 
 ---
 
-## Antimony Subset Supported
+## Antimony Input Subset Supported
 
 **Supported:**
 - Reactions: `A + B -> C; k*A*B`
@@ -349,7 +367,7 @@ See [RECASTING.md](RECASTING.md) for detailed recasting theory, rules, and worke
 
 ## Algorithm Overview
 
-1. **Parse** Antimony via SBML (reference implementation)
+1. **Parse** Antimony via SBML (reference implementation), or parse SBML directly through the Python API
 2. **Build** SymPy ODEs from reactions and rate rules
 3. **Lift composite functions**: exp, sin, log, etc. → auxiliary variables (chain rule)
 4. **Lift rational functions**: denominators → auxiliary variables (exact S-system form)
