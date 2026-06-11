@@ -437,6 +437,30 @@ class TestAntimonyExport:
         # Numeric prefix should become m_123model
         assert "model m_123model" in output
 
+    def test_ssystem_to_antimony_preserves_float_precision_for_initials(self):
+        """Test that sensitive ICs are emitted without shortening significant digits."""
+        Z4 = sp.Symbol("Z4", positive=True)
+        initial = 4.358898943540674
+
+        result = RecastResult(
+            status=RecastStatus.CANONICAL_SSYSTEM,
+            equations=[SSysEquation(Z4, (sp.Float(1), {Z4: 1.0}), (sp.Float(0.5), {Z4: 1.0}))],
+            initials={Z4: initial},
+            variables=[Z4],
+            factor_map={Z4: [Z4]},
+            params={},
+        )
+
+        simplified = ssystem_to_antimony(result, model_name="precision_test", mode="simplified")
+        canonical = ssystem_to_antimony(result, model_name="precision_test", mode="canonical")
+        _assert_antimony_roundtrips(simplified)
+        _assert_antimony_roundtrips(canonical)
+
+        assert "Z4 = 4.358898943540674;" in simplified
+        assert "Z4 = 4.358898943540674;" in canonical
+        assert "Z4 = 4.3589;" not in simplified
+        assert "Z4 = 4.3589;" not in canonical
+
     def test_gma_to_antimony_basic(self):
         """Test GMA to Antimony export."""
         Z = sp.Symbol("Z_1", positive=True)

@@ -316,10 +316,10 @@ def _context_from_state(
     t: float,
     y: np.ndarray,
 ) -> dict[str, float]:
-    values = {name: float(y[idx]) for idx, name in enumerate(variable_names)}
-    values.update(params)
-    values["time"] = float(t)
-    values["t"] = float(t)
+    values = dict(params)
+    values.update({name: float(y[idx]) for idx, name in enumerate(variable_names)})
+    values.setdefault("time", float(t))
+    values.setdefault("t", float(t))
     return values
 
 
@@ -694,6 +694,20 @@ def simulate_with_ida_sundials(
         "rtol": rtol,
         "atol": atol,
     }
+    for option_name in (
+        "calc_initcond",
+        "calc_init_dt",
+        "first_step",
+        "min_step",
+        "max_step",
+        "max_num_steps",
+        "max_order",
+        "max_nonlin_iters",
+        "max_conv_fails",
+        "linsolver",
+    ):
+        if option_name in options:
+            solver_options[option_name] = options[option_name]
     if system.algebraic_indices:
         solver_options["algebraic_idx"] = np.asarray(system.algebraic_indices, dtype=int)
 

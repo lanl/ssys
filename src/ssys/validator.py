@@ -2403,9 +2403,16 @@ class RecastValidator:
             if model_name == "original"
             else self.recast_solver_requirement
         )
-        options: dict[str, Any] = {}
+        options: dict[str, Any] = {
+            "relative_tolerance": 1e-10,
+            "absolute_tolerance": 1e-12,
+            "maximum_num_steps": 200000,
+            "max_num_steps": 200000,
+        }
         if model_name == "recast":
             options["auxiliary_defs"] = dict(self.auxiliary_defs)
+            if requirement == SolverRequirement.DAE_REQUIRED:
+                options["repair_consistent_initial_conditions"] = True
 
         result = simulate_model(
             model_ir,
@@ -2742,6 +2749,8 @@ class RecastValidator:
                 residuals[name] = {
                     "max_abs": 0.0,
                     "mean_abs": 0.0,
+                    "max_scaled": 0.0,
+                    "mean_scaled": 0.0,
                     "enforced_by_assignment_rule": name in assignment_rule_names,
                 }
                 continue
@@ -2752,9 +2761,23 @@ class RecastValidator:
                 )
                 actual = Z_recast[:, name_to_idx[name]]
                 residual = np.asarray(actual - expected, dtype=float)
+                scale = np.maximum.reduce(
+                    [
+                        np.ones_like(residual, dtype=float),
+                        np.abs(actual),
+                        np.abs(expected),
+                    ]
+                )
+                scaled_residual = np.abs(residual) / scale
                 residuals[name] = {
                     "max_abs": float(np.max(np.abs(residual))) if residual.size else 0.0,
                     "mean_abs": float(np.mean(np.abs(residual))) if residual.size else 0.0,
+                    "max_scaled": (
+                        float(np.max(scaled_residual)) if scaled_residual.size else 0.0
+                    ),
+                    "mean_scaled": (
+                        float(np.mean(scaled_residual)) if scaled_residual.size else 0.0
+                    ),
                     "enforced_by_assignment_rule": False,
                 }
             except Exception as exc:
@@ -2770,6 +2793,8 @@ class RecastValidator:
                 residuals[name] = {
                     "max_abs": float(np.max(np.abs(residual))) if residual.size else 0.0,
                     "mean_abs": float(np.mean(np.abs(residual))) if residual.size else 0.0,
+                    "max_scaled": float(np.max(np.abs(residual))) if residual.size else 0.0,
+                    "mean_scaled": float(np.mean(np.abs(residual))) if residual.size else 0.0,
                     "enforced_by_assignment_rule": False,
                 }
             except Exception as exc:
@@ -2855,41 +2880,65 @@ class RecastValidator:
             )
 
         max_residual = max((float(item["max_abs"]) for item in residuals.values()), default=0.0)
+        max_scaled_residual = max(
+            (
+                float(item.get("max_scaled", item["max_abs"]))
+                for item in residuals.values()
+            ),
+            default=0.0,
+        )
+        max_effective_residual = max(
+            (
+                min(float(item["max_abs"]), float(item.get("max_scaled", item["max_abs"])))
+                for item in residuals.values()
+            ),
+            default=0.0,
+        )
         mean_residual = (
             float(np.mean([float(item["mean_abs"]) for item in residuals.values()]))
             if residuals
             else 0.0
         )
 
-        if max_residual <= threshold:
+        if max_effective_residual <= threshold:
             return EquivalenceTest(
                 name="algebraic_manifold_residuals",
                 result=ValidationResult.PASS,
-                max_error=max_residual,
+                max_error=max_effective_residual,
                 mean_error=mean_residual,
                 details=(
                     f"Algebraic manifold residuals within threshold {threshold:.1e}; "
-                    f"max residual {max_residual:.2e}"
+                    f"max absolute residual {max_residual:.2e}, "
+                    f"max scaled residual {max_scaled_residual:.2e}"
                 ),
                 metadata=metadata,
             )
 
         worst_name, worst = max(
-            residuals.items(), key=lambda item: float(item[1]["max_abs"])
+            residuals.items(),
+            key=lambda item: min(
+                float(item[1]["max_abs"]),
+                float(item[1].get("max_scaled", item[1]["max_abs"])),
+            ),
+        )
+        worst_effective = min(
+            float(worst["max_abs"]),
+            float(worst.get("max_scaled", worst["max_abs"])),
         )
         return EquivalenceTest(
             name="algebraic_manifold_residuals",
             result=ValidationResult.FAIL,
-            max_error=max_residual,
+            max_error=max_effective_residual,
             mean_error=mean_residual,
             details=(
-                f"Algebraic manifold residual {max_residual:.2e} exceeds "
+                f"Algebraic manifold residual {worst_effective:.2e} exceeds "
                 f"threshold {threshold:.1e} for {worst_name}"
             ),
             counterexamples=[
                 {
                     "constraint": worst_name,
                     "max_abs": float(worst["max_abs"]),
+                    "max_scaled": float(worst.get("max_scaled", worst["max_abs"])),
                     "threshold": threshold,
                 }
             ],

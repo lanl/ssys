@@ -61,4 +61,7 @@ All backend results include:
 
 IDA results also record the selected package/version, tolerances, algebraic
 indices, return status, solver message, initial residual norms, and algebraic
-residual norms over the trajectory.
+residual norms over the trajectory. Validator residual reports include absolute
+and scaled norms for explicit algebraic definitions so large-magnitude
+manifolds are checked against solver-relative accuracy instead of raw absolute
+roundoff alone.
