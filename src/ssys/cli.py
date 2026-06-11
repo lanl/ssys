@@ -2,6 +2,7 @@
 """Command-line interface for ssys recasting tool."""
 
 import argparse
+import json
 import os
 import sys
 
@@ -98,16 +99,46 @@ def recast_file(
 
         validation_json_path = os.path.join(out_dir, f"{name}_validation.json")
         try:
-            validate_recast_pair(
+            report = validate_recast_pair(
                 ant_path,
                 out_path,
                 mode=mode,
                 output_json=validation_json_path,
                 parser=parser,
             )
+            if not report.overall_pass:
+                print(f"Validation failed for {name}: {report.summary}", file=sys.stderr)
         except Exception as e:
-            print(f"Warning: Validation failed for {name}: {e}", file=sys.stderr)
-            validation_json_path = None
+            failure_report = {
+                "original_file": ant_path,
+                "recast_file": out_path,
+                "classification": {
+                    "original": None,
+                    "recast": None,
+                    "expected": None,
+                    "canonical_refusal_reason": None,
+                },
+                "tests": {
+                    "validation": {
+                        "name": "validation",
+                        "result": "fail",
+                        "details": str(e),
+                    }
+                },
+                "overall_pass": False,
+                "summary": f"Validation crashed: {e}",
+            }
+            try:
+                with open(validation_json_path, "w") as f:
+                    json.dump(failure_report, f, indent=2)
+            except OSError as write_error:
+                print(
+                    f"Validation crashed for {name}, and writing the failure report failed: "
+                    f"{write_error}",
+                    file=sys.stderr,
+                )
+                validation_json_path = None
+            print(f"Validation crashed for {name}: {e}", file=sys.stderr)
 
     return name, ant_path, out_path, validation_json_path
 
@@ -202,6 +233,14 @@ def main():
         help="Run validation on each recast (symbolic and numerical tests)",
     )
     parser.add_argument(
+        "--allow-validation-failures",
+        action="store_true",
+        help=(
+            "Keep best-effort batch behavior when --validate reports failures. "
+            "By default validation failures make the CLI exit nonzero."
+        ),
+    )
+    parser.add_argument(
         "--parser",
         choices=["legacy", "sbml"],
         default="sbml",
@@ -233,24 +272,35 @@ def main():
         for ant in ant_files
     ]
 
+    validation_failures = []
     if args.validate:
         # Count validation results - check if validation PASSED, not just file exists
-        import json
-
         validated = 0
-        for _, _, _, vpath in cases:
+        for name, _, _, vpath in cases:
             if vpath and os.path.exists(vpath):
                 try:
                     with open(vpath) as f:
                         report = json.load(f)
                         if report.get("overall_pass"):
                             validated += 1
-                except (OSError, json.JSONDecodeError):
-                    pass  # Skip malformed/unreadable files
+                        else:
+                            summary = report.get("summary", "validation did not pass")
+                            validation_failures.append((name, summary))
+                except (OSError, json.JSONDecodeError) as e:
+                    validation_failures.append((name, f"validation report unreadable: {e}"))
+            else:
+                validation_failures.append((name, "validation report missing"))
         print(f"✓ Validated {validated}/{len(cases)} models")
 
     nb_path = build_notebook(cases, args.outdir, mode=args.mode)
     print(f"✓ Recast complete. Notebook written: {nb_path}")
+
+    if args.validate and validation_failures:
+        print("Validation failures:", file=sys.stderr)
+        for name, summary in validation_failures:
+            print(f"  {name}: {summary}", file=sys.stderr)
+        if not args.allow_validation_failures:
+            sys.exit(1)
 
 
 if __name__ == "__main__":

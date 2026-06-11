@@ -1,11 +1,14 @@
 """Tests for CLI module."""
 
+import json
 import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
-from ssys.cli import build_notebook, read_manifest, recast_file
+from ssys.cli import build_notebook, main, read_manifest, recast_file
 
 
 class TestReadManifest:
@@ -145,6 +148,129 @@ class TestRecastFile:
         assert os.path.exists(out)
         output_content = Path(out).read_text()
         assert "model canonical_recast" in output_content
+
+
+class TestValidationCliExit:
+    """Tests for hard-fail CLI validation semantics."""
+
+    def _write_manifested_model(self, tmp_path: Path, name: str = "model") -> tuple[Path, Path]:
+        input_ant = tmp_path / f"{name}.ant"
+        input_ant.write_text("""
+            X' = -k*X
+            k = 0.5
+            X = 1.0
+        """)
+        manifest = tmp_path / "models.manifest"
+        manifest.write_text(f"{input_ant}\n")
+        return input_ant, manifest
+
+    def test_validate_exits_nonzero_when_report_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _, manifest = self._write_manifested_model(tmp_path, "failed")
+        outdir = tmp_path / "out"
+
+        def fake_validate_recast_pair(*args, output_json=None, **kwargs):
+            assert output_json is not None
+            report = {
+                "overall_pass": False,
+                "summary": "forced validation failure",
+            }
+            Path(output_json).write_text(json.dumps(report))
+            return SimpleNamespace(overall_pass=False, summary="forced validation failure")
+
+        monkeypatch.setattr("ssys.validator.validate_recast_pair", fake_validate_recast_pair)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ssys-recast",
+                "--manifest",
+                str(manifest),
+                "--outdir",
+                str(outdir),
+                "--parser",
+                "legacy",
+                "--validate",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+
+        assert exc.value.code == 1
+        report = json.loads((outdir / "failed_validation.json").read_text())
+        assert report["overall_pass"] is False
+
+    def test_validate_best_effort_flag_allows_failed_reports(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _, manifest = self._write_manifested_model(tmp_path, "best_effort")
+        outdir = tmp_path / "out"
+
+        def fake_validate_recast_pair(*args, output_json=None, **kwargs):
+            assert output_json is not None
+            Path(output_json).write_text(json.dumps({
+                "overall_pass": False,
+                "summary": "forced validation failure",
+            }))
+            return SimpleNamespace(overall_pass=False, summary="forced validation failure")
+
+        monkeypatch.setattr("ssys.validator.validate_recast_pair", fake_validate_recast_pair)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ssys-recast",
+                "--manifest",
+                str(manifest),
+                "--outdir",
+                str(outdir),
+                "--parser",
+                "legacy",
+                "--validate",
+                "--allow-validation-failures",
+            ],
+        )
+
+        main()
+
+        report = json.loads((outdir / "best_effort_validation.json").read_text())
+        assert report["overall_pass"] is False
+        assert (outdir / "recast_report.ipynb").exists()
+
+    def test_validate_exits_nonzero_and_writes_report_for_invalid_recast(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        _, manifest = self._write_manifested_model(tmp_path, "invalid")
+        outdir = tmp_path / "out"
+
+        def invalid_antimony(*args, **kwargs):
+            return "model invalid_recast()\nDNA := Z_1;\nend\n"
+
+        monkeypatch.setattr("ssys.cli.ssystem_to_antimony", invalid_antimony)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ssys-recast",
+                "--manifest",
+                str(manifest),
+                "--outdir",
+                str(outdir),
+                "--parser",
+                "sbml",
+                "--validate",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+
+        assert exc.value.code == 1
+        report = json.loads((outdir / "invalid_validation.json").read_text())
+        assert report["overall_pass"] is False
+        assert "Validation crashed" in report["summary"]
 
 
 class TestBuildNotebook:

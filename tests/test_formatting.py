@@ -1,5 +1,8 @@
 """Tests for output formatting and classification functions."""
 
+import re
+
+import antimony
 import pytest
 import sympy as sp
 
@@ -23,6 +26,21 @@ from ssys.recaster import (
     recast_to_ssystem,
     ssystem_to_antimony,
 )
+
+
+def _assert_antimony_roundtrips(output: str) -> None:
+    antimony.clearPreviousLoads()
+    result = antimony.loadAntimonyString(output)
+    assert result >= 0, f"Antimony parse failed:\n{antimony.getLastError()}\n\n{output}"
+
+
+def _executable_lines(output: str) -> list[str]:
+    lines = []
+    for line in output.splitlines():
+        stripped = line.split("//", 1)[0].strip()
+        if stripped:
+            lines.append(stripped)
+    return lines
 
 
 class TestSyntaxConversion:
@@ -315,6 +333,7 @@ class TestAntimonyExport:
         sym = build_sym_system(ir)
         rec = recast_to_ssystem(sym)
         output = ssystem_to_antimony(rec, model_name="test")
+        _assert_antimony_roundtrips(output)
 
         # Check structure
         assert "model test" in output
@@ -335,6 +354,7 @@ class TestAntimonyExport:
         sym = build_sym_system(ir)
         rec = recast_to_ssystem(sym)
         output = ssystem_to_antimony(rec, model_name="123model")
+        _assert_antimony_roundtrips(output)
 
         # Numeric prefix should become m_123model
         assert "model m_123model" in output
@@ -359,10 +379,94 @@ class TestAntimonyExport:
         )
 
         output = gma_to_antimony(result, model_name="gma_test")
+        _assert_antimony_roundtrips(output)
 
         assert "model gma_test" in output
         assert "end" in output
         assert "GMA" in output  # Should have GMA comment
+
+
+class TestAntimonyReservedNameRoundTrip:
+    """Round-trip tests for generated Antimony with reserved identifiers."""
+
+    def test_simplified_roundtrip_sanitizes_reserved_names_everywhere(self):
+        """Reserved parameter, state, compartment, and observable names parse."""
+        dna = sp.Symbol("DNA", positive=True)
+        rna = sp.Symbol("RNA", positive=True)
+
+        sym = SymSystem(
+            vars=[dna],
+            params={"RNA": 0.5},
+            odes={dna: -rna * dna},
+            initials={dna: 1.0},
+            compartments={"compartment": 1.0},
+        )
+
+        result = recast_to_ssystem(sym, mode="simplified")
+        output = ssystem_to_antimony(result, model_name="reserved_simple", mode="simplified")
+        _assert_antimony_roundtrips(output)
+
+        executable = "\n".join(_executable_lines(output))
+        ode_text = "\n".join(line for line in _executable_lines(output) if "'" in line)
+
+        assert "compartment compartment_var = 1" in executable
+        assert "RNA_var = 0.5" in executable
+        assert "DNA_var :=" in executable
+        assert "DNA :=" not in executable
+        assert "RNA_var" in ode_text
+        assert not re.search(r"\bRNA\b", ode_text)
+
+    def test_canonical_roundtrip_sanitizes_reserved_observable_and_assignment_rule(self):
+        dna = sp.Symbol("DNA", positive=True)
+        k = sp.Symbol("k", positive=True)
+
+        sym = SymSystem(
+            vars=[dna],
+            params={"k": 0.5, "RNA": 0.0},
+            odes={dna: -k * dna},
+            initials={dna: 1.0},
+            assignment_rules={"RNA": "DNA + k"},
+        )
+
+        result = recast_to_ssystem(sym, mode="canonical")
+        output = ssystem_to_antimony(result, model_name="reserved_canonical", mode="canonical")
+        _assert_antimony_roundtrips(output)
+
+        executable = "\n".join(_executable_lines(output))
+        assert "DNA_var := Z_1" in executable
+        assert "RNA_var := DNA_var + k" in executable
+        assert "DNA :=" not in executable
+        assert "RNA :=" not in executable
+
+    def test_gma_roundtrip_sanitizes_reserved_names(self):
+        dna = sp.Symbol("DNA", positive=True)
+        rna = sp.Symbol("RNA", positive=True)
+
+        gma_eq = GMAEquation(
+            var=dna,
+            production=[(rna, {dna: 1.0})],
+            degradation=[(sp.Float(0.5), {dna: 2.0})],
+        )
+        result = RecastResult(
+            status=RecastStatus.GMA,
+            equations=[],
+            initials={dna: 1.0},
+            variables=[dna],
+            gma_equations=[gma_eq],
+            params={"RNA": 2.0},
+            compartments={"compartment": 1.0},
+        )
+
+        output = gma_to_antimony(result, model_name="reserved_gma")
+        _assert_antimony_roundtrips(output)
+
+        executable = "\n".join(_executable_lines(output))
+        ode_text = "\n".join(line for line in _executable_lines(output) if "'" in line)
+        assert "species DNA_var in compartment_var" in executable
+        assert "RNA_var = 2" in executable
+        assert "DNA_var' = RNA_var*DNA_var" in ode_text
+        assert not re.search(r"\bDNA\b", ode_text)
+        assert not re.search(r"\bRNA\b", ode_text)
 
 
 class TestLatexExport:
@@ -593,6 +697,7 @@ class TestAssignmentRuleNoIC:
         )
 
         output = ssystem_to_antimony(result, model_name="test", mode="simplified")
+        _assert_antimony_roundtrips(output)
 
         # Z_1 should NOT have an IC line because it has an assignment rule
         assert "Z_1 = 1" not in output
@@ -619,6 +724,7 @@ class TestModelNameSanitization:
         )
 
         output = ssystem_to_antimony(result, model_name="orbit_e0.1", mode="simplified")
+        _assert_antimony_roundtrips(output)
 
         # Period should be replaced with underscore
         assert "model orbit_e0_1()" in output
@@ -639,6 +745,7 @@ class TestModelNameSanitization:
         )
 
         output = ssystem_to_antimony(result, model_name="my-model", mode="simplified")
+        _assert_antimony_roundtrips(output)
 
         # Hyphen should be replaced with underscore
         assert "model my_model()" in output
@@ -659,6 +766,7 @@ class TestModelNameSanitization:
         )
 
         output = ssystem_to_antimony(result, model_name="123model", mode="simplified")
+        _assert_antimony_roundtrips(output)
 
         # Should have m_ prefix
         assert "model m_123model()" in output
@@ -677,6 +785,7 @@ class TestModelNameSanitization:
         )
 
         output = ssystem_to_antimony(result, model_name="1987_D1.orbit-test", mode="simplified")
+        _assert_antimony_roundtrips(output)
 
         # All sanitizations applied: 1987_D1_orbit_test with m_ prefix
         assert "model m_1987_D1_orbit_test()" in output
@@ -775,6 +884,7 @@ class TestSIMMetadataEmission:
         )
 
         output = gma_to_antimony(result, model_name="gma_sim_test")
+        _assert_antimony_roundtrips(output)
 
         assert "@SIM" in output
         assert "T_START=0" in output
@@ -801,6 +911,7 @@ class TestSIMMetadataEmission:
         )
 
         output = gma_to_antimony(result, model_name="gma_no_sim")
+        _assert_antimony_roundtrips(output)
 
         assert "@SIM" not in output
 
@@ -827,6 +938,7 @@ class TestSIMMetadataEmission:
         )
 
         output = ssystem_to_antimony(result, model_name="simplified_test", mode="simplified")
+        _assert_antimony_roundtrips(output)
 
         assert "@SIM" in output
         assert "T_START=0" in output
@@ -853,6 +965,7 @@ class TestSIMMetadataEmission:
         )
 
         output = ssystem_to_antimony(result, model_name="simplified_no_sim", mode="simplified")
+        _assert_antimony_roundtrips(output)
 
         assert "@SIM" not in output
 
@@ -879,6 +992,7 @@ class TestSIMMetadataEmission:
         )
 
         output = ssystem_to_antimony(result, model_name="canonical_test", mode="canonical")
+        _assert_antimony_roundtrips(output)
 
         assert "@SIM" in output
         assert "T_START=5" in output
@@ -905,6 +1019,7 @@ class TestSIMMetadataEmission:
         )
 
         output = ssystem_to_antimony(result, model_name="canonical_no_sim", mode="canonical")
+        _assert_antimony_roundtrips(output)
 
         assert "@SIM" not in output
 
@@ -929,6 +1044,7 @@ class TestSIMMetadataEmission:
         )
 
         output = ssystem_to_antimony(result, model_name="position_test", mode="simplified")
+        _assert_antimony_roundtrips(output)
 
         # Find positions
         sim_pos = output.find("@SIM")

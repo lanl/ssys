@@ -118,6 +118,86 @@ def _apply_name_sanitization(text: str, name_map: dict[str, str]) -> str:
     return result
 
 
+def _format_antimony_token(
+    value: object, name_map: dict[str, str] | None, *, expression: bool = False
+) -> str:
+    """
+    Format an Antimony identifier or expression with the shared sanitizer.
+
+    Comments may intentionally keep original model names for validator/notebook
+    readability, but executable Antimony identifiers must pass through this
+    helper so reserved names are rewritten consistently.
+    """
+    if expression:
+        return _apply_name_sanitization(str(value), name_map or {})
+
+    name = value.name if isinstance(value, sp.Symbol) else str(value)
+    if name_map and name in name_map:
+        return name_map[name]
+    return name
+
+
+def _collect_antimony_names(result: "RecastResult") -> set[str]:
+    """Collect model identifiers that may need Antimony reserved-name sanitization."""
+    names: set[str] = set()
+
+    def add(value: object) -> None:
+        if isinstance(value, sp.Symbol):
+            names.add(value.name)
+        else:
+            names.add(str(value))
+
+    def add_expr_symbols(value: object) -> None:
+        if isinstance(value, sp.Expr):
+            for sym in value.free_symbols:
+                add(sym)
+        else:
+            for token in re.findall(r"\b[A-Za-z_]\w*\b", str(value)):
+                names.add(token)
+
+    for var in result.variables:
+        add(var)
+    for eq in result.equations:
+        add(eq.var)
+        add_expr_symbols(eq.growth[0])
+        add_expr_symbols(eq.decay[0])
+        for sym, exp in eq.growth[1].items():
+            add(sym)
+            add_expr_symbols(exp)
+        for sym, exp in eq.decay[1].items():
+            add(sym)
+            add_expr_symbols(exp)
+    for gma_eq in result.gma_equations:
+        add(gma_eq.var)
+        for coeff, exps in [*gma_eq.production, *gma_eq.degradation]:
+            add_expr_symbols(coeff)
+            for sym, exp in exps.items():
+                add(sym)
+                add_expr_symbols(exp)
+    for orig, aux_list in result.factor_map.items():
+        add(orig)
+        for aux in aux_list:
+            add(aux)
+    for aux, defn in result.auxiliary_defs.items():
+        add(aux)
+        add_expr_symbols(defn)
+    for symbol, expr in result.initial_exprs.items():
+        add(symbol)
+        add_expr_symbols(expr)
+    for initial in result.initials.keys():
+        if isinstance(initial, sp.Symbol):
+            add(initial)
+    for comp_name in result.compartments.keys():
+        names.add(comp_name)
+    for param_name in result.params.keys():
+        names.add(param_name)
+    for rule_name, rule_expr in result.assignment_rules.items():
+        names.add(rule_name)
+        add_expr_symbols(rule_expr)
+
+    return names
+
+
 def _expand_function_calls(
     expr_str: str, function_templates: dict[str, tuple[list[str], str]], max_depth: int = 10
 ) -> str:
@@ -4541,12 +4621,6 @@ def product_to_antimony(
     """
     parts: list[str] = []
 
-    def sanitize(name: str) -> str:
-        """Apply name sanitization if name_map is provided."""
-        if name_map and name in name_map:
-            return name_map[name]
-        return name
-
     # Check if we have dummy_const with exponent 0 (special case for constants)
     has_dummy_const_zero = any(
         s.name == "dummy_const"
@@ -4568,10 +4642,11 @@ def product_to_antimony(
             # Check if coefficient is a sum (needs parentheses)
             if coeff_simplified.is_Add:
                 # Format as a single parenthesized expression
-                parts.append(f"({coeff_simplified})")
+                coeff_str = _format_antimony_token(coeff_simplified, name_map, expression=True)
+                parts.append(f"({coeff_str})")
             else:
                 # Break symbolic coefficient into factors for clean formatting
-                coeff_factors = _format_symbolic_coeff(coeff_simplified)
+                coeff_factors = _format_symbolic_coeff(coeff_simplified, name_map)
                 if coeff_factors:
                     parts.extend(coeff_factors)
     else:
@@ -4589,7 +4664,7 @@ def product_to_antimony(
         is_dummy_const = s.name == "dummy_const"
 
         # Get sanitized name for this symbol
-        s_name = sanitize(s.name) if hasattr(s, "name") else str(s)
+        s_name = _format_antimony_token(s, name_map)
 
         # Handle both numeric and symbolic exponents
         if isinstance(e, sp.Expr):
@@ -4612,9 +4687,15 @@ def product_to_antimony(
                 else:
                     # Symbolic exponent - add parentheses if it's a sum/difference
                     if e_simplified.is_Add:
-                        parts.append(f"{s_name}^({e_simplified})")
+                        exp_str = _format_antimony_token(
+                            e_simplified, name_map, expression=True
+                        )
+                        parts.append(f"{s_name}^({exp_str})")
                     else:
-                        parts.append(f"{s_name}^{e_simplified}")
+                        exp_str = _format_antimony_token(
+                            e_simplified, name_map, expression=True
+                        )
+                        parts.append(f"{s_name}^{exp_str}")
         else:
             # Numeric exponent
             # Always show dummy_const even with exponent 0
@@ -4634,7 +4715,7 @@ def product_to_antimony(
             if coeff_simplified == 0:
                 return "0"
             else:
-                return str(coeff_simplified)
+                return _format_antimony_token(coeff_simplified, name_map, expression=True)
         else:
             # Numeric coefficient
             if coeff == 0.0:
@@ -4644,7 +4725,9 @@ def product_to_antimony(
     return "*".join(parts)
 
 
-def _format_symbolic_coeff(coeff: sp.Expr) -> list[str]:
+def _format_symbolic_coeff(
+    coeff: sp.Expr, name_map: dict[str, str] | None = None
+) -> list[str]:
     """
     Format a symbolic coefficient cleanly by extracting factors.
     Returns list of string parts to be joined with '*'.
@@ -4654,19 +4737,19 @@ def _format_symbolic_coeff(coeff: sp.Expr) -> list[str]:
     # If it's a multiplication, extract factors
     if coeff.is_Mul:
         for factor in coeff.args:
-            part = _format_factor(factor)
+            part = _format_factor(factor, name_map)
             if part:
                 parts.append(part)
     else:
         # Single factor
-        part = _format_factor(coeff)
+        part = _format_factor(coeff, name_map)
         if part:
             parts.append(part)
 
     return parts
 
 
-def _format_factor(factor: sp.Expr) -> str:
+def _format_factor(factor: sp.Expr, name_map: dict[str, str] | None = None) -> str:
     """Format a single factor from a coefficient."""
     # Pure number
     if factor.is_Number:
@@ -4683,7 +4766,7 @@ def _format_factor(factor: sp.Expr) -> str:
 
     # Symbol (parameter)
     if isinstance(factor, sp.Symbol):
-        return str(factor.name)
+        return _format_antimony_token(factor, name_map)
 
     # Power: base^exp
     if isinstance(factor, sp.Pow):
@@ -4697,11 +4780,11 @@ def _format_factor(factor: sp.Expr) -> str:
 
         # Format base
         if isinstance(base, sp.Symbol):
-            base_str = base.name
+            base_str = _format_antimony_token(base, name_map)
         elif base.is_Number:
             base_str = f"{float(base):g}"
         else:
-            base_str = f"({_format_factor(base)})"
+            base_str = f"({_format_factor(base, name_map)})"
 
         # Format exponent
         if exp.is_Number:
@@ -4715,19 +4798,20 @@ def _format_factor(factor: sp.Expr) -> str:
             # CRITICAL: Without parentheses, (T+a)^-C-1 parses as (T+a)^(-C) - 1
             # instead of (T+a)^(-C-1), completely corrupting the equation
             if exp.is_Add:
-                exp_str = f"({exp})"
+                exp_str = f"({_format_antimony_token(exp, name_map, expression=True)})"
             else:
-                exp_str = str(exp)
+                exp_str = _format_antimony_token(exp, name_map, expression=True)
 
         return f"{base_str}^{exp_str}"
 
     # Sum expression - MUST be wrapped in parentheses to preserve operator precedence
     # This is critical for expressions like H*(A + B + C)*X^-1 where the sum is a factor
     if factor.is_Add:
-        return f"({factor})"
+        expr_str = _format_antimony_token(factor, name_map, expression=True)
+        return f"({expr_str})"
 
     # Anything else - fallback to string representation
-    return str(factor)
+    return _format_antimony_token(factor, name_map, expression=True)
 
 
 def gma_to_antimony(
@@ -4744,21 +4828,7 @@ def gma_to_antimony(
             - "ode": Output as species with ODEs (default, may drift)
             - "assignment": Output as assignment rules (algebraically exact)
     """
-    # Build name sanitization map for reserved keywords
-    all_names: set[str] = set()
-    for eq in result.gma_equations:
-        all_names.add(eq.var.name)
-    for comp_name in result.compartments.keys():
-        all_names.add(comp_name)
-    for param_name in result.params.keys():
-        all_names.add(param_name)
-    if result.assignment_rules:
-        for rule_name in result.assignment_rules.keys():
-            all_names.add(rule_name)
-    name_map = _build_name_sanitization_map(all_names)
-
-    def sanitize(name: str) -> str:
-        return name_map.get(name, name)
+    name_map = _build_name_sanitization_map(_collect_antimony_names(result))
 
     lines: list[str] = []
     lines.append(f"model {model_name}()")
@@ -4782,9 +4852,10 @@ def gma_to_antimony(
     # Use original compartment name if available, otherwise default to "cell"
     if result.compartments:
         for comp_name, comp_size in result.compartments.items():
-            lines.append(f"compartment {sanitize(comp_name)} = {comp_size:g};")
+            comp_id = _format_antimony_token(comp_name, name_map)
+            lines.append(f"compartment {comp_id} = {comp_size:g};")
         # Use first compartment name for species declarations
-        default_compartment = sanitize(next(iter(result.compartments.keys())))
+        default_compartment = _format_antimony_token(next(iter(result.compartments.keys())), name_map)
     else:
         lines.append("compartment cell = 1;")
         default_compartment = "cell"
@@ -4796,7 +4867,7 @@ def gma_to_antimony(
     state_vars = [v for v in all_gma_vars if v.name not in lifted_aux_names]
     if state_vars:
         for v in state_vars:
-            lines.append(f"species {sanitize(v.name)} in {default_compartment};")
+            lines.append(f"species {_format_antimony_token(v, name_map)} in {default_compartment};")
         lines.append("")
 
     lines.append("// GMA (Generalized Mass Action) format")
@@ -4838,8 +4909,9 @@ def gma_to_antimony(
         lines.append("// LIFTED DENOMINATORS (assignment rules to prevent drift)")
         lines.append("// ========================================================================")
         for aux, defn in sorted(filtered_aux_defs_for_rules.items(), key=lambda kv: str(kv[0])):
-            defn_str = _sympy_to_antimony_syntax(str(defn))
-            lines.append(f"{aux} := {defn_str};")
+            aux_id = _format_antimony_token(aux, name_map)
+            defn_str = _format_antimony_token(defn, name_map, expression=True)
+            lines.append(f"{aux_id} := {defn_str};")
         lines.append("")
     elif all_aux_defs_for_comments:
         # ODE mode: output definitions as comments for documentation
@@ -4860,7 +4932,7 @@ def gma_to_antimony(
             if result.assignment_rules and param_name in result.assignment_rules:
                 continue
             param_val = result.params[param_name]
-            lines.append(f"{sanitize(param_name)} = {param_val:g};")
+            lines.append(f"{_format_antimony_token(param_name, name_map)} = {param_val:g};")
         lines.append("")
 
     # --- Assignment rules from original model (time-dependent quantities) ---
@@ -4868,8 +4940,8 @@ def gma_to_antimony(
         lines.append("// Assignment rules (from original model)")
         for var_name in sorted(result.assignment_rules.keys()):
             expr = result.assignment_rules[var_name]
-            sanitized_expr = _apply_name_sanitization(str(expr), name_map)
-            lines.append(f"{sanitize(var_name)} := {sanitized_expr};")
+            sanitized_expr = _format_antimony_token(expr, name_map, expression=True)
+            lines.append(f"{_format_antimony_token(var_name, name_map)} := {sanitized_expr};")
         lines.append("")
 
     # Initial assignments - handle both Symbol and tuple keys
@@ -4893,7 +4965,7 @@ def gma_to_antimony(
         # Skip lifted auxiliaries (they're assignment rules, not species)
         if s.name in lifted_aux_names:
             continue
-        lines.append(f"{s.name} = {float(v):g};")
+        lines.append(f"{_format_antimony_token(s, name_map)} = {float(v):g};")
 
     lines.append("")
 
@@ -4902,6 +4974,8 @@ def gma_to_antimony(
     for eq in result.gma_equations:
         # Skip lifted auxiliaries - they're assignment rules, not species with ODEs
         if eq.var.name in lifted_aux_names:
+            continue
+        if result.assignment_rules and eq.var.name in result.assignment_rules:
             continue
 
         # Format production terms
@@ -4920,10 +4994,11 @@ def gma_to_antimony(
 
         # Write ODE - output directly for GMA format (no transformation)
         # Pure constants like T' = 1 should be output as-is
+        var_id = _format_antimony_token(eq.var, name_map)
         if degradation == "0":
-            lines.append(f"{eq.var.name}' = {production};")
+            lines.append(f"{var_id}' = {production};")
         else:
-            lines.append(f"{eq.var.name}' = {production} - ({degradation});")
+            lines.append(f"{var_id}' = {production} - ({degradation});")
 
     lines.append("end")
 
@@ -5017,21 +5092,7 @@ def _failed_to_antimony(result: RecastResult, model_name: str) -> str:
 
 def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
     """Format S-system in simplified mode with enhanced documentation and assignment rules."""
-    # Build name sanitization map for reserved keywords
-    all_names: set[str] = set()
-    for var in result.variables:
-        all_names.add(var.name)
-    for comp_name in result.compartments.keys():
-        all_names.add(comp_name)
-    for param_name in result.params.keys():
-        all_names.add(param_name)
-    if result.assignment_rules:
-        for rule_name in result.assignment_rules.keys():
-            all_names.add(rule_name)
-    name_map = _build_name_sanitization_map(all_names)
-
-    def sanitize(name: str) -> str:
-        return name_map.get(name, name)
+    name_map = _build_name_sanitization_map(_collect_antimony_names(result))
 
     lines: list[str] = []
     lines.append(f"model {model_name}()")
@@ -5041,9 +5102,10 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
     # Use original compartment name if available, otherwise default to "cell"
     if result.compartments:
         for comp_name, comp_size in result.compartments.items():
-            lines.append(f"compartment {sanitize(comp_name)} = {comp_size:g};")
+            comp_id = _format_antimony_token(comp_name, name_map)
+            lines.append(f"compartment {comp_id} = {comp_size:g};")
         # Use first compartment name for species declarations
-        default_compartment = sanitize(next(iter(result.compartments.keys())))
+        default_compartment = _format_antimony_token(next(iter(result.compartments.keys())), name_map)
     else:
         lines.append("compartment cell = 1;")
         default_compartment = "cell"
@@ -5054,7 +5116,7 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
     all_state_vars = sorted(result.variables, key=lambda s: s.name)
     if all_state_vars:
         for v in all_state_vars:
-            lines.append(f"species {v.name} in {default_compartment};")
+            lines.append(f"species {_format_antimony_token(v, name_map)} in {default_compartment};")
         lines.append("")
 
     # --- Enhanced metadata header ---
@@ -5105,7 +5167,8 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         lines.append("// ========================================================================")
         for param_name in param_names_to_output:
             param_val = result.params[param_name]
-            lines.append(f"{sanitize(param_name)} = {param_val:g};")
+            param_id = _format_antimony_token(param_name, name_map)
+            lines.append(f"{param_id} = {param_val:g};")
         lines.append("")
 
     # --- Assignment rules (time-dependent quantities) ---
@@ -5116,7 +5179,9 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         lines.append("// ========================================================================")
         for var_name in sorted(result.assignment_rules.keys()):
             expr = result.assignment_rules[var_name]
-            lines.append(f"{var_name} := {expr};")
+            var_id = _format_antimony_token(var_name, name_map)
+            expr_str = _format_antimony_token(expr, name_map, expression=True)
+            lines.append(f"{var_id} := {expr_str};")
         lines.append("")
 
     # --- Initial conditions for auxiliary variables ONLY ---
@@ -5166,12 +5231,14 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         # Use name-based matching to handle symbol object mismatch
         if s.name in state_var_names:
             # Check if we have a symbolic expression for this IC
+            state_id = _format_antimony_token(s, name_map)
             if s in result.initial_exprs:
                 # Use symbolic expression
-                lines.append(f"{s.name} = {result.initial_exprs[s]};")
+                expr_str = _format_antimony_token(result.initial_exprs[s], name_map, expression=True)
+                lines.append(f"{state_id} = {expr_str};")
             else:
                 # Use numeric value
-                lines.append(f"{s.name} = {float(v):g};")
+                lines.append(f"{state_id} = {float(v):g};")
             output_state_vars.add(s.name)
 
     # CRITICAL: SBML parser may put species ICs in params instead of initials
@@ -5180,7 +5247,8 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         if var_name not in output_state_vars and var_name not in assignment_rule_vars:
             # Check if IC is in params
             if var_name in result.params:
-                lines.append(f"{var_name} = {result.params[var_name]:g};")
+                var_id = _format_antimony_token(var_name, name_map)
+                lines.append(f"{var_id} = {result.params[var_name]:g};")
 
     lines.append("")
 
@@ -5200,13 +5268,15 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         lines.append("// OBSERVABLE VARIABLES (reconstructed from auxiliaries)")
         lines.append("// ========================================================================")
         for orig, aux in non_identity_mappings:
+            orig_id = _format_antimony_token(orig, name_map)
             if len(aux) > 1:
                 # Multiple auxiliaries - product form
-                rhs = " * ".join(a.name for a in aux)
-                lines.append(f"{orig.name} := {rhs};")
+                rhs = " * ".join(_format_antimony_token(a, name_map) for a in aux)
+                lines.append(f"{orig_id} := {rhs};")
             else:
                 # Single auxiliary (but not identity)
-                lines.append(f"{orig.name} := {aux[0].name};")
+                aux_id = _format_antimony_token(aux[0], name_map)
+                lines.append(f"{orig_id} := {aux_id};")
         lines.append("")
 
     # --- S-system dynamics ---
@@ -5214,6 +5284,9 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
     lines.append("// S-SYSTEM DYNAMICS")
     lines.append("// ========================================================================")
     for eq in result.equations:
+        if eq.var.name in assignment_rule_vars:
+            continue
+
         g_exps = _expand_exps_through_factors(eq.growth[1], result.factor_map)
         h_exps = _expand_exps_through_factors(eq.decay[1], result.factor_map)
 
@@ -5232,11 +5305,14 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
                     g_str = f"{float(g_coeff_simplified):g}"
                 else:
                     # Symbolic constant (contains parameters)
-                    g_str = str(g_coeff_simplified)
+                    g_str = _format_antimony_token(
+                        g_coeff_simplified, name_map, expression=True
+                    )
             else:
                 g_str = f"{float(g_coeff):g}"
             h = product_to_antimony(eq.decay[0], h_exps, name_map)
-            lines.append(f"{eq.var.name}' = {g_str} - {h};")
+            var_id = _format_antimony_token(eq.var, name_map)
+            lines.append(f"{var_id}' = {g_str} - {h};")
         elif h_is_const and not g_is_const:
             # Pure constant decay: X' = g(vars) - C
             h_coeff = eq.decay[0]
@@ -5247,11 +5323,14 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
                     h_str = f"{float(h_coeff_simplified):g}"
                 else:
                     # Symbolic constant (contains parameters)
-                    h_str = str(h_coeff_simplified)
+                    h_str = _format_antimony_token(
+                        h_coeff_simplified, name_map, expression=True
+                    )
             else:
                 h_str = f"{float(h_coeff):g}"
             g = product_to_antimony(eq.growth[0], g_exps, name_map)
-            lines.append(f"{eq.var.name}' = {g} - {h_str};")
+            var_id = _format_antimony_token(eq.var, name_map)
+            lines.append(f"{var_id}' = {g} - {h_str};")
         elif g_is_const and h_is_const:
             # Both constants: X' = C1 - C2
             g_coeff = eq.growth[0]
@@ -5262,7 +5341,9 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
                 if g_coeff_simplified.is_Number:
                     g_str = f"{float(g_coeff_simplified):g}"
                 else:
-                    g_str = str(g_coeff_simplified)
+                    g_str = _format_antimony_token(
+                        g_coeff_simplified, name_map, expression=True
+                    )
             else:
                 g_str = f"{float(g_coeff):g}"
             if isinstance(h_coeff, sp.Expr):
@@ -5270,15 +5351,19 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
                 if h_coeff_simplified.is_Number:
                     h_str = f"{float(h_coeff_simplified):g}"
                 else:
-                    h_str = str(h_coeff_simplified)
+                    h_str = _format_antimony_token(
+                        h_coeff_simplified, name_map, expression=True
+                    )
             else:
                 h_str = f"{float(h_coeff):g}"
-            lines.append(f"{eq.var.name}' = {g_str} - {h_str};")
+            var_id = _format_antimony_token(eq.var, name_map)
+            lines.append(f"{var_id}' = {g_str} - {h_str};")
         else:
             # Normal monomial form
             g = product_to_antimony(eq.growth[0], g_exps, name_map)
             h = product_to_antimony(eq.decay[0], h_exps, name_map)
-            lines.append(f"{eq.var.name}' = {g} - {h};")
+            var_id = _format_antimony_token(eq.var, name_map)
+            lines.append(f"{var_id}' = {g} - {h};")
 
     lines.append("end")
 
@@ -5307,19 +5392,7 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
     - Detailed explanatory comments
     - Clean equation formatting
     """
-    # Build name sanitization map for reserved keywords
-    # Canonical mode uses generated names (Z_1, Z_2) which are safe,
-    # but original params and assignment rules may have conflicts
-    all_names: set[str] = set()
-    for param_name in result.params.keys():
-        all_names.add(param_name)
-    if result.assignment_rules:
-        for rule_name in result.assignment_rules.keys():
-            all_names.add(rule_name)
-    name_map = _build_name_sanitization_map(all_names)
-
-    def sanitize(name: str) -> str:
-        return name_map.get(name, name)
+    name_map = _build_name_sanitization_map(_collect_antimony_names(result))
 
     lines: list[str] = []
 
@@ -5361,7 +5434,7 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
 
     # Species declarations for auxiliary variables
     if aux_vars:
-        species_names = ", ".join([v.name for v in aux_vars])
+        species_names = ", ".join([_format_antimony_token(v, name_map) for v in aux_vars])
         lines.append(f"  species {species_names};")
         lines.append("")
 
@@ -5374,7 +5447,8 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
             if result.assignment_rules and param_name in result.assignment_rules:
                 continue
             param_val = result.params[param_name]
-            lines.append(f"  {param_name} = {param_val:g};")
+            param_id = _format_antimony_token(param_name, name_map)
+            lines.append(f"  {param_id} = {param_val:g};")
         lines.append("")
 
     # --- Assignment rules from original model (time-dependent quantities) ---
@@ -5392,13 +5466,18 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
             # Skip identity mappings (where variable maps to itself)
             if len(aux_list) == 1 and aux_list[0] == orig:
                 continue
-            rhs = " * ".join([a.name for a in aux_list]) if aux_list else "1"
+            rhs = (
+                " * ".join([_format_antimony_token(a, name_map) for a in aux_list])
+                if aux_list
+                else "1"
+            )
             non_identity_mappings.append((orig, rhs))
 
         if non_identity_mappings:
             lines.append("  // Observable variables (reconstructed from auxiliaries)")
             for orig, rhs in non_identity_mappings:
-                lines.append(f"  {orig.name} := {rhs};")
+                orig_id = _format_antimony_token(orig, name_map)
+                lines.append(f"  {orig_id} := {rhs};")
             lines.append("")
 
     # Now output assignment rules
@@ -5406,8 +5485,12 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
         lines.append("  // Assignment rules (from original model)")
         for var_name in sorted(result.assignment_rules.keys()):
             expr = result.assignment_rules[var_name]
-            lines.append(f"  {var_name} := {expr};")
+            var_id = _format_antimony_token(var_name, name_map)
+            expr_str = _format_antimony_token(expr, name_map, expression=True)
+            lines.append(f"  {var_id} := {expr_str};")
         lines.append("")
+
+    assignment_rule_vars = set(result.assignment_rules.keys()) if result.assignment_rules else set()
 
     # Add slack variable if needed (for pure decay OR pure growth terms)
     needs_slack = False
@@ -5435,10 +5518,14 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
     # Canonical S-system dynamics with clean formatting and slack variables
     lines.append("  // Canonical S-system dynamics (two monomials per ODE)")
     for eq in result.equations:
+        if eq.var.name in assignment_rule_vars:
+            continue
+
         g_exps = _expand_exps_through_factors(eq.growth[1], result.factor_map)
         h_exps = _expand_exps_through_factors(eq.decay[1], result.factor_map)
         g_coeff = eq.growth[0]
         h_coeff = eq.decay[0]
+        var_id = _format_antimony_token(eq.var, name_map)
 
         # Check if growth or decay is zero (need slack variable)
         g_is_zero = (isinstance(g_coeff, (int, float)) and g_coeff == 0) or (
@@ -5458,16 +5545,17 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
                     combined = sp.Symbol("epsilon") + h_coeff
                 else:
                     combined = sp.Symbol("epsilon") + sp.Float(h_coeff)
-                lines.append(f"  {eq.var.name}' = epsilon - ({combined});")
+                combined_str = _format_antimony_token(combined, name_map, expression=True)
+                lines.append(f"  {var_id}' = epsilon - ({combined_str});")
                 continue
-            g_str = product_to_antimony(sp.Symbol("epsilon"), h_exps)
+            g_str = product_to_antimony(sp.Symbol("epsilon"), h_exps, name_map)
             # Combine epsilon + h_coeff symbolically
             if isinstance(h_coeff, sp.Expr):
                 combined_coeff = sp.Symbol("epsilon") + h_coeff
             else:
                 combined_coeff = sp.Symbol("epsilon") + sp.Float(h_coeff)
-            h_str = product_to_antimony(combined_coeff, h_exps)
-            lines.append(f"  {eq.var.name}' = {g_str} - {h_str};")
+            h_str = product_to_antimony(combined_coeff, h_exps, name_map)
+            lines.append(f"  {var_id}' = {g_str} - {h_str};")
         elif h_is_zero and not g_is_zero:
             # Pure growth: X' = g - 0  =>  X' = (g + epsilon)*monomial - epsilon*monomial
             # Use the growth exponents for both terms
@@ -5478,34 +5566,39 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
                     combined = g_coeff + sp.Symbol("epsilon")
                 else:
                     combined = sp.Float(g_coeff) + sp.Symbol("epsilon")
-                lines.append(f"  {eq.var.name}' = ({combined}) - epsilon;")
+                combined_str = _format_antimony_token(combined, name_map, expression=True)
+                lines.append(f"  {var_id}' = ({combined_str}) - epsilon;")
                 continue
             if isinstance(g_coeff, sp.Expr):
                 combined_coeff = g_coeff + sp.Symbol("epsilon")
             else:
                 combined_coeff = sp.Float(g_coeff) + sp.Symbol("epsilon")
-            g_str = product_to_antimony(combined_coeff, g_exps)
-            h_str = product_to_antimony(sp.Symbol("epsilon"), g_exps)
-            lines.append(f"  {eq.var.name}' = {g_str} - {h_str};")
+            g_str = product_to_antimony(combined_coeff, g_exps, name_map)
+            h_str = product_to_antimony(sp.Symbol("epsilon"), g_exps, name_map)
+            lines.append(f"  {var_id}' = {g_str} - {h_str};")
         else:
             # Both terms present (or both zero) - use as-is
-            g = product_to_antimony(g_coeff, g_exps)
-            h = product_to_antimony(h_coeff, h_exps)
-            lines.append(f"  {eq.var.name}' = {g} - {h};")
+            g = product_to_antimony(g_coeff, g_exps, name_map)
+            h = product_to_antimony(h_coeff, h_exps, name_map)
+            lines.append(f"  {var_id}' = {g} - {h};")
     lines.append("")
 
     # Initial conditions
     lines.append("  // Initial conditions")
     for v in aux_vars:
+        if v.name in assignment_rule_vars:
+            continue
         if v in result.initials:
             # Check if we have a symbolic expression for this IC
+            var_id = _format_antimony_token(v, name_map)
             if v in result.initial_exprs:
                 # Use symbolic expression
-                lines.append(f"  {v.name} = {result.initial_exprs[v]};")
+                expr_str = _format_antimony_token(result.initial_exprs[v], name_map, expression=True)
+                lines.append(f"  {var_id} = {expr_str};")
             else:
                 # Use numeric value
                 val = result.initials[v]
-                lines.append(f"  {v.name} = {float(val):g};")
+                lines.append(f"  {var_id} = {float(val):g};")
 
     # Add @SIM metadata if available
     sim_lines = _format_sim_metadata_lines(result)
