@@ -1,11 +1,17 @@
-# mypy: ignore-errors
-# ruff: noqa: F401, F403, F405, I001
 """Trajectory and algebraic-manifold validation mixin."""
 
-from ssys._validator.common import *
-from ssys._validator.report import EquivalenceTest, ValidationResult
+from typing import Any
 
-class TrajectoryValidationMixin:
+import numpy as np
+import sympy as sp
+from sympy import lambdify
+
+from ssys._validator.report import EquivalenceTest, ValidationResult
+from ssys._validator.state import ValidatorState
+from ssys.types import SolverRequirement
+
+
+class TrajectoryValidationMixin(ValidatorState):
     def check_trajectory_comparison(
         self, t_end: float = 1.0, n_points: int = 100, threshold: float = 3.0e-2
     ) -> EquivalenceTest:

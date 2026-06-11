@@ -2,11 +2,31 @@
 libRoadRunner ODE solver backend.
 """
 
+import ast
+import math
+import operator
+from collections.abc import Callable
 from typing import Any
 
 import numpy as np
 
 from ..recaster import ModelIR, expand_antimony_function_templates
+
+_GAMMA_BINOPS: dict[type[ast.operator], Callable[[float, float], float]] = {
+    ast.Add: operator.add,
+    ast.Sub: operator.sub,
+    ast.Mult: operator.mul,
+    ast.Div: operator.truediv,
+    ast.Pow: operator.pow,
+}
+_GAMMA_UNARYOPS: dict[type[ast.unaryop], Callable[[float], float]] = {
+    ast.UAdd: operator.pos,
+    ast.USub: operator.neg,
+}
+
+
+class _UnresolvedGammaArgument(ValueError):
+    """Raised when a gamma argument is symbolic and must remain in the model."""
 
 
 def simulate_with_roadrunner(
@@ -177,8 +197,6 @@ def _get_antimony_text(model_ir: ModelIR) -> str:
     - Parametric functions: expand inline (e.g., M(x1) → full expression)
     """
     import re
-    from math import gamma as math_gamma
-    from math import pi, sqrt
 
     # Check if antimony_text was cached during parsing
     if hasattr(model_ir, "antimony_text") and model_ir.antimony_text:
@@ -238,31 +256,11 @@ def _get_antimony_text(model_ir: ModelIR) -> str:
                 i += 1
         text = "\n".join(fixed_lines)
 
-        # Fix 3: gamma() function - compute values and replace
-        # Antimony's gamma() is incomplete gamma (needs 2+ args)
-        # We need complete gamma Γ(x)
-        def replace_gamma(match):
-            """Replace gamma(expr) with computed value."""
-            expr_str = match.group(1)
-            try:
-                # Try to evaluate the expression
-                # Common cases in our models
-                if "nu" in expr_str:
-                    # Can't evaluate at parse time if it contains variables
-                    # For model 17, we'd need to handle this differently
-                    # For now, keep original and let it fail gracefully
-                    return match.group(0)
-                else:
-                    # Try direct evaluation
-                    result = eval(expr_str, {"pi": pi, "sqrt": sqrt})
-                    gamma_val = math_gamma(result)
-                    return f"{gamma_val}"
-            except (NameError, SyntaxError, TypeError, ValueError, OverflowError):
-                # Can't evaluate - keep original
-                return match.group(0)
-
-        # Match gamma(expression) but not gamma(a, b, ...)
-        text = re.sub(r"gamma\(([^,)]+)\)", replace_gamma, text)
+        # Fix 3: gamma() function - compute complete gamma for numeric arguments.
+        # Antimony's gamma() is incomplete gamma (needs 2+ args), while published
+        # model formulas often use the complete gamma Γ(x). Keep symbolic gamma
+        # calls intact, but reject malformed or unsafe numeric expressions.
+        text = _replace_complete_gamma_calls(text)
 
         # Fix 4: Exponentiation syntax - convert ** to ^
         # Python/SymPy uses ** for exponentiation, Antimony uses ^
@@ -272,6 +270,100 @@ def _get_antimony_text(model_ir: ModelIR) -> str:
 
     # Otherwise, reconstruct from IR
     return _reconstruct_antimony(model_ir)
+
+
+def _replace_complete_gamma_calls(text: str) -> str:
+    """Replace numeric complete-gamma calls without evaluating arbitrary Python."""
+    result: list[str] = []
+    i = 0
+    while i < len(text):
+        if not text.startswith("gamma(", i) or (i > 0 and (text[i - 1].isalnum() or text[i - 1] == "_")):
+            result.append(text[i])
+            i += 1
+            continue
+
+        arg, close_idx, has_top_level_comma = _read_gamma_argument(text, i + len("gamma("))
+        original = text[i : close_idx + 1]
+        if has_top_level_comma:
+            result.append(original)
+            i = close_idx + 1
+            continue
+
+        try:
+            arg_value = _evaluate_complete_gamma_argument(arg)
+        except _UnresolvedGammaArgument:
+            result.append(original)
+        except ValueError as exc:
+            raise ValueError(f"Malformed complete gamma expression {original!r}: {exc}")
+        else:
+            result.append(str(math.gamma(arg_value)))
+        i = close_idx + 1
+
+    return "".join(result)
+
+
+def _read_gamma_argument(text: str, start_idx: int) -> tuple[str, int, bool]:
+    """Read the parenthesized argument of a gamma call."""
+    depth = 0
+    has_top_level_comma = False
+    for idx in range(start_idx, len(text)):
+        char = text[idx]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            if depth == 0:
+                return text[start_idx:idx], idx, has_top_level_comma
+            depth -= 1
+        elif char == "," and depth == 0:
+            has_top_level_comma = True
+    raise ValueError("missing closing ')' for gamma call")
+
+
+def _evaluate_complete_gamma_argument(expr_str: str) -> float:
+    """Evaluate a numeric gamma argument using a small arithmetic allowlist."""
+    expr = expr_str.strip().replace("^", "**")
+    if not expr:
+        raise ValueError("empty argument")
+    try:
+        parsed = ast.parse(expr, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError(str(exc)) from exc
+    return _eval_gamma_ast(parsed.body)
+
+
+def _eval_gamma_ast(node: ast.AST) -> float:
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, bool) or not isinstance(node.value, int | float):
+            raise ValueError(f"unsupported literal {node.value!r}")
+        return float(node.value)
+
+    if isinstance(node, ast.Name):
+        if node.id == "pi":
+            return math.pi
+        raise _UnresolvedGammaArgument(f"symbolic name {node.id!r}")
+
+    if isinstance(node, ast.UnaryOp) and type(node.op) in _GAMMA_UNARYOPS:
+        return float(_GAMMA_UNARYOPS[type(node.op)](_eval_gamma_ast(node.operand)))
+
+    if isinstance(node, ast.BinOp) and type(node.op) in _GAMMA_BINOPS:
+        lhs = _eval_gamma_ast(node.left)
+        rhs = _eval_gamma_ast(node.right)
+        try:
+            return float(_GAMMA_BINOPS[type(node.op)](lhs, rhs))
+        except (ArithmeticError, OverflowError, ValueError) as exc:
+            raise ValueError(str(exc)) from exc
+
+    if isinstance(node, ast.Call):
+        if not isinstance(node.func, ast.Name) or node.func.id != "sqrt":
+            raise ValueError("only sqrt() is allowed in complete gamma arguments")
+        if len(node.args) != 1 or node.keywords:
+            raise ValueError("sqrt() accepts exactly one positional argument")
+        value = _eval_gamma_ast(node.args[0])
+        if value < 0:
+            raise ValueError("sqrt() argument must be non-negative")
+        return math.sqrt(value)
+
+    raise ValueError(f"unsupported syntax {type(node).__name__}")
 
 
 def _reconstruct_antimony(model_ir: ModelIR) -> str:

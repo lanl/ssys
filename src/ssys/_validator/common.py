@@ -1,26 +1,9 @@
-# mypy: ignore-errors
-# ruff: noqa: F401,I001
 """Shared imports and expression helpers for validation internals."""
 
-import json
-from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any
+from importlib.util import find_spec
 
-import numpy as np
 import sympy as sp
-from sympy import Matrix, lambdify
 
-from ssys.classification import (
-    classify_sym_system_solver_requirement,
-    classify_system,
-)
-from ssys.parsing import (
-    build_sym_system,
-    parse_antimony,
-    parse_antimony_via_sbml,
-)
-from ssys.types import SolverRequirement, SystemClass
 
 def _canonicalize_expr_by_name(expr: sp.Expr, symbols_by_name: dict[str, sp.Symbol]) -> sp.Expr:
     """Return an expression whose symbols are the canonical objects for each name."""
@@ -85,11 +68,11 @@ def _is_dev_mode() -> bool:
     In dev mode, we run both JAX and non-JAX numerical tests for debugging.
     In production mode, we run JAX if available, else non-JAX.
     """
-    try:
-        import pytest
+    return find_spec("pytest") is not None
 
-        return True
-    except ImportError:
-        return False
-
-__all__ = [name for name in globals() if not name.startswith("__")]
+__all__ = [
+    "_canonicalize_expr_by_name",
+    "_is_dev_mode",
+    "_simplify_identity_difference",
+    "_substitute_symbols_by_name",
+]

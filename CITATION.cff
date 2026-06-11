@@ -6,7 +6,7 @@ version: 0.5.5
 date-released: 2025-12-31
 url: "https://github.com/lanl/ssys"
 repository-code: "https://github.com/lanl/ssys"
-license: BSD-3
+license: BSD-3-Clause
 authors:
   - family-names: "Hlavacek"
     given-names: "William S."
@@ -19,16 +19,3 @@ keywords:
   - power-law
   - ode
   - model-transformation
-preferred-citation:
-  type: article
-  authors:
-    - family-names: "Hlavacek"
-      given-names: "William S."
-      orcid: "https://orcid.org/0000-0003-4383-8711"
-  title: "ssys: Exact algebraic recasting of ODEs to canonical S-system form"
-  journal: "Journal of Open Source Software"
-  year: 2025
-  volume: TBD
-  issue: TBD
-  start: TBD
-  doi: "10.21105/joss.XXXXX"

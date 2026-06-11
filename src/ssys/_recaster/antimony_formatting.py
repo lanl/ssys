@@ -1,8 +1,8 @@
-# mypy: ignore-errors
-# ruff: noqa: F401, F403, F405, I001
 """Antimony formatting for GMA and S-system recast results."""
 
-from ssys._recaster.common import *
+import sympy as sp
+
+from ssys._recaster.common import EPS_INIT, EPS_SLACK
 from ssys._recaster.names import (
     _build_name_sanitization_map,
     _collect_antimony_names,
@@ -10,6 +10,15 @@ from ssys._recaster.names import (
     _sanitize_antimony_name,
 )
 from ssys._recaster.parsing import _sympy_to_antimony_syntax
+from ssys.classification import classify_solver_requirement
+from ssys.math_utils import _expand_exps_through_factors
+from ssys.metadata import (
+    _format_antimony_number,
+    _format_sim_metadata_lines,
+    _format_solver_metadata_lines,
+)
+from ssys.types import RecastResult, RecastStatus
+
 
 def product_to_antimony(
     coeff, exps: dict[sp.Symbol, float], name_map: dict[str, str] | None = None

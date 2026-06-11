@@ -1,9 +1,13 @@
-# mypy: ignore-errors
-# ruff: noqa: F401, F403, F405, I001
 """Symbolic lifting for rational, composite, and time-dependent terms."""
 
-from ssys._recaster.common import *
+from dataclasses import dataclass
+
+import sympy as sp
+
 from ssys._recaster.parsing import _sympy_to_antimony_syntax
+from ssys.math_utils import expand_to_terms
+from ssys.types import SymSystem
+
 
 def find_rational_denominators(expr: sp.Expr) -> set[sp.Expr]:
     """
@@ -255,10 +259,9 @@ def lift_rational_functions(
             for denom in const_denoms:
                 # Evaluate denominator numerically
                 denom_val = denom
-                for param_name, param_val in sym.params.items():
-                    param_sym = sp.Symbol(param_name)
-                    if param_sym in denom.free_symbols:
-                        denom_val = denom_val.subs(param_sym, param_val)
+                for param_sym in list(denom.free_symbols):
+                    if param_sym.name in sym.params:
+                        denom_val = denom_val.subs(param_sym, sym.params[param_sym.name])
                 try:
                     recip_val = float(1.0 / denom_val)
                     # Replace 1/D with its numeric value
@@ -457,7 +460,9 @@ def add_dummy_for_constants(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol, 
                 if term.is_Number and term != 0 and term == const_value and not const_replaced:
                     # Replace first occurrence of constant with C * dummy^0
                     # Use Pow with evaluate=False to prevent sympy from simplifying dummy^0 to 1
-                    new_terms.append(const_value * sp.Pow(dummy, 0, evaluate=False))
+                    new_terms.append(
+                        sp.Mul(const_value, sp.Pow(dummy, 0, evaluate=False), evaluate=False)
+                    )
                     const_replaced = True
                 else:
                     new_terms.append(term)
@@ -593,10 +598,10 @@ def _requires_positivity_transform(func: sp.Expr) -> tuple[bool, float]:
 
     Returns: (needs_transform, offset_amount)
     """
-    if isinstance(func.func, type(sp.sin(sp.Symbol("x")).func)):
+    if func.func == sp.sin:
         # sin(x) ∈ [-1, 1] → add 2 → [1, 3]
         return True, 2.0
-    if isinstance(func.func, type(sp.cos(sp.Symbol("x")).func)):
+    if func.func == sp.cos:
         # cos(x) ∈ [-1, 1] → add 2 → [1, 3]
         return True, 2.0
     # Other functions (exp, log) are positive for positive args - no offset needed

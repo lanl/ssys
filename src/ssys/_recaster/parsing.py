@@ -1,9 +1,45 @@
-# mypy: ignore-errors
-# ruff: noqa: F401, F403, F405, I001
 """Antimony and SBML parsing plus symbolic-system construction."""
 
-from ssys._recaster.common import *
-from ssys._recaster.templates import _expand_function_calls, expand_antimony_function_templates
+import re
+
+import sympy as sp
+
+from ssys._recaster.common import arrow_pat, func_def_pat, prime_rule_pat
+from ssys._recaster.templates import _expand_function_calls
+from ssys.classification import classify_sym_system_solver_requirement
+from ssys.metadata import _extract_sim_metadata, _extract_solver_requirement_metadata
+from ssys.types import (
+    ModelIR,
+    Reaction,
+    SBMLParseError,
+    SolverRequirement,
+    SymSystem,
+)
+
+_SYMPY_FUNCTION_NAMES = frozenset({
+    "Abs",
+    "Piecewise",
+    "acos",
+    "asin",
+    "atan",
+    "ceiling",
+    "cos",
+    "cosh",
+    "exp",
+    "floor",
+    "log",
+    "max",
+    "min",
+    "piecewise",
+    "pow",
+    "sin",
+    "sinh",
+    "sqrt",
+    "tan",
+    "tanh",
+})
+_SYMPY_CONSTANT_NAMES = frozenset({"E", "EulerGamma", "oo", "pi"})
+
 
 def tokenize_species_side(side: str) -> list[tuple[int, str]]:
     parts = [p.strip() for p in side.split("+") if p.strip()]
@@ -393,6 +429,36 @@ def _sympify_sbml_formula(
             kind,
             formula_str,
             "missing math formula",
+            source=source,
+            reaction_id=reaction_id,
+            reaction_name=reaction_name,
+            variable=variable,
+        )
+    assert isinstance(formula_str, str)
+    formula_text = formula_str
+
+    identifiers = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", formula_text))
+    function_calls = set(re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", formula_text))
+    unsupported_functions = sorted(function_calls - _SYMPY_FUNCTION_NAMES)
+    if unsupported_functions:
+        raise SBMLParseError(
+            kind,
+            formula_str,
+            f"unsupported function(s): {', '.join(unsupported_functions)}",
+            source=source,
+            reaction_id=reaction_id,
+            reaction_name=reaction_name,
+            variable=variable,
+        )
+
+    unknown_identifiers = sorted(
+        identifiers - set(all_syms) - _SYMPY_FUNCTION_NAMES - _SYMPY_CONSTANT_NAMES
+    )
+    if unknown_identifiers:
+        raise SBMLParseError(
+            kind,
+            formula_str,
+            f"unknown identifier(s): {', '.join(unknown_identifiers)}",
             source=source,
             reaction_id=reaction_id,
             reaction_name=reaction_name,

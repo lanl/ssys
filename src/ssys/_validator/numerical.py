@@ -1,11 +1,16 @@
-# mypy: ignore-errors
-# ruff: noqa: F401, F403, F405, I001
 """Numerical pointwise validation mixin."""
 
-from ssys._validator.common import *
-from ssys._validator.report import EquivalenceTest, ValidationResult
+from typing import Any
 
-class NumericalValidationMixin:
+import numpy as np
+import sympy as sp
+from sympy import Matrix, lambdify
+
+from ssys._validator.report import EquivalenceTest, ValidationResult
+from ssys._validator.state import ValidatorState
+
+
+class NumericalValidationMixin(ValidatorState):
     def check_numerical_pointwise_jax(
         self,
         n_samples: int = 1000,
@@ -29,7 +34,6 @@ class NumericalValidationMixin:
             EquivalenceTest with numerical validation results
         """
         try:
-            import jax
             import jax.numpy as jnp
             from jax import jacfwd
         except ImportError:
@@ -212,7 +216,13 @@ class NumericalValidationMixin:
                 lhs = J_at_Z @ f_recast_at_Z
 
                 # Compute error
-                diff = lhs - f_orig_at_Phi_Z
+                with np.errstate(invalid="ignore", over="ignore"):
+                    diff = lhs - f_orig_at_Phi_Z
+                if not all(
+                    np.all(np.isfinite(np.asarray(values, dtype=float)))
+                    for values in (lhs, f_orig_at_Phi_Z, diff)
+                ):
+                    raise ValueError("Non-finite value encountered during JAX numerical test")
                 abs_error = float(jnp.max(jnp.abs(diff)))
 
                 # Relative error
@@ -523,7 +533,13 @@ class NumericalValidationMixin:
                 lhs = J_at_Z @ f_recast_at_Z
 
                 # Compute error: ||J_Φ · f_recast - f_orig(Φ)||
-                diff = lhs - f_orig_at_Phi_Z
+                with np.errstate(invalid="ignore", over="ignore"):
+                    diff = lhs - f_orig_at_Phi_Z
+                if not all(
+                    np.all(np.isfinite(np.asarray(values, dtype=float)))
+                    for values in (lhs, f_orig_at_Phi_Z, diff)
+                ):
+                    raise ValueError("Non-finite value encountered during numerical test")
                 abs_error = np.max(np.abs(diff))
 
                 # Relative error

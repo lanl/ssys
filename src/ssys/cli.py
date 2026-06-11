@@ -212,6 +212,11 @@ def main():
     parser = argparse.ArgumentParser(
         description="Recast Antimony models to canonical S-system form.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Input trust boundary: ssys treats Antimony and SBML model files as trusted "
+            "scientific inputs, not safe untrusted uploads. Do not expose this CLI directly "
+            "to arbitrary user-submitted model text in multi-tenant environments."
+        ),
     )
     parser.add_argument(
         "--manifest",

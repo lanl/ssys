@@ -646,6 +646,118 @@ class TestSbmlParserIcHandling:
         assert err.variable == "S"
         assert err.formula == "bad +"
 
+    def test_unknown_formula_identifier_raises_structured_error(self, monkeypatch):
+        """Model-derived formulas must not silently create undeclared symbols."""
+        import libsbml
+
+        from ssys.recaster import SBMLParseError, parse_sbml_from_string
+
+        species = """
+      <species id="S" compartment="cell" initialAmount="1" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        rules = """
+    <listOfRules>
+      <rateRule variable="S">
+        <math xmlns="http://www.w3.org/1998/Math/MathML"><ci> S </ci></math>
+      </rateRule>
+    </listOfRules>"""
+        sbml = _minimal_sbml(species=species, rules=rules)
+
+        monkeypatch.setattr(libsbml, "formulaToString", lambda _math: "S + missing_param")
+
+        with pytest.raises(SBMLParseError) as exc_info:
+            parse_sbml_from_string(sbml)
+
+        err = exc_info.value
+        assert err.kind == "rate_rule"
+        assert err.variable == "S"
+        assert "unknown identifier(s): missing_param" in err.message
+
+    def test_unknown_formula_function_raises_structured_error(self, monkeypatch):
+        """Unsupported function calls fail before SymPy parsing."""
+        import libsbml
+
+        from ssys.recaster import SBMLParseError, parse_sbml_from_string
+
+        species = """
+      <species id="S" compartment="cell" initialAmount="1" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        rules = """
+    <listOfRules>
+      <rateRule variable="S">
+        <math xmlns="http://www.w3.org/1998/Math/MathML"><ci> S </ci></math>
+      </rateRule>
+    </listOfRules>"""
+        sbml = _minimal_sbml(species=species, rules=rules)
+
+        monkeypatch.setattr(libsbml, "formulaToString", lambda _math: "unsupported(S)")
+
+        with pytest.raises(SBMLParseError) as exc_info:
+            parse_sbml_from_string(sbml)
+
+        err = exc_info.value
+        assert err.kind == "rate_rule"
+        assert err.variable == "S"
+        assert "unsupported function(s): unsupported" in err.message
+
+    def test_malicious_formula_string_rejected_before_sympify(self, monkeypatch):
+        """Malicious-looking formula text is reported as parser data, not evaluated."""
+        import libsbml
+
+        from ssys.recaster import SBMLParseError, parse_sbml_from_string
+
+        species = """
+      <species id="S" compartment="cell" initialAmount="1" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        rules = """
+    <listOfRules>
+      <rateRule variable="S">
+        <math xmlns="http://www.w3.org/1998/Math/MathML"><ci> S </ci></math>
+      </rateRule>
+    </listOfRules>"""
+        sbml = _minimal_sbml(species=species, rules=rules)
+
+        monkeypatch.setattr(
+            libsbml,
+            "formulaToString",
+            lambda _math: "__import__('os').system('echo unsafe')",
+        )
+
+        with pytest.raises(SBMLParseError) as exc_info:
+            parse_sbml_from_string(sbml)
+
+        err = exc_info.value
+        assert err.kind == "rate_rule"
+        assert "__import__" in err.message
+
+    def test_declared_species_I_is_not_sympy_imaginary_in_sbml_parser(self):
+        """Reserved SymPy name I is a model symbol when declared by SBML."""
+        from ssys.recaster import parse_sbml_from_string
+
+        species = """
+      <species id="I" compartment="cell" initialAmount="1" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="P" compartment="cell" initialAmount="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        reactions = """
+    <listOfReactions>
+      <reaction id="J_i" reversible="false">
+        <listOfReactants>
+          <speciesReference species="I" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="P" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML"><ci> I </ci></math>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>"""
+        sbml = _minimal_sbml(species=species, reactions=reactions)
+
+        sym = parse_sbml_from_string(sbml)
+
+        I_sym = sp.Symbol("I", positive=True)
+        P = sp.Symbol("P", positive=True)
+        assert I_sym in sym.odes
+        assert sp.simplify(sym.odes[I_sym] + I_sym) == 0
+        assert sp.simplify(sym.odes[P] - I_sym) == 0
+
     def test_initial_assignment_evaluation_failure_raises_by_default(self):
         """InitialAssignment formulas fail closed unless warning mode is requested."""
         from ssys.recaster import SBMLParseError, parse_sbml_from_string

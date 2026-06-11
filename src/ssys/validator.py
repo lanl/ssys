@@ -1,4 +1,3 @@
-# ruff: noqa: F401,I001
 """Compatibility API for recast validation.
 
 Implementation is split across ``ssys._validator`` modules; this module preserves

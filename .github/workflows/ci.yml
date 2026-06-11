@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12"]
 
     steps:
     - uses: actions/checkout@v4
@@ -40,10 +40,13 @@ jobs:
 
     - name: Enforce critical coverage
       run: |
-        uv run coverage report --fail-under=75
-        uv run coverage report --include=src/ssys/_validator/*.py --fail-under=72
+        uv run coverage report --fail-under=80
+        uv run coverage report --include=src/ssys/_validator/*.py --fail-under=80
+        uv run coverage report --include=src/ssys/_validator/numerical.py --fail-under=80
+        uv run coverage report --include=src/ssys/_validator/trajectory.py --fail-under=80
+        uv run coverage report --include=src/ssys/_recaster/lifting.py --fail-under=80
         uv run coverage report --include=src/ssys/notebook_helpers.py --fail-under=80
-        uv run coverage report --include=src/ssys/ode_backends/roadrunner_backend.py --fail-under=60
+        uv run coverage report --include=src/ssys/ode_backends/roadrunner_backend.py --fail-under=80
         uv run coverage report --include=src/ssys/ode_backends/interface.py --fail-under=82
         uv run coverage report --include=src/ssys/ode_backends/ida_sundials_backend.py --fail-under=79
         uv run coverage report --include=src/ssys/ode_backends/dae_backend.py --fail-under=85
@@ -99,8 +102,13 @@ jobs:
         path: dist/
 
   artifact-smoke:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ["3.10", "3.11", "3.12"]
     steps:
     - uses: actions/checkout@v4
 
@@ -113,31 +121,57 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: "3.11"
+        python-version: ${{ matrix.python-version }}
 
     - name: Install wheel in isolated environment
+      shell: bash
       run: |
         python -m venv .wheel-smoke
-        . .wheel-smoke/bin/activate
-        python -m pip install --upgrade pip
-        python -m pip install dist/*.whl
+        python - <<'PY'
+        import glob
+        import os
+        import pathlib
+        import subprocess
+
+        venv = pathlib.Path(".wheel-smoke")
+        python_exe = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
+        subprocess.check_call([str(python_exe), "-m", "pip", "install", *glob.glob("dist/*.whl")])
+        PY
 
     - name: Run installed CLI smoke workflow
+      shell: bash
       run: |
-        . .wheel-smoke/bin/activate
-        tmpdir="$(mktemp -d)"
-        cat > "$tmpdir/decay.ant" <<'EOF'
-        model decay()
-            species X;
-            X' = -k*X;
-            k = 0.5;
-            X = 1.0;
-        end
-        EOF
-        printf '%s\n' "$tmpdir/decay.ant" > "$tmpdir/models.manifest"
-        ssys-recast --version
-        ssys-recast --manifest "$tmpdir/models.manifest" --outdir "$tmpdir/out"
-        test -s "$tmpdir/out/decay_recast.ant"
+        python - <<'PY'
+        import os
+        import pathlib
+        import subprocess
+        import tempfile
+
+        venv = pathlib.Path(".wheel-smoke")
+        recast = venv / ("Scripts/ssys-recast.exe" if os.name == "nt" else "bin/ssys-recast")
+        tmpdir = pathlib.Path(tempfile.mkdtemp())
+        model = tmpdir / "decay.ant"
+        model.write_text(
+            "\n".join([
+                "model decay()",
+                "    species X;",
+                "    X' = -k*X;",
+                "    k = 0.5;",
+                "    X = 1.0;",
+                "end",
+                "",
+            ])
+        )
+        manifest = tmpdir / "models.manifest"
+        manifest.write_text(f"{model}\n")
+        outdir = tmpdir / "out"
+        subprocess.check_call([str(recast), "--version"])
+        subprocess.check_call([str(recast), "--manifest", str(manifest), "--outdir", str(outdir)])
+        output = outdir / "decay_recast.ant"
+        if not output.exists() or output.stat().st_size == 0:
+            raise SystemExit(f"missing smoke output: {output}")
+        PY
 
   integration-test:
     runs-on: ubuntu-latest
@@ -161,4 +195,4 @@ jobs:
 
     - name: Run full model integration validation
       run: |
-        uv run pytest tests/test_integration.py -m slow -v
+        uv run pytest tests/test_integration.py -m slow -v --no-cov

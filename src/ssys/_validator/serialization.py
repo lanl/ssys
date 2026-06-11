@@ -1,9 +1,9 @@
-# mypy: ignore-errors
-# ruff: noqa: F401, F403, F405, I001
 """Generated artifact validation and serialization helpers."""
 
-from ssys._validator.common import *
+from typing import Any
+
 from ssys._validator.report import EquivalenceTest, ValidationResult
+
 
 def validate_generated_output_roundtrip(
     recast_file: str, recast_text: str | None = None

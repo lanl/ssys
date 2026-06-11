@@ -1,8 +1,11 @@
-# mypy: ignore-errors
-# ruff: noqa: F401, F403, F405, I001
 """Validation result and report data structures."""
 
-from ssys._validator.common import *
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Any
+
+from ssys.types import SolverRequirement, SystemClass
+
 
 class ValidationResult(Enum):
     """Validation test outcomes."""

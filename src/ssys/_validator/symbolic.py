@@ -1,11 +1,13 @@
-# mypy: ignore-errors
-# ruff: noqa: F401, F403, F405, I001
 """Symbolic equivalence validation mixin."""
 
-from ssys._validator.common import *
-from ssys._validator.report import EquivalenceTest, ValidationResult
+import sympy as sp
+from sympy import Matrix
 
-class SymbolicValidationMixin:
+from ssys._validator.report import EquivalenceTest, ValidationResult
+from ssys._validator.state import ValidatorState
+
+
+class SymbolicValidationMixin(ValidatorState):
     def check_symbolic_equivalence(self, timeout: float = 30.0) -> EquivalenceTest:
         """
         Check symbolic equivalence using Jacobian chain rule with constraint substitution.
@@ -81,6 +83,12 @@ class SymbolicValidationMixin:
             # Compute difference Δ = J_Φ · f_recast - f_orig(Φ(Z))
             Delta = lhs - f_orig_at_Phi
 
+            def has_nonfinite_symbolic_value(exprs: Matrix) -> bool:
+                return any(component.has(sp.nan, sp.zoo, sp.oo) for component in exprs)
+
+            state_or_mapping_names = {str(v) for v in orig_vars_ordered}
+            state_or_mapping_names.update(str(v) for v in self.recast_state_vars)
+
             # Build substitution dict for auxiliary variables BEFORE simplification
             # Match symbols by name to handle different symbol objects
             orig_var_names = {str(v) for v in orig_vars_ordered}
@@ -133,6 +141,20 @@ class SymbolicValidationMixin:
             # Apply auxiliary substitutions to Delta
             if aux_subs:
                 Delta = Delta.subs(aux_subs)
+
+            # Recast generation may fold parameter-only subexpressions to numeric
+            # constants. Validate symbolic equality for the concrete model by
+            # substituting declared parameter values, but fall back to exact
+            # symbolic parameters if substitution creates singular nan/zoo terms.
+            param_subs = {}
+            for component in Delta:
+                for sym in component.free_symbols:
+                    if sym.name in self.recast_ir.params and sym.name not in state_or_mapping_names:
+                        param_subs[sym] = self.recast_ir.params[sym.name]
+            if param_subs:
+                param_delta = Delta.subs(param_subs)
+                if not has_nonfinite_symbolic_value(param_delta):
+                    Delta = param_delta
 
             # Try to simplify each component
             simplified_components = []

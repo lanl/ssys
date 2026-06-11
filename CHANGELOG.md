@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Narrowed supported Python metadata and CI from Python 3.10+ to Python 3.10-3.12
+  while the package depends on NumPy 1.x and RoadRunner 2.7.x.
+- Documented the trusted-input boundary for Antimony and SBML model files.
+
+### Fixed
+- Removed placeholder preferred-citation article metadata from `CITATION.cff`.
+- Corrected the `CITATION.cff` license identifier so CFF validation passes.
+- Added wheel artifact smoke tests across the supported Python and CI operating-system matrix.
+
+### Added
+- Added a release-candidate workflow and release checklist for pre-tag validation.
+
 ## [0.5.5] - 2025-12-31
 
 ### Added

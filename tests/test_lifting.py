@@ -3,6 +3,20 @@
 import pytest
 import sympy as sp
 
+from ssys._recaster.lifting import (
+    _build_composite_inverse_mappings,
+    _detect_exp_decay_pattern,
+    _detect_harmonic_pattern,
+    _detect_sqrt_of_squared_pattern,
+    _detect_tanh_sigmoid_pattern,
+    _requires_positivity_transform,
+    add_dummy_for_constants,
+    create_auxiliary_for_denominator,
+    lift_exp_decay,
+    lift_harmonic,
+    lift_squared_for_sqrt,
+    lift_tanh_sigmoid,
+)
 from ssys.recaster import (
     SymSystem,
     _exponents_match,
@@ -212,6 +226,179 @@ class TestFindingFunctions:
         expr = sp.sqrt(x)
         sqrt_sums = find_sqrt_of_sums(expr)
         assert len(sqrt_sums) == 0
+
+
+class TestLiftingInternalBranches:
+    """Focused branch tests for lifting helpers used by recasting."""
+
+    def test_create_auxiliary_for_denominator_uses_chain_rule(self):
+        X = sp.Symbol("X", positive=True)
+
+        aux, aux_ode = create_auxiliary_for_denominator(X + 1, {X: -X}, 3)
+
+        assert aux == sp.Symbol("W_3", positive=True)
+        assert sp.simplify(aux_ode - X * aux**2) == 0
+
+    def test_composite_inverse_mappings_cover_exp_log_and_nested_auxiliaries(self):
+        X = sp.Symbol("X", positive=True)
+        Z1 = sp.Symbol("Z_1", positive=True)
+        Z2 = sp.Symbol("Z_2", positive=True)
+
+        inverse = _build_composite_inverse_mappings(
+            {
+                sp.exp(Z2**2): Z1,
+                sp.log(X): Z2,
+            },
+            {
+                sp.exp(Z2**2): 0.0,
+                sp.log(X): 0.0,
+            },
+            [X],
+        )
+
+        assert inverse[sp.exp(Z2**2)] == Z1
+        assert inverse[sp.log(Z1)] == Z2**2
+        assert inverse[X] == sp.exp(Z2)
+        assert inverse[X**-3] == sp.exp(-3 * Z2)
+
+    def test_positivity_transform_and_time_pattern_detectors(self):
+        time = sp.Symbol("time")
+        omega = sp.Symbol("omega")
+
+        assert _requires_positivity_transform(sp.sin(time)) == (True, 2.0)
+        assert _requires_positivity_transform(sp.cos(time)) == (True, 2.0)
+        assert _requires_positivity_transform(sp.exp(time)) == (False, 0.0)
+
+        assert _detect_exp_decay_pattern(sp.exp(time)) == (1, 1)
+        assert _detect_exp_decay_pattern(sp.exp(-time)) == (1, -1)
+        assert _detect_exp_decay_pattern(sp.exp(omega * time)) == (1, omega)
+        assert _detect_exp_decay_pattern(sp.exp(time**2)) is None
+
+        assert _detect_harmonic_pattern(sp.sin(omega * time + sp.pi / 4)) == (
+            "sin",
+            omega,
+            sp.pi / 4,
+        )
+        assert _detect_harmonic_pattern(sp.cos(1)) is None
+
+        assert _detect_tanh_sigmoid_pattern(sp.tanh(omega * (time - 5))) == (omega, 5)
+        assert _detect_tanh_sigmoid_pattern(sp.tanh(time**2)) is None
+
+    def test_sqrt_squared_pattern_rejects_multiple_or_missing_square_terms(self):
+        X, Y = sp.symbols("X Y", positive=True)
+
+        assert _detect_sqrt_of_squared_pattern(sp.sqrt(X**2 + 1)) == (X, 1)
+        assert _detect_sqrt_of_squared_pattern(sp.sqrt(X + 1)) is None
+        assert _detect_sqrt_of_squared_pattern(sp.sqrt(X**2 + Y**2 + 1)) is None
+
+    def test_lift_rational_functions_handles_constant_and_dynamic_denominators(self):
+        X, k = sp.symbols("X k", positive=True)
+        sym = SymSystem(
+            vars=[X],
+            params={"k": 2.0},
+            odes={X: X / (k + 1) + X / (X + k)},
+            initials={X: 1.0},
+        )
+
+        lifted, aux_defs = lift_rational_functions(sym)
+
+        assert len(aux_defs) == 1
+        aux, definition = next(iter(aux_defs.items()))
+        assert sp.simplify(definition - (X + k)) == 0
+        assert aux in lifted.vars
+        assert lifted.initials[aux] == 3.0
+        assert aux in lifted.odes[X].free_symbols
+        assert sp.Float(1 / 3) in lifted.odes[X].atoms(sp.Float)
+
+    def test_add_dummy_for_constants_adds_parameter_not_state(self):
+        X = sp.Symbol("X", positive=True)
+        sym = SymSystem(vars=[X], params={}, odes={X: X + 2}, initials={X: 1.0})
+
+        lifted, aux_defs = add_dummy_for_constants(sym)
+
+        dummy = sp.Symbol("dummy_const", positive=True)
+        assert lifted.vars == [X]
+        assert lifted.params["dummy_const"] == 1.0
+        assert aux_defs == {dummy: sp.Integer(1)}
+        assert any(
+            isinstance(atom, sp.Pow) and atom.base == dummy for atom in lifted.odes[X].atoms(sp.Pow)
+        )
+
+    def test_add_dummy_for_constants_noops_without_constant_terms(self):
+        X = sp.Symbol("X", positive=True)
+        sym = SymSystem(vars=[X], params={}, odes={X: X**2}, initials={X: 1.0})
+
+        lifted, aux_defs = add_dummy_for_constants(sym)
+
+        assert lifted is sym
+        assert aux_defs == {}
+
+    def test_autonomous_lift_helpers_cover_exp_harmonic_and_tanh(self):
+        time = sp.Symbol("time")
+        k = sp.Symbol("k", positive=True)
+
+        exp_result = lift_exp_decay(sp.exp(-k * time), 1, {})
+        assert exp_result is not None
+        E = sp.Symbol("E_1", positive=True)
+        assert exp_result.new_odes[E] == -k * E
+        assert exp_result.new_initials[E] == 1
+
+        harmonic = lift_harmonic(sp.cos(2 * time), 2, {})
+        assert harmonic is not None
+        c2 = sp.Symbol("c_2", positive=True)
+        s2 = sp.Symbol("s_2", positive=True)
+        assert harmonic.new_odes[c2] == -2 * s2
+        assert harmonic.new_odes[s2] == 2 * c2
+
+        reused = lift_harmonic(sp.sin(2 * time + sp.pi / 2), 3, {}, {sp.Integer(2): (c2, s2)})
+        assert reused is not None
+        assert reused.new_vars == []
+        assert sp.simplify(reused.substitution - c2) == 0
+
+        sigmoid = lift_tanh_sigmoid(sp.tanh(k * (time - 5)), 4, {})
+        assert sigmoid is not None
+        h4 = sp.Symbol("h_4", positive=True)
+        assert sp.simplify(sigmoid.new_odes[h4] - (2 * k * h4 - 2 * k * h4**2)) == 0
+
+    def test_lift_squared_for_sqrt_computes_state_initial_condition_by_name(self):
+        X = sp.Symbol("X", positive=True)
+        expr = sp.sqrt(X**2 + 1)
+        sym = SymSystem(
+            vars=[sp.Symbol("X", positive=True)],
+            params={},
+            odes={X: -X},
+            initials={X: 3.0},
+        )
+
+        result = lift_squared_for_sqrt(expr, 5, sym)
+
+        assert result is not None
+        u5 = sp.Symbol("u_5", positive=True)
+        assert result.new_vars == [u5]
+        assert result.new_initials[u5] == 10.0
+        assert result.substitution == sp.sqrt(u5)
+
+    def test_lift_time_functions_adds_clock_and_state_sqrt_auxiliary(self):
+        X = sp.Symbol("X", positive=True)
+        time = sp.Symbol("time", positive=True)
+        sym = SymSystem(
+            vars=[X],
+            params={},
+            odes={X: time + sp.sqrt(X**2 + 1)},
+            initials={X: 2.0},
+            sim_t_end=4.0,
+        )
+
+        lifted, aux_defs, next_counter = lift_time_functions_to_autonomous(sym, 7)
+
+        T = sp.Symbol("T", positive=True)
+        assert T in lifted.vars
+        assert lifted.odes[T] == 1
+        assert lifted.initials[T] == 0.0
+        assert aux_defs[T] == time
+        assert any(var.name.startswith("u_") for var in lifted.vars)
+        assert next_counter > 7
+        assert lifted.sim_t_end == 4.0
 
 
 class TestLiftRationalFunctions:

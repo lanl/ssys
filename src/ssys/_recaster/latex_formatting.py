@@ -1,8 +1,10 @@
-# mypy: ignore-errors
-# ruff: noqa: F401, F403, F405, I001
 """LaTeX formatting helpers for ODE and S-system output."""
 
-from ssys._recaster.common import *
+import sympy as sp
+
+from ssys.math_utils import _expand_exps_through_factors
+from ssys.types import RecastResult, SymSystem
+
 
 def latex_odes(sym: "SymSystem") -> str:
     lines = []

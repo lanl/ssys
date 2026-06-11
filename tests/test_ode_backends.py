@@ -16,7 +16,13 @@ from ssys.ode_backends.dae_backend import (
 )
 from ssys.ode_backends.ida_sundials_backend import IDASundialsUnavailable
 from ssys.ode_backends.interface import simulate_model
-from ssys.ode_backends.roadrunner_backend import simulate_with_roadrunner
+from ssys.ode_backends.roadrunner_backend import (
+    _evaluate_complete_gamma_argument,
+    _get_antimony_text,
+    _replace_complete_gamma_calls,
+    _set_initial_conditions,
+    simulate_with_roadrunner,
+)
 from ssys.recaster import ModelIR, SolverRequirement, parse_antimony
 
 
@@ -152,6 +158,150 @@ def test_roadrunner_backend_reports_antimony_parser_failure(monkeypatch):
     assert result["success"] is False
     assert "Antimony parse error" in result["message"]
     assert "syntax error near" in result["message"]
+
+
+def test_roadrunner_backend_reports_missing_antimony(monkeypatch):
+    """Missing Antimony raises a clear dependency error after RoadRunner imports."""
+    model_ir = ModelIR()
+    monkeypatch.setitem(sys.modules, "roadrunner", SimpleNamespace(RoadRunner=object))
+    monkeypatch.setitem(sys.modules, "antimony", None)
+
+    with pytest.raises(ImportError, match="Antimony not installed"):
+        simulate_with_roadrunner(model_ir, 0.0, 1.0, 2)
+
+
+@pytest.mark.parametrize(
+    ("module_name", "sbml", "message"),
+    [
+        ("", "<sbml/>", "Could not get Antimony module name"),
+        ("test", "", "Antimony→SBML conversion failed"),
+    ],
+)
+def test_roadrunner_backend_reports_antimony_conversion_failures(
+    monkeypatch, module_name, sbml, message
+):
+    """Empty module names and SBML conversion failures are structured backend failures."""
+    model_ir = ModelIR()
+    model_ir.antimony_text = "model test() end"
+
+    class FakeAntimony:
+        def clearPreviousLoads(self):
+            pass
+
+        def loadAntimonyString(self, text):
+            return 0
+
+        def getLastError(self):
+            return "conversion failed"
+
+        def getMainModuleName(self):
+            return module_name
+
+        def getSBMLString(self, name):
+            return sbml
+
+    class UnusedRoadRunner:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("RoadRunner should not be constructed")
+
+    monkeypatch.setitem(sys.modules, "antimony", FakeAntimony())
+    monkeypatch.setitem(sys.modules, "roadrunner", SimpleNamespace(RoadRunner=UnusedRoadRunner))
+
+    result = simulate_with_roadrunner(model_ir, 0.0, 1.0, 2)
+
+    assert result["success"] is False
+    assert message in result["message"]
+
+
+def test_roadrunner_antimony_text_preprocessing_multiline_gamma_and_numeric_model():
+    """RoadRunner preprocessing fixes numeric model names, continuations, and gamma constants."""
+    model_ir = ModelIR()
+    model_ir.antimony_text = """
+model 24_decay()
+  X' = -k*X // keep the next term
+       + gamma(1/2); // comment supplies semicolon
+  k = 1;
+end
+"""
+
+    text = _get_antimony_text(model_ir)
+
+    assert "model m_24_decay()" in text
+    assert "X' = -k*X + 1.7724538509055159;" in text
+    assert "**" not in text
+
+
+def test_roadrunner_reconstructs_antimony_when_cached_text_missing():
+    """ModelIR reconstruction includes species, parameters, reactions, and explicit rates."""
+    model_ir = ModelIR()
+    model_ir.species = {"S", "P"}
+    model_ir.params = {"k": 0.5}
+    model_ir.reactions = [SimpleNamespace(name="J0", lhs=[(1, "S")], rhs=[(1, "P")], rate_expr="k*S")]
+    model_ir.explicit_rates = {"S": "-k*S"}
+
+    text = _get_antimony_text(model_ir)
+
+    assert "model recast_model()" in text
+    assert "species S;" in text
+    assert "k = 0.5;" in text
+    assert "J0: S -> P; k*S;" in text
+    assert "S' = -k*S;" in text
+
+
+def test_roadrunner_initial_condition_warnings_cover_backend_failures():
+    """Initial condition setup reports floating-species and assignment failures."""
+    model_ir = ModelIR()
+    model_ir.initials = {"X": 1.0}
+
+    class FailingRoadRunner:
+        def getFloatingSpeciesIds(self):
+            raise RuntimeError("floating species unavailable")
+
+        def resetToOrigin(self):
+            pass
+
+        def __setitem__(self, key, value):
+            raise RuntimeError(f"cannot set {key}")
+
+    warnings = _set_initial_conditions(FailingRoadRunner(), model_ir, {"X": 2.0})
+
+    assert warnings[0]["stage"] == "floating_species"
+    assert warnings[1]["stage"] == "model_initial"
+    assert warnings[2]["stage"] == "override_initial"
+
+
+def test_roadrunner_gamma_rewrite_accepts_numeric_allowlist():
+    """Complete gamma rewrites allow arithmetic, pi, sqrt, and exponentiation only."""
+    assert _evaluate_complete_gamma_argument("sqrt(4) + 1") == 3.0
+
+    rewritten = _replace_complete_gamma_calls("k = gamma(1/2) + gamma(sqrt(4));")
+
+    assert "1.7724538509055159" in rewritten
+    assert "1.0" in rewritten
+    assert "gamma(" not in rewritten
+
+
+def test_roadrunner_gamma_rewrite_preserves_symbolic_and_incomplete_gamma():
+    """Symbolic gamma and incomplete gamma calls are left for Antimony to handle."""
+    text = "a = gamma(nu/2); b = gamma(1, 2);"
+
+    assert _replace_complete_gamma_calls(text) == text
+
+
+@pytest.mark.parametrize(
+    "expr",
+    [
+        "gamma()",
+        "gamma(sqrt(-1))",
+        "gamma(__import__('os'))",
+        "gamma(abs(1))",
+        "gamma(1+)",
+    ],
+)
+def test_roadrunner_gamma_rewrite_rejects_malformed_or_unsafe(expr):
+    """Malformed complete gamma expressions fail closed with a useful diagnostic."""
+    with pytest.raises(ValueError, match="Malformed complete gamma expression"):
+        _replace_complete_gamma_calls(f"x = {expr};")
 
 
 def test_simulate_ode_reports_missing_roadrunner_as_backend_failure(monkeypatch):

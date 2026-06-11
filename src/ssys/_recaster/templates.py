@@ -1,8 +1,14 @@
-# mypy: ignore-errors
-# ruff: noqa: F401, F403, F405, I001
 """Antimony function-template expansion helpers."""
 
-from ssys._recaster.common import *
+import re
+
+from ssys._recaster.common import (
+    func_call_start_pat,
+    func_def_pat,
+    simple_identifier_pat,
+    simple_numeric_literal_pat,
+)
+
 
 def _expand_function_calls(
     expr_str: str, function_templates: dict[str, tuple[list[str], str]], max_depth: int = 10

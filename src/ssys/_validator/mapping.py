@@ -1,11 +1,17 @@
-# mypy: ignore-errors
-# ruff: noqa: F401, F403, F405, I001
 """Mapping and auxiliary identity validation mixins."""
 
-from ssys._validator.common import *
-from ssys._validator.report import EquivalenceTest, ValidationResult
+import sympy as sp
 
-class MappingValidationMixin:
+from ssys._validator.common import (
+    _canonicalize_expr_by_name,
+    _simplify_identity_difference,
+    _substitute_symbols_by_name,
+)
+from ssys._validator.report import EquivalenceTest, ValidationResult
+from ssys._validator.state import ValidatorState
+
+
+class MappingValidationMixin(ValidatorState):
     def _extract_mapping_from_comments(self, recast_text: str) -> dict:
         """
         Extract variable mapping from recast file comments.

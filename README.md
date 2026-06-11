@@ -3,7 +3,7 @@
 
 This toolkit converts ordinary differential equation (ODE) models into **S‑System** or **GMA** form and writes the result back to Antimony. The command-line interface batch-processes **Antimony** models and generates **Jupyter notebook** verification reports; the Python library can also parse SBML files directly.
 
-**Release maturity:** ssys is currently published as alpha software. Treat the APIs and generated report format as subject to change until the release gates in `dev/punchlist.md` are closed.
+**Release maturity:** ssys is currently published as alpha software. Treat the APIs and generated report format as subject to change until the release gates in `dev/punchlist2.md` and `RELEASE_CHECKLIST.md` are closed.
 
 ---
 
@@ -65,15 +65,19 @@ uv pip install -e ".[dev]"
 
 ## Requirements
 
-- Python 3.10+
+- Python 3.10, 3.11, or 3.12
 - sympy ≥1.12 (symbolic math)
-- numpy ≥1.24,<2 (libroadrunner compatibility)
+- numpy ≥1.24,<2 (RoadRunner 2.7.x compatibility)
 - scipy ≥1.10
 - matplotlib ≥3.7 (plots in generated notebooks)
 - nbformat ≥5.9 (notebook generation)
-- **libroadrunner ≥2.5** (ODE simulation, SBML)
+- **libroadrunner ≥2.5,<2.8** (ODE simulation, SBML)
 - **antimony ≥2.13** (Antimony parsing via SBML)
 - **python-libsbml ≥5.20** (SBML model representation)
+
+## Input Trust Boundary
+
+ssys treats Antimony and SBML inputs as trusted scientific model files, not as safe untrusted uploads. Do not run the CLI or parser service directly on arbitrary user-submitted model text in a multi-tenant or security-sensitive environment. Parser hardening rejects malformed symbolic expressions where practical, but the supported threat model is trusted research inputs from local files.
 
 ---
 
