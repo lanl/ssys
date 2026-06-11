@@ -12,6 +12,7 @@ Total: 8 tests (4 directories × 2 modes)
 Expected runtime: ~2-5 minutes depending on hardware
 """
 
+import os
 import subprocess
 import sys
 from importlib.util import find_spec
@@ -28,6 +29,16 @@ MODES = ["simplified", "canonical"]
 def get_project_root() -> Path:
     """Get the project root directory."""
     return Path(__file__).parent.parent
+
+
+def require_sksundae_for_full_validation() -> None:
+    """Require the DAE backend in CI while allowing visible local skips."""
+    if find_spec("sksundae") is not None:
+        return
+    message = "full manifest validation with dae_required models needs `uv sync --extra dae`"
+    if os.environ.get("SSYS_REQUIRE_DAE_VALIDATION") == "1":
+        pytest.fail(message)
+    pytest.skip(message)
 
 
 @pytest.mark.integration
@@ -105,8 +116,7 @@ def test_recast_all_models(test_dir: str, mode: str, tmp_path: Path):
         mode: Recasting mode ('simplified' or 'canonical')
         tmp_path: pytest fixture providing temporary directory for output
     """
-    if find_spec("sksundae") is None:
-        pytest.skip("full manifest validation with dae_required models needs `uv sync --extra dae`")
+    require_sksundae_for_full_validation()
 
     project_root = get_project_root()
     manifest = project_root / test_dir / "models.manifest"

@@ -1,8 +1,10 @@
 """Tests for notebook_helpers module."""
 
+import numpy as np
 import pytest
 import sympy as sp
 
+import ssys.notebook_helpers as nh
 from ssys import math_utils
 from ssys.classification import classify_system as core_classify_system
 from ssys.notebook_helpers import (
@@ -14,10 +16,13 @@ from ssys.notebook_helpers import (
     _is_already_ssystem,
     _is_monomial,
     _simplify_exponent_content,
+    build_rhs_from_sympy,
     find_clock_variable,
     get_autonomy_label,
     is_nonautonomous,
     latex_factor_map,
+    latex_odes_from_sym,
+    latex_ssys_from_antimony,
     parse_antimony_odes,
     product_expr,
     was_nonautonomous,
@@ -120,6 +125,57 @@ class TestAntimonyToLatexDirect:
         # Should have both + and -
         assert "+" in result
         assert "-" in result
+
+
+class TestNumericalRhsBuilder:
+    """Tests for notebook numerical RHS construction."""
+
+    def test_assignment_rules_and_time_are_substituted(self):
+        X = sp.Symbol("X")
+        time = sp.Symbol("time")
+        rhs = build_rhs_from_sympy(
+            [X],
+            [sp.Symbol("A") + time],
+            {"k": 2.0},
+            assignment_rules={"A": "k*X"},
+        )
+
+        result = rhs(3.0, [4.0])
+
+        assert result.shape == (1,)
+        assert result[0] == pytest.approx(11.0)
+
+    def test_missing_parameter_fails_closed(self):
+        X = sp.Symbol("X")
+        k = sp.Symbol("k")
+
+        with pytest.raises(ValueError, match="Missing numeric values"):
+            build_rhs_from_sympy([X], [k * X], {})
+
+
+class TestNotebookLatexGeneration:
+    """Tests for notebook-level LaTeX helpers."""
+
+    def test_latex_odes_from_sym_orders_and_formats_equations(self):
+        X = sp.Symbol("X", positive=True)
+        sym = SymSystem(vars=[X], params={}, odes={X: -X}, initials={X: 1.0})
+
+        result = latex_odes_from_sym(sym)
+
+        assert "\\dot{X}" in result
+        assert "- X" in result or "-X" in result
+
+    def test_latex_ssys_from_antimony_uses_antimony_structure(self):
+        result = latex_ssys_from_antimony("Z_1' = epsilon*Z_1 - k*Z_1^2")
+
+        assert "\\dot{Z_{1}}" in result
+        assert "\\epsilon" in result
+        assert "Z_{1}^{2}" in result
+
+    def test_latex_ssys_from_antimony_reports_missing_odes(self):
+        result = latex_ssys_from_antimony("k = 1")
+
+        assert "No ODEs found" in result
 
 
 class TestSimplifyExponentContent:
@@ -496,6 +552,83 @@ class TestProductExpr:
         """Test with no exponents."""
         result = product_expr(3, {})
         assert result == 3
+
+
+class TestLoadAndReport:
+    """Smoke tests for the rendered notebook report workflow."""
+
+    def test_load_and_report_renders_successful_report(self, tmp_path, monkeypatch):
+        X = sp.Symbol("X", positive=True)
+        sym = SymSystem(vars=[X], params={}, odes={X: -X}, initials={X: 1.0})
+        rec = RecastResult(
+            status=RecastStatus.CANONICAL_SSYSTEM,
+            equations=[],
+            initials={X: 1.0},
+            variables=[X],
+            factor_map={},
+        )
+        ant_path = tmp_path / "original.ant"
+        ant_path.write_text("X' = -X\nX = 1")
+        recast_path = tmp_path / "recast.ant"
+        recast_path.write_text("X' = -X\nX = 1")
+
+        rendered = []
+        monkeypatch.setattr(nh, "display", lambda obj: rendered.append(obj))
+        monkeypatch.setattr(nh.plt, "show", lambda: None)
+        monkeypatch.setattr(nh, "parse_antimony_via_sbml", lambda text: sym)
+        monkeypatch.setattr(nh.ssys, "parse_antimony", lambda text: sym)
+        monkeypatch.setattr(nh.ssys, "recast_to_ssystem", lambda parsed, mode="simplified": rec)
+
+        def fake_simulate_ode(model_ir, t_start, t_end, n_points):
+            return {
+                "success": True,
+                "t": np.array([0.0, 1.0]),
+                "y": np.array([[1.0], [0.5]]),
+                "state_names": ["X"],
+                "message": "",
+            }
+
+        monkeypatch.setattr("ssys.ode_backends.simulate_ode", fake_simulate_ode)
+
+        nh.load_and_report(str(ant_path), str(recast_path), T=1.0, steps=1)
+
+        assert rendered
+        assert any("Trajectory Comparison" in getattr(item, "data", str(item)) for item in rendered)
+
+    def test_load_and_report_stops_when_original_simulation_fails(self, tmp_path, monkeypatch):
+        X = sp.Symbol("X", positive=True)
+        sym = SymSystem(vars=[X], params={}, odes={X: -X}, initials={X: 1.0})
+        rec = RecastResult(
+            status=RecastStatus.CANONICAL_SSYSTEM,
+            equations=[],
+            initials={X: 1.0},
+            variables=[X],
+            factor_map={},
+        )
+        ant_path = tmp_path / "original.ant"
+        ant_path.write_text("X' = -X\nX = 1")
+        recast_path = tmp_path / "recast.ant"
+        recast_path.write_text("X' = -X\nX = 1")
+
+        rendered = []
+        monkeypatch.setattr(nh, "display", lambda obj: rendered.append(obj))
+        monkeypatch.setattr(nh, "parse_antimony_via_sbml", lambda text: sym)
+        monkeypatch.setattr(nh.ssys, "parse_antimony", lambda text: sym)
+        monkeypatch.setattr(nh.ssys, "recast_to_ssystem", lambda parsed, mode="simplified": rec)
+        monkeypatch.setattr(
+            "ssys.ode_backends.simulate_ode",
+            lambda *args, **kwargs: {
+                "success": False,
+                "message": "forced failure",
+                "t": np.array([]),
+                "y": np.empty((0, 0)),
+                "state_names": [],
+            },
+        )
+
+        nh.load_and_report(str(ant_path), str(recast_path), T=1.0, steps=1)
+
+        assert any("forced failure" in getattr(item, "data", str(item)) for item in rendered)
 
 
 class TestIsNonautonomous:

@@ -39,7 +39,7 @@ Enhancement suggestions are welcome! Please open an issue with:
 
 ```bash
 # Clone your fork
-git clone https://lisdi-git.lanl.gov/hlavacek/ssys.git
+git clone https://github.com/lanl/ssys.git
 cd ssys
 
 # Create a virtual environment
@@ -144,8 +144,8 @@ Fixes #42
 1. Update version in `pyproject.toml` and `src/ssys/__init__.py`
 2. Update CHANGELOG.md with release notes
 3. Update CITATION.cff with new version and date
-4. Create git tag: `git tag -a v0.1.0 -m "Release v0.1.0"`
-5. Push tag: `git push origin v0.1.0`
+4. Create git tag for the release version, for example: `git tag -a vX.Y.Z -m "Release vX.Y.Z"`
+5. Push tag: `git push origin vX.Y.Z`
 6. Create GitHub release
 7. Build and upload to PyPI (if applicable)
 

@@ -1,6 +1,6 @@
 """Symbolic lifting helpers for rational, composite, and time-dependent terms."""
 
-from ssys.recaster import (
+from ssys._recaster.lifting import (
     AutonomousLiftResult,
     add_dummy_for_constants,
     find_composite_functions,

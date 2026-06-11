@@ -83,7 +83,7 @@ def simulate_with_roadrunner(
             r.integrator.maximum_num_steps = options.get("maximum_num_steps", 20000)
 
         # Set initial conditions
-        _set_initial_conditions(r, model_ir, y0_override)
+        initial_condition_warnings = _set_initial_conditions(r, model_ir, y0_override)
 
         # Run simulation
         result = r.simulate(t0, t_end, n_points)
@@ -112,9 +112,11 @@ def simulate_with_roadrunner(
                     "n_failed_steps": r.integrator.getNumErrTestFails(),
                     "last_time": t[-1],
                 }
-            except Exception:
+            except (AttributeError, RuntimeError, TypeError):
                 # Some RoadRunner versions may not support these
                 stats = {"last_time": t[-1]}
+        if initial_condition_warnings:
+            stats["initial_condition_warnings"] = initial_condition_warnings
 
         if options.get("log_solver_details", False):
             print("RoadRunner simulation completed:")
@@ -255,7 +257,7 @@ def _get_antimony_text(model_ir: ModelIR) -> str:
                     result = eval(expr_str, {"pi": pi, "sqrt": sqrt})
                     gamma_val = math_gamma(result)
                     return f"{gamma_val}"
-            except Exception:
+            except (NameError, SyntaxError, TypeError, ValueError, OverflowError):
                 # Can't evaluate - keep original
                 return match.group(0)
 
@@ -321,7 +323,9 @@ def _reconstruct_antimony(model_ir: ModelIR) -> str:
     return "\n".join(lines)
 
 
-def _set_initial_conditions(r, model_ir: ModelIR, y0_override: dict[str, float] | None):
+def _set_initial_conditions(
+    r, model_ir: ModelIR, y0_override: dict[str, float] | None
+) -> list[dict[str, str]]:
     """
     Set initial conditions in RoadRunner model.
 
@@ -338,10 +342,13 @@ def _set_initial_conditions(r, model_ir: ModelIR, y0_override: dict[str, float] 
     r.resetToOrigin()
 
     # Get list of actual floating species from RoadRunner model
+    warnings: list[dict[str, str]] = []
+
     try:
         floating_species = set(r.getFloatingSpeciesIds())
-    except Exception:
+    except (AttributeError, RuntimeError, TypeError) as exc:
         # Fallback: empty set means we'll try all species
+        warnings.append({"stage": "floating_species", "message": str(exc)})
         floating_species = None
 
     # Apply model_ir initials (only for floating species)
@@ -362,8 +369,12 @@ def _set_initial_conditions(r, model_ir: ModelIR, y0_override: dict[str, float] 
             try:
                 # Use bracket notation for floating species
                 r[f"[{species_name}]"] = value
-            except Exception:
-                pass  # Silently skip - value is already in SBML
+            except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+                warnings.append({
+                    "stage": "model_initial",
+                    "species": species_name,
+                    "message": str(exc),
+                })
 
     # Apply overrides (only for floating species)
     if y0_override:
@@ -376,5 +387,11 @@ def _set_initial_conditions(r, model_ir: ModelIR, y0_override: dict[str, float] 
 
             try:
                 r[f"[{species_name}]"] = value
-            except Exception:
-                pass  # Silently skip
+            except (KeyError, RuntimeError, TypeError, ValueError) as exc:
+                warnings.append({
+                    "stage": "override_initial",
+                    "species": species_name,
+                    "message": str(exc),
+                })
+
+    return warnings

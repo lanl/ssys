@@ -113,6 +113,43 @@ class TestValidationReport:
 class TestFailClosedValidation:
     """Tests for fail-closed report aggregation."""
 
+    def test_validate_recast_pair_defaults_to_sbml_parser(self, tmp_path, monkeypatch):
+        original = tmp_path / "original.ant"
+        original.write_text("model original()\nend\n")
+        recast = tmp_path / "recast.ant"
+        recast.write_text("model recast()\nend\n")
+
+        captured = {}
+
+        def fake_roundtrip(*args, **kwargs):
+            return EquivalenceTest(
+                name="generated_output_roundtrip",
+                result=ValidationResult.PASS,
+                details="ok",
+            )
+
+        class FakeValidator:
+            def __init__(self, original_file, recast_file, factor_map, mode, parser):
+                captured["parser"] = parser
+
+            def validate(self, *args, **kwargs):
+                return ValidationReport(
+                    original_file=str(original),
+                    recast_file=str(recast),
+                    original_class=SystemClass.SSYSTEM,
+                    recast_class=SystemClass.SSYSTEM,
+                    overall_pass=True,
+                    overall_result=ValidationResult.PASS,
+                )
+
+        monkeypatch.setattr("ssys._validator.core.validate_generated_output_roundtrip", fake_roundtrip)
+        monkeypatch.setattr("ssys._validator.core.RecastValidator", FakeValidator)
+
+        report = validate_recast_pair(str(original), str(recast))
+
+        assert captured["parser"] == "sbml"
+        assert report.overall_pass is True
+
     def test_not_attempted_required_symbolic_test_fails_overall(self, tmp_path, monkeypatch):
         original = tmp_path / "original.ant"
         original.write_text("""
@@ -539,7 +576,7 @@ class TestSolverAwareValidation:
             end
         """)
 
-        validator = RecastValidator(str(original), str(recast))
+        validator = RecastValidator(str(original), str(recast), parser="legacy")
         result = validator.check_numerical_pointwise(n_samples=8, threshold=1.0e-9)
 
         assert result.result == ValidationResult.FAIL
@@ -578,7 +615,7 @@ class TestRecastValidator:
         """Test validator initialization."""
         orig, recast = simple_model_paths
 
-        validator = RecastValidator(orig, recast)
+        validator = RecastValidator(orig, recast, parser="legacy")
 
         assert validator is not None
         assert validator.original_file == orig
@@ -589,7 +626,7 @@ class TestRecastValidator:
         """Test symbolic equivalence check."""
         orig, recast = simple_model_paths
 
-        validator = RecastValidator(orig, recast)
+        validator = RecastValidator(orig, recast, parser="legacy")
         result = validator.check_symbolic_equivalence(timeout=5.0)
 
         assert result is not None
@@ -623,7 +660,7 @@ class TestRecastValidatorAuxiliaryExtraction:
             end
         """)
 
-        validator = RecastValidator(str(original), str(recast))
+        validator = RecastValidator(str(original), str(recast), parser="legacy")
 
         # Should parse without error
         assert validator is not None
@@ -778,7 +815,7 @@ class TestAuxiliaryIdentityValidation:
             end
         """)
 
-        validator = RecastValidator(str(original), str(recast))
+        validator = RecastValidator(str(original), str(recast), parser="legacy")
         report = validator.validate(
             run_symbolic=False,
             run_numerical=False,
@@ -855,7 +892,7 @@ class TestRecastValidatorEdgeCases:
             end
         """)
 
-        validator = RecastValidator(str(original), str(recast))
+        validator = RecastValidator(str(original), str(recast), parser="legacy")
 
         # Should extract refusal reason
         reason = validator._extract_refusal_reason(recast.read_text())
@@ -881,7 +918,7 @@ class TestRecastValidatorEdgeCases:
         """)
 
         # Should still work, inferring mapping
-        validator = RecastValidator(str(original), str(recast))
+        validator = RecastValidator(str(original), str(recast), parser="legacy")
         assert validator is not None
 
 
@@ -940,7 +977,7 @@ class TestVariableICollisionWithSpI:
             end
         """)
 
-        validator = RecastValidator(str(original), str(recast))
+        validator = RecastValidator(str(original), str(recast), parser="legacy")
         result = validator.check_symbolic_equivalence(timeout=10.0)
 
         assert result is not None
@@ -999,7 +1036,7 @@ class TestTimeDependentValidation:
             end
         """)
 
-        validator = RecastValidator(str(original), str(recast))
+        validator = RecastValidator(str(original), str(recast), parser="legacy")
         result = validator.check_symbolic_equivalence(timeout=10.0)
 
         assert result is not None
@@ -1035,7 +1072,7 @@ class TestTimeDependentValidation:
             end
         """)
 
-        validator = RecastValidator(str(original), str(recast))
+        validator = RecastValidator(str(original), str(recast), parser="legacy")
         result = validator.check_numerical_pointwise(n_samples=100)
 
         assert result is not None

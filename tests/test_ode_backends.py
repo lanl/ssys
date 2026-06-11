@@ -9,6 +9,11 @@ import numpy as np
 import pytest
 
 from ssys.ode_backends import simulate_ode
+from ssys.ode_backends.dae_backend import (
+    _evaluate_expr_over_trajectory,
+    _project_variable,
+    simulate_with_dae_projection,
+)
 from ssys.ode_backends.ida_sundials_backend import IDASundialsUnavailable
 from ssys.ode_backends.interface import simulate_model
 from ssys.ode_backends.roadrunner_backend import simulate_with_roadrunner
@@ -230,6 +235,111 @@ def test_projection_backend_is_explicit_dae_fallback():
     assert result["unsupported_solver_requirement"] is True
     assert result["backend"] == "dae_projection"
     assert "implicit algebraic constraints" in result["message"]
+
+
+def test_dae_projection_evaluates_state_params_and_time():
+    """Projection expressions can depend on states, parameters, and time."""
+    t = np.array([0.0, 1.0, 2.0])
+    y = np.array([[1.0], [2.0], [3.0]])
+
+    result = _evaluate_expr_over_trajectory(
+        "K*X + time",
+        t=t,
+        y=y,
+        state_names=["X"],
+        params={"K": 2.0},
+    )
+
+    np.testing.assert_allclose(result, [2.0, 5.0, 8.0])
+
+
+def test_dae_projection_projects_existing_and_new_variables():
+    """Projection updates existing variables and appends missing algebraic variables."""
+    t = np.array([0.0, 1.0])
+    y = np.array([[1.0, 99.0], [2.0, 99.0]])
+    state_names = ["X", "Y"]
+
+    y, residual = _project_variable(
+        name="Y",
+        expr="X + 1",
+        t=t,
+        y=y,
+        state_names=state_names,
+        params={},
+    )
+    y, new_residual = _project_variable(
+        name="Z",
+        expr="Y + time",
+        t=t,
+        y=y,
+        state_names=state_names,
+        params={},
+    )
+
+    np.testing.assert_allclose(y[:, 1], [2.0, 3.0])
+    np.testing.assert_allclose(y[:, 2], [2.0, 4.0])
+    assert residual == pytest.approx(97.0)
+    assert new_residual == pytest.approx(0.0)
+    assert state_names == ["X", "Y", "Z"]
+
+
+def test_dae_projection_applies_assignment_rules_and_auxiliary_defs(monkeypatch):
+    """Projection backend records residuals for assignment and auxiliary definitions."""
+    model_ir = ModelIR()
+    model_ir.params = {"K": 1.0}
+    model_ir.assignment_rules = {"Y": "X + K"}
+    model_ir.solver_requirement = SolverRequirement.DAE_REQUIRED
+
+    def fake_roadrunner(*args, **kwargs):
+        return {
+            "success": True,
+            "t": np.array([0.0, 1.0]),
+            "y": np.array([[1.0], [2.0]]),
+            "state_names": ["X"],
+            "message": "",
+            "backend": "roadrunner_cvode",
+            "integrator_stats": {},
+        }
+
+    monkeypatch.setattr("ssys.ode_backends.dae_backend.simulate_with_roadrunner", fake_roadrunner)
+
+    result = simulate_with_dae_projection(
+        model_ir,
+        t0=0.0,
+        t_end=1.0,
+        n_points=2,
+        options={"auxiliary_defs": {"Z": "Y + time"}},
+    )
+
+    assert result["success"] is True
+    assert result["backend"] == "dae_projection"
+    assert result["state_names"] == ["X", "Y", "Z"]
+    np.testing.assert_allclose(result["y"], [[1.0, 2.0, 2.0], [2.0, 3.0, 4.0]])
+    assert result["algebraic_residuals"]["Y"] == pytest.approx(0.0)
+    assert result["algebraic_residuals"]["Z"] == pytest.approx(0.0)
+
+
+def test_dae_projection_preserves_base_failure_metadata(monkeypatch):
+    """Projection backend reclassifies base ODE failures without hiding diagnostics."""
+    model_ir = ModelIR()
+    model_ir.assignment_rules = {"Y": "X + 1"}
+    model_ir.solver_requirement = SolverRequirement.DAE_REQUIRED
+
+    def fake_roadrunner(*args, **kwargs):
+        return {
+            "success": False,
+            "message": "base failed",
+            "unsupported_solver_requirement": True,
+        }
+
+    monkeypatch.setattr("ssys.ode_backends.dae_backend.simulate_with_roadrunner", fake_roadrunner)
+
+    result = simulate_with_dae_projection(model_ir, t0=0.0, t_end=1.0, n_points=2)
+
+    assert result["success"] is False
+    assert result["backend"] == "dae_projection"
+    assert result["unsupported_solver_requirement"] is True
+    assert result["message"] == "base failed"
 
 
 def test_ida_backend_enforces_explicit_assignment_auxiliary(monkeypatch):

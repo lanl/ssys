@@ -211,14 +211,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - matplotlib >=3.7
 - nbformat >=5.9
 
-[Unreleased]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.5...main
-[0.5.5]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.4...v0.5.5
-[0.5.4]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.3...v0.5.4
-[0.5.3]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.2...v0.5.3
-[0.5.2]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.1...v0.5.2
-[0.5.1]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.5.0...v0.5.1
-[0.5.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.4.0...v0.5.0
-[0.4.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.3.0...v0.4.0
-[0.3.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.2.0...v0.3.0
-[0.2.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/compare/v0.1.0...v0.2.0
-[0.1.0]: https://lisdi-git.lanl.gov/hlavacek/ssys/-/tags/v0.1.0
+[Unreleased]: https://github.com/lanl/ssys/compare/v0.5.5...main
+[0.5.5]: https://github.com/lanl/ssys/compare/v0.5.4...v0.5.5
+[0.5.4]: https://github.com/lanl/ssys/compare/v0.5.3...v0.5.4
+[0.5.3]: https://github.com/lanl/ssys/compare/v0.5.2...v0.5.3
+[0.5.2]: https://github.com/lanl/ssys/compare/v0.5.1...v0.5.2
+[0.5.1]: https://github.com/lanl/ssys/compare/v0.5.0...v0.5.1
+[0.5.0]: https://github.com/lanl/ssys/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/lanl/ssys/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/lanl/ssys/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/lanl/ssys/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/lanl/ssys/releases/tag/v0.1.0

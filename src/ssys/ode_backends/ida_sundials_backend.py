@@ -136,7 +136,7 @@ def _load_ida_binding() -> _IDABinding:
 def _as_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
-    except Exception:
+    except (TypeError, ValueError):
         return default
 
 
@@ -151,7 +151,7 @@ def _identifier_names(text: str) -> set[str]:
 def _is_zero_expr(expr: str | sp.Expr) -> bool:
     try:
         return bool(sp.simplify(_sympify(expr)) == 0)
-    except Exception:
+    except (TypeError, ValueError, sp.SympifyError):
         return False
 
 
@@ -264,7 +264,7 @@ def _expanded_auxiliary_defs(options: dict[str, Any]) -> dict[str, str | sp.Expr
 def _definition_mentions_state(expr: str | sp.Expr, state_names: set[str]) -> bool:
     try:
         return any(sym.name in state_names for sym in _sympify(expr, state_names).free_symbols)
-    except Exception:
+    except (TypeError, ValueError, sp.SympifyError):
         return True
 
 

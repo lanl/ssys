@@ -68,10 +68,10 @@ jax = [
 ]
 
 [project.urls]
-Homepage = "https://lisdi-git.lanl.gov/hlavacek/ssys"
-Documentation = "https://lisdi-git.lanl.gov/hlavacek/ssys/-/blob/main/README.md"
-Repository = "https://lisdi-git.lanl.gov/hlavacek/ssys"
-Issues = "https://lisdi-git.lanl.gov/hlavacek/ssys/-/issues"
+Homepage = "https://github.com/lanl/ssys"
+Documentation = "https://github.com/lanl/ssys/blob/main/README.md"
+Repository = "https://github.com/lanl/ssys"
+Issues = "https://github.com/lanl/ssys/issues"
 
 [project.scripts]
 ssys-recast = "ssys.cli:main"
@@ -84,6 +84,11 @@ include = [
     "/src",
     "/tests",
     "/README.md",
+    "/CHANGELOG.md",
+    "/CONTRIBUTING.md",
+    "/CODE_OF_CONDUCT.md",
+    "/RECASTING.md",
+    "/TEST_MODELS.md",
     "/LICENSE",
     "/CITATION.cff",
 ]

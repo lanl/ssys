@@ -31,6 +31,19 @@ from ssys.recaster import (
 )
 
 
+def test_public_parsing_and_formatting_shims_hide_private_helpers():
+    """Focused public modules should not re-export underscore-prefixed internals."""
+    import ssys.formatting as formatting
+    import ssys.parsing as parsing
+
+    assert "_antimony_to_sympy_syntax" not in parsing.__all__
+    assert "_sympy_to_antimony_syntax" not in parsing.__all__
+    assert "_format_antimony_token" not in formatting.__all__
+    assert "_sanitize_antimony_name" not in formatting.__all__
+    assert not hasattr(parsing, "_antimony_to_sympy_syntax")
+    assert not hasattr(formatting, "_format_antimony_token")
+
+
 def _assert_antimony_roundtrips(output: str) -> None:
     antimony.clearPreviousLoads()
     result = antimony.loadAntimonyString(output)

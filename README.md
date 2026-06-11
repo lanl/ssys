@@ -3,6 +3,8 @@
 
 This toolkit converts ordinary differential equation (ODE) models into **S‑System** or **GMA** form and writes the result back to Antimony. The command-line interface batch-processes **Antimony** models and generates **Jupyter notebook** verification reports; the Python library can also parse SBML files directly.
 
+**Release maturity:** ssys is currently published as alpha software. Treat the APIs and generated report format as subject to change until the release gates in `dev/punchlist.md` are closed.
+
 ---
 
 ## Contents
@@ -188,8 +190,9 @@ See [TEST_MODELS.md](TEST_MODELS.md) for complete model documentation and [RECAS
 The full integration test suite validates all 117 models in both modes:
 
 ```bash
-# Run full integration suite (~3 min)
-pytest tests/test_integration.py -v
+# Run full integration suite (~3 min; requires the DAE extra)
+uv sync --extra dev --extra dae
+pytest tests/test_integration.py -m slow -v
 
 # Skip slow integration tests during rapid development
 pytest -m "not slow"

@@ -41,7 +41,7 @@ def recast_file(
     out_dir: str,
     mode: str = "simplified",
     validate: bool = False,
-    parser: str = "legacy",
+    parser: str = "sbml",
 ) -> tuple[str, str, str, str | None]:
     """
     Recast a single Antimony file to S-system form.
@@ -51,9 +51,9 @@ def recast_file(
         out_dir: Output directory for recast file
         mode: Output mode ('simplified' or 'canonical')
         validate: Whether to run validation tests
-        parser: Parser to use ('legacy' or 'sbml')
-            - 'legacy': Hand-rolled regex parser (current behavior)
+        parser: Parser to use ('sbml' or 'legacy')
             - 'sbml': RoadRunner → SBML → libSBML (reference Antimony parser)
+            - 'legacy': Hand-rolled regex parser retained for explicit compatibility use
 
     Returns:
         Tuple of (model_name, input_path, output_path, validation_json_path)
