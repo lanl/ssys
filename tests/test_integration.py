@@ -17,6 +17,7 @@ import sys
 from importlib.util import find_spec
 from pathlib import Path
 
+import nbformat
 import pytest
 
 # Test model directories (relative to project root)
@@ -27,6 +28,63 @@ MODES = ["simplified", "canonical"]
 def get_project_root() -> Path:
     """Get the project root directory."""
     return Path(__file__).parent.parent
+
+
+@pytest.mark.integration
+def test_cli_recasts_tiny_manifest_as_subprocess(tmp_path: Path):
+    """Fast integration test for the real CLI, manifest resolution, and artifacts."""
+    model = tmp_path / "decay.ant"
+    model.write_text("""
+        X' = -k*X
+        k = 0.5
+        X = 1.0
+    """)
+    manifest = tmp_path / "models.manifest"
+    manifest.write_text("decay.ant\n")
+    outdir = tmp_path / "out"
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "ssys.cli",
+        "--manifest",
+        str(manifest),
+        "--outdir",
+        str(outdir),
+        "--mode",
+        "simplified",
+        "--parser",
+        "legacy",
+    ]
+
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        cwd=get_project_root(),
+        timeout=30,
+    )
+
+    assert result.returncode == 0, (
+        f"Command failed: {' '.join(cmd)}\nSTDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
+    )
+    assert "Processing 1 model(s)" in result.stdout
+
+    output = outdir / "decay_recast.ant"
+    assert output.exists()
+    output_text = output.read_text()
+    assert "model decay_recast" in output_text
+    assert "S-SYSTEM DYNAMICS" in output_text
+    assert "Z_1' =" in output_text
+    assert "X :=" in output_text
+
+    notebook = outdir / "recast_report.ipynb"
+    nb = nbformat.read(notebook, as_version=4)
+    markdown = "\n".join(cell.source for cell in nb.cells if cell.cell_type == "markdown")
+    code = "\n".join(cell.source for cell in nb.cells if cell.cell_type == "code")
+    assert "## decay" in markdown
+    assert "load_and_report" in code
+    assert "decay_recast.ant" in code
 
 
 @pytest.mark.integration

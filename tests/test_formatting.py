@@ -20,6 +20,7 @@ from ssys.recaster import (
     build_sym_system,
     classify_result,
     classify_solver_requirement,
+    classify_sym_system_solver_requirement,
     classify_system,
     gma_to_antimony,
     latex_ssys,
@@ -395,6 +396,90 @@ class TestSolverRequirementClassification:
         output = gma_to_antimony(result, model_name="solver_meta", lifted_mode="assignment")
         _assert_antimony_roundtrips(output)
         assert "@SSYS SOLVER_REQUIREMENT=ode_with_assignment_rules" in output
+
+    def test_clock_auxiliary_definition_does_not_force_assignment_solver(self):
+        T = sp.Symbol("T", positive=True)
+        time = sp.Symbol("time")
+        result = RecastResult(
+            status=RecastStatus.CANONICAL_SSYSTEM,
+            equations=[SSysEquation(T, (sp.Float(1.0), {}), (sp.Float(0.0), {}))],
+            initials={T: 0.0},
+            variables=[T],
+            factor_map={T: [T]},
+            auxiliary_defs={T: time},
+        )
+
+        assert classify_solver_requirement(result) == SolverRequirement.ODE_ONLY
+
+    def test_uncoupled_algebraic_constraint_does_not_force_dae(self):
+        Z = sp.Symbol("Z_1", positive=True)
+        result = RecastResult(
+            status=RecastStatus.CANONICAL_SSYSTEM,
+            equations=[
+                SSysEquation(Z, (sp.Float(1.0), {Z: 1.0}), (sp.Float(0.5), {Z: 2.0}))
+            ],
+            initials={Z: 1.0},
+            variables=[Z],
+            factor_map={Z: [Z]},
+            algebraic_constraints=["observable - 1"],
+        )
+
+        assert classify_solver_requirement(result) == SolverRequirement.ODE_ONLY
+
+    def test_assignment_rule_targeting_state_requires_dae(self):
+        Z = sp.Symbol("Z_1", positive=True)
+        result = RecastResult(
+            status=RecastStatus.CANONICAL_SSYSTEM,
+            equations=[],
+            initials={Z: 1.0},
+            variables=[Z],
+            factor_map={Z: [Z]},
+            assignment_rules={"Z_1": "observable + 1"},
+        )
+
+        assert classify_solver_requirement(result) == SolverRequirement.DAE_REQUIRED
+
+    def test_lifted_ode_mode_state_dependent_auxiliary_requires_dae(self):
+        X = sp.Symbol("X", positive=True)
+        Y = sp.Symbol("Y_1", positive=True)
+        K = sp.Symbol("K", positive=True)
+        result = RecastResult(
+            status=RecastStatus.GMA,
+            equations=[],
+            initials={X: 1.0, Y: 2.0},
+            variables=[X, Y],
+            gma_equations=[GMAEquation(X, [(sp.Float(1.0), {X: 1.0, Y: -1.0})], [])],
+            params={"K": 1.0},
+            auxiliary_defs={Y: X + K},
+        )
+
+        assert classify_solver_requirement(result) == SolverRequirement.DAE_REQUIRED
+
+    def test_sym_system_non_state_assignment_rule_uses_assignment_solver(self):
+        X = sp.Symbol("X", positive=True)
+        sym = SymSystem(
+            vars=[X],
+            params={"k": 0.5},
+            odes={X: sp.Symbol("rate")},
+            initials={X: 1.0},
+            assignment_rules={"rate": "k * X"},
+        )
+
+        assert classify_sym_system_solver_requirement(sym) == (
+            SolverRequirement.ODE_WITH_ASSIGNMENT_RULES
+        )
+
+    def test_sym_system_state_assignment_rule_requires_dae(self):
+        X = sp.Symbol("X", positive=True)
+        sym = SymSystem(
+            vars=[X],
+            params={},
+            odes={X: -X},
+            initials={X: 1.0},
+            assignment_rules={"X": "1"},
+        )
+
+        assert classify_sym_system_solver_requirement(sym) == SolverRequirement.DAE_REQUIRED
 
 
 class TestAntimonyExport:
