@@ -16,6 +16,7 @@ Main components:
 from ssys.recaster import (
     ModelIR,
     RecastResult,
+    SBMLParseError,
     SSysEquation,
     SymSystem,
     SystemClass,
@@ -34,6 +35,7 @@ __all__ = [
     "ModelIR",
     "SymSystem",
     "RecastResult",
+    "SBMLParseError",
     "SSysEquation",
     "SystemClass",
     "parse_antimony",

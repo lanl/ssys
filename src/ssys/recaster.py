@@ -11,8 +11,10 @@ prime_rule_pat = re.compile(r"^\s*\$?([A-Za-z_]\w*)\s*'\s*=\s*(.+)$")
 #           f(x) := (1 - delta) * (1 - s(x)) + delta
 #           M(x) := 1 + gam * h * x^(h - 1) / (1 + x^h)^2
 func_def_pat = re.compile(r"^([A-Za-z_]\w*)\s*\(([^)]*)\)\s*:=\s*(.+)$")
-# Pattern to detect function calls in expressions: name(arg1, arg2, ...)
-func_call_pat = re.compile(r"([A-Za-z_]\w*)\s*\(([^()]*)\)")
+# Pattern to detect the start of function calls in expressions: name(
+func_call_start_pat = re.compile(r"\b([A-Za-z_]\w*)\s*\(")
+simple_identifier_pat = re.compile(r"^[A-Za-z_]\w*$")
+simple_numeric_literal_pat = re.compile(r"^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$")
 
 EPS_INIT = 1e-6
 EPS_SLACK = 1.0  # Default slack for canonical mode
@@ -231,49 +233,70 @@ def _expand_function_calls(
         return expr_str
 
     result = expr_str
-    changed = True
 
-    while changed and max_depth > 0:
-        changed = False
+    while max_depth > 0:
         max_depth -= 1
 
-        # Find all function calls in the expression
-        # We need to handle nested parentheses carefully
-        # Use an iterative approach: find innermost function calls first
+        call = _find_next_template_call(result, function_templates)
+        if call is None:
+            break
 
-        for match in list(func_call_pat.finditer(result)):
-            func_name = match.group(1)
-            args_str = match.group(2).strip()
+        start, end, func_name, args = call
+        params, body = function_templates[func_name]
 
-            # Check if this is a known function template
-            if func_name not in function_templates:
-                continue  # Skip built-in functions like sin, cos, exp, etc.
+        # Perform substitution: replace each param with corresponding arg
+        expanded = body
+        for param, arg in zip(params, args, strict=False):
+            # Use word boundary replacement to avoid partial matches
+            # e.g., replacing 'x' shouldn't affect 'x1' or 'exp'
+            expanded = _substitute_param(expanded, param, arg)
 
-            params, body = function_templates[func_name]
+        # Wrap in parentheses to preserve operator precedence
+        expanded = f"({expanded})"
 
-            # Parse arguments (split by comma, handling nested parentheses)
-            args = _parse_function_args(args_str)
-
-            # Check argument count matches parameter count
-            if len(args) != len(params):
-                continue  # Skip if argument count doesn't match
-
-            # Perform substitution: replace each param with corresponding arg
-            expanded = body
-            for param, arg in zip(params, args, strict=False):
-                # Use word boundary replacement to avoid partial matches
-                # e.g., replacing 'x' shouldn't affect 'x1' or 'exp'
-                expanded = _substitute_param(expanded, param, arg)
-
-            # Wrap in parentheses to preserve operator precedence
-            expanded = f"({expanded})"
-
-            # Replace the function call with the expanded body
-            result = result[: match.start()] + expanded + result[match.end() :]
-            changed = True
-            break  # Start over after each substitution to handle nested calls
+        # Replace the function call with the expanded body
+        result = result[:start] + expanded + result[end:]
 
     return result
+
+
+def _find_next_template_call(
+    expr_str: str, function_templates: dict[str, tuple[list[str], str]]
+) -> tuple[int, int, str, list[str]] | None:
+    """Find the next expandable template call, handling balanced parentheses."""
+    for match in func_call_start_pat.finditer(expr_str):
+        func_name = match.group(1)
+        if func_name not in function_templates:
+            continue
+
+        paren_start = match.end() - 1
+        paren_end = _find_matching_paren(expr_str, paren_start)
+        if paren_end is None:
+            continue
+
+        args_str = expr_str[paren_start + 1 : paren_end]
+        args = _parse_function_args(args_str)
+        params, _body = function_templates[func_name]
+        if len(args) != len(params):
+            continue
+
+        return match.start(), paren_end + 1, func_name, args
+
+    return None
+
+
+def _find_matching_paren(text: str, paren_start: int) -> int | None:
+    """Return the index of the closing parenthesis matching paren_start."""
+    depth = 0
+    for idx in range(paren_start, len(text)):
+        char = text[idx]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth == 0:
+                return idx
+    return None
 
 
 def _parse_function_args(args_str: str) -> list[str]:
@@ -322,11 +345,63 @@ def _substitute_param(body: str, param: str, arg: str) -> str:
     - "x^h" → "x1^h" (variable with exponent)
     - Does NOT change "exp" when replacing "x"
     """
+    replacement = _format_function_argument_for_substitution(arg)
+
     # Build a regex pattern that matches the parameter as a whole word
     # Word boundaries include: start/end of string, operators, parentheses, spaces
     # Use negative lookbehind and lookahead for alphanumerics and underscore
     pattern = r"(?<![A-Za-z_\d])" + re.escape(param) + r"(?![A-Za-z_\d])"
-    return re.sub(pattern, arg, body)
+    return re.sub(pattern, replacement, body)
+
+
+def _format_function_argument_for_substitution(arg: str) -> str:
+    """Parenthesize non-atomic function arguments before template substitution."""
+    stripped = arg.strip()
+    if simple_identifier_pat.match(stripped) or simple_numeric_literal_pat.match(stripped):
+        return stripped
+    return f"({stripped})"
+
+
+def expand_antimony_function_templates(text: str) -> str:
+    """
+    Expand legacy Antimony-style function templates in executable model text.
+
+    This handles paper-style shorthand such as ``f(x) := x/(1+x)`` before text is
+    passed to the reference Antimony parser, which does not accept that syntax.
+    """
+    function_templates: dict[str, tuple[list[str], str]] = {}
+    non_template_lines: list[str] = []
+
+    for raw_line in text.splitlines():
+        code, comment_sep, comment = raw_line.partition("//")
+        stmt = code.strip().rstrip(";").strip()
+        func_match = func_def_pat.match(stmt)
+        if func_match:
+            func_name = func_match.group(1)
+            params_str = func_match.group(2).strip()
+            body = func_match.group(3).strip().rstrip(";").strip()
+            params = [p.strip() for p in params_str.split(",") if p.strip()]
+            function_templates[func_name] = (params, body)
+            if comment_sep:
+                non_template_lines.append(comment_sep + comment)
+            else:
+                non_template_lines.append("")
+            continue
+        non_template_lines.append(raw_line)
+
+    if not function_templates:
+        return text
+
+    expanded_lines: list[str] = []
+    for raw_line in non_template_lines:
+        code, comment_sep, comment = raw_line.partition("//")
+        stripped = code.strip()
+        lower = stripped.lower()
+        if stripped and not lower.startswith("model ") and lower != "end":
+            code = _expand_function_calls(code, function_templates)
+        expanded_lines.append(code + (comment_sep + comment if comment_sep else ""))
+
+    return "\n".join(expanded_lines)
 
 
 def tokenize_species_side(side: str) -> list[tuple[int, str]]:
@@ -411,6 +486,46 @@ class ModelIR:
     # Function templates: name -> (param_list, expression_body)
     # e.g., "M" -> (["x"], "1 + gam * h * x^(h-1) / (1 + x^h)^2")
     function_templates: dict[str, tuple[list[str], str]] = field(default_factory=dict)
+
+
+class SBMLParseError(ValueError):
+    """Structured SBML math parse/evaluation error."""
+
+    def __init__(
+        self,
+        kind: str,
+        formula: str | None,
+        message: str,
+        *,
+        source: str,
+        reaction_id: str | None = None,
+        reaction_name: str | None = None,
+        variable: str | None = None,
+    ) -> None:
+        self.kind = kind
+        self.formula = formula
+        self.message = message
+        self.source = source
+        self.reaction_id = reaction_id
+        self.reaction_name = reaction_name
+        self.variable = variable
+        super().__init__(self._format_message())
+
+    def _format_message(self) -> str:
+        if self.kind == "kinetic_law":
+            context = f"reaction {self.reaction_id or '<unnamed>'}"
+            if self.reaction_name:
+                context += f" ({self.reaction_name})"
+            target = f"kinetic law in {context}"
+        elif self.kind == "rate_rule":
+            target = f"rate rule for variable {self.variable or '<unknown>'}"
+        elif self.kind == "initial_assignment":
+            target = f"initial assignment for symbol {self.variable or '<unknown>'}"
+        else:
+            target = self.kind
+
+        formula = self.formula if self.formula not in (None, "") else "<none>"
+        return f"Failed to parse SBML {target} in {self.source}: formula {formula!r}: {self.message}"
 
 
 def _antimony_to_sympy_syntax(expr_str: str) -> str:
@@ -629,7 +744,7 @@ def parse_antimony(text: str) -> ModelIR:
             if func_match:
                 func_name = func_match.group(1)
                 params_str = func_match.group(2).strip()
-                body = func_match.group(3).strip()
+                body = _antimony_to_sympy_syntax(func_match.group(3).strip())
                 # Parse parameter list
                 params = [p.strip() for p in params_str.split(",") if p.strip()]
                 # Store as function template
@@ -726,7 +841,9 @@ def _preprocess_antimony_text(text: str) -> str:
     return text
 
 
-def parse_antimony_via_sbml(antimony_text: str) -> "SymSystem":
+def parse_antimony_via_sbml(
+    antimony_text: str, *, warn_initial_assignment_failures: bool = False
+) -> "SymSystem":
     """
     Parse Antimony text using the Antimony library (SBML-first approach).
 
@@ -786,7 +903,9 @@ def parse_antimony_via_sbml(antimony_text: str) -> "SymSystem":
         raise ValueError(f"Antimony library failed: {e}")
 
     # Parse SBML string using existing infrastructure
-    sym = parse_sbml_from_string(sbml_string)
+    sym = parse_sbml_from_string(
+        sbml_string, warn_initial_assignment_failures=warn_initial_assignment_failures
+    )
 
     # Attach simulation metadata if found
     # These public attributes are used by the validator for trajectory tests
@@ -802,7 +921,9 @@ def parse_antimony_via_sbml(antimony_text: str) -> "SymSystem":
     return sym
 
 
-def parse_sbml_from_string(sbml_string: str) -> "SymSystem":
+def parse_sbml_from_string(
+    sbml_string: str, *, warn_initial_assignment_failures: bool = False
+) -> "SymSystem":
     """
     Parse an SBML string and return a SymSystem for recasting.
 
@@ -810,6 +931,8 @@ def parse_sbml_from_string(sbml_string: str) -> "SymSystem":
 
     Args:
         sbml_string: SBML model as string
+        warn_initial_assignment_failures: If true, invalid InitialAssignments are warned
+            and the parser keeps existing defaults. The default raises.
 
     Returns:
         SymSystem ready for recasting
@@ -829,10 +952,14 @@ def parse_sbml_from_string(sbml_string: str) -> "SymSystem":
     doc = libsbml.readSBMLFromString(sbml_string)
 
     # Delegate to shared implementation
-    return _parse_sbml_document(doc, source="<string>")
+    return _parse_sbml_document(
+        doc,
+        source="<string>",
+        warn_initial_assignment_failures=warn_initial_assignment_failures,
+    )
 
 
-def parse_sbml(sbml_path: str) -> "SymSystem":
+def parse_sbml(sbml_path: str, *, warn_initial_assignment_failures: bool = False) -> "SymSystem":
     """
     Parse an SBML file and return a SymSystem for recasting.
 
@@ -847,6 +974,8 @@ def parse_sbml(sbml_path: str) -> "SymSystem":
 
     Args:
         sbml_path: Path to SBML file (.xml)
+        warn_initial_assignment_failures: If true, invalid InitialAssignments are warned
+            and the parser keeps existing defaults. The default raises.
 
     Returns:
         SymSystem ready for recasting
@@ -866,16 +995,163 @@ def parse_sbml(sbml_path: str) -> "SymSystem":
     doc = libsbml.readSBML(sbml_path)
 
     # Delegate to shared implementation
-    return _parse_sbml_document(doc, source=sbml_path)
+    return _parse_sbml_document(
+        doc,
+        source=sbml_path,
+        warn_initial_assignment_failures=warn_initial_assignment_failures,
+    )
 
 
-def _parse_sbml_document(doc, source: str = "<unknown>") -> "SymSystem":
+def _sympify_sbml_formula(
+    formula_str: str | None,
+    all_syms: dict[str, sp.Symbol],
+    *,
+    source: str,
+    kind: str,
+    reaction_id: str | None = None,
+    reaction_name: str | None = None,
+    variable: str | None = None,
+) -> sp.Expr:
+    """Parse an SBML formula string as a numeric SymPy expression or raise with context."""
+    if formula_str in (None, ""):
+        raise SBMLParseError(
+            kind,
+            formula_str,
+            "missing math formula",
+            source=source,
+            reaction_id=reaction_id,
+            reaction_name=reaction_name,
+            variable=variable,
+        )
+
+    try:
+        expr = sp.sympify(formula_str, locals=all_syms)
+    except Exception as exc:
+        raise SBMLParseError(
+            kind,
+            formula_str,
+            str(exc),
+            source=source,
+            reaction_id=reaction_id,
+            reaction_name=reaction_name,
+            variable=variable,
+        )
+
+    if not isinstance(expr, sp.Expr):
+        raise SBMLParseError(
+            kind,
+            formula_str,
+            f"expected numeric expression, got {type(expr).__name__}",
+            source=source,
+            reaction_id=reaction_id,
+            reaction_name=reaction_name,
+            variable=variable,
+        )
+
+    return expr
+
+
+def _warn_or_raise_initial_assignment_error(
+    error: SBMLParseError, warn_initial_assignment_failures: bool
+) -> None:
+    if warn_initial_assignment_failures:
+        import warnings
+
+        warnings.warn(str(error), RuntimeWarning, stacklevel=2)
+        return
+    raise error
+
+
+def _reaction_scope_name(rxn, reaction_index: int) -> str:
+    raw = rxn.getId() or rxn.getName() or f"reaction_{reaction_index + 1}"
+    return _sanitize_sbml_identifier(raw, fallback=f"reaction_{reaction_index + 1}")
+
+
+def _sanitize_sbml_identifier(value: str, *, fallback: str = "id") -> str:
+    sanitized = re.sub(r"\W", "_", value.strip())
+    sanitized = re.sub(r"_+", "_", sanitized).strip("_")
+    if not sanitized:
+        sanitized = fallback
+    if not re.match(r"^[A-Za-z_]", sanitized):
+        sanitized = f"_{sanitized}"
+    return sanitized
+
+
+def _unique_identifier(base: str, used: set[str]) -> str:
+    if base not in used:
+        return base
+    idx = 2
+    while f"{base}_{idx}" in used:
+        idx += 1
+    return f"{base}_{idx}"
+
+
+def _iter_kinetic_law_local_parameters(kinetic_law) -> list:
+    if hasattr(kinetic_law, "getNumLocalParameters") and kinetic_law.getNumLocalParameters() > 0:
+        return [
+            kinetic_law.getLocalParameter(i)
+            for i in range(kinetic_law.getNumLocalParameters())
+        ]
+    return [kinetic_law.getParameter(i) for i in range(kinetic_law.getNumParameters())]
+
+
+def _replace_formula_identifiers(formula_str: str, replacements: dict[str, str]) -> str:
+    result = formula_str
+    for old_name, new_name in replacements.items():
+        if not old_name:
+            continue
+        pattern = r"(?<![A-Za-z_\d])" + re.escape(old_name) + r"(?![A-Za-z_\d])"
+        result = re.sub(pattern, new_name, result)
+    return result
+
+
+def _evaluate_initial_assignment(
+    formula_str: str | None,
+    all_syms: dict[str, sp.Symbol],
+    params: dict[str, float],
+    *,
+    source: str,
+    variable: str,
+    warn_initial_assignment_failures: bool,
+) -> float | None:
+    try:
+        init_expr = _sympify_sbml_formula(
+            formula_str,
+            all_syms,
+            source=source,
+            kind="initial_assignment",
+            variable=variable,
+        )
+        for param_name, param_val in params.items():
+            if param_name != variable and param_name in all_syms:
+                init_expr = init_expr.subs(all_syms[param_name], param_val)
+        return float(init_expr)
+    except SBMLParseError as exc:
+        _warn_or_raise_initial_assignment_error(exc, warn_initial_assignment_failures)
+    except Exception as exc:
+        error = SBMLParseError(
+            "initial_assignment",
+            formula_str,
+            str(exc),
+            source=source,
+            variable=variable,
+        )
+        _warn_or_raise_initial_assignment_error(error, warn_initial_assignment_failures)
+
+    return None
+
+
+def _parse_sbml_document(
+    doc, source: str = "<unknown>", *, warn_initial_assignment_failures: bool = False
+) -> "SymSystem":
     """
     Shared implementation for parsing an SBML document.
 
     Args:
         doc: libsbml.SBMLDocument object
         source: Description of source for error messages
+        warn_initial_assignment_failures: If true, invalid InitialAssignments are warned
+            and the parser keeps existing defaults. The default raises.
 
     Returns:
         SymSystem ready for recasting
@@ -933,18 +1209,31 @@ def _parse_sbml_document(doc, source: str = "<unknown>") -> "SymSystem":
         else:
             params[pid] = 0.0
 
-    # Local parameters (from kinetic laws)
+    # Local parameters (from kinetic laws) are scoped to their reaction.
+    # Same-named locals in different reactions must not overwrite each other.
+    reaction_local_param_maps: dict[int, dict[str, str]] = {}
+    used_param_ids = set(params) | set(species_info)
     for i in range(model.getNumReactions()):
         rxn = model.getReaction(i)
         kl = rxn.getKineticLaw()
         if kl:
-            for j in range(kl.getNumParameters()):
-                lp = kl.getParameter(j)
+            scope = _reaction_scope_name(rxn, i)
+            local_map: dict[str, str] = {}
+            for lp in _iter_kinetic_law_local_parameters(kl):
                 lpid = lp.getId()
+                if not lpid:
+                    continue
+                scoped_id = _unique_identifier(
+                    f"{scope}__{_sanitize_sbml_identifier(lpid, fallback='local')}",
+                    used_param_ids,
+                )
+                used_param_ids.add(scoped_id)
+                local_map[lpid] = scoped_id
                 if lp.isSetValue():
-                    params[lpid] = lp.getValue()
+                    params[scoped_id] = lp.getValue()
                 else:
-                    params[lpid] = 0.0
+                    params[scoped_id] = 0.0
+            reaction_local_param_maps[i] = local_map
 
     # ========================================================================
     # STEP 3: Extract compartments
@@ -1002,13 +1291,19 @@ def _parse_sbml_document(doc, source: str = "<unknown>") -> "SymSystem":
             continue
 
         formula_str = libsbml.formulaToString(math)
+        formula_str = _replace_formula_identifiers(
+            formula_str, reaction_local_param_maps.get(i, {})
+        )
 
         # Parse rate expression
-        try:
-            rate_expr = sp.sympify(formula_str, locals=all_syms)
-        except Exception:
-            # Skip reactions with unparseable rate laws
-            continue
+        rate_expr = _sympify_sbml_formula(
+            formula_str,
+            all_syms,
+            source=source,
+            kind="kinetic_law",
+            reaction_id=rxn.getId() or None,
+            reaction_name=rxn.getName() or None,
+        )
 
         # Process reactants (subtract from ODE)
         for j in range(rxn.getNumReactants()):
@@ -1041,13 +1336,16 @@ def _parse_sbml_document(doc, source: str = "<unknown>") -> "SymSystem":
             formula_str = libsbml.formulaToString(rule.getMath())
 
             if var_id in all_syms:
-                try:
-                    rate_expr = sp.sympify(formula_str, locals=all_syms)
-                    var_sym = all_syms[var_id]
-                    # Rate rules replace the reaction-based ODE
-                    odes[var_sym] = rate_expr
-                except Exception:
-                    pass
+                rate_expr = _sympify_sbml_formula(
+                    formula_str,
+                    all_syms,
+                    source=source,
+                    kind="rate_rule",
+                    variable=var_id,
+                )
+                var_sym = all_syms[var_id]
+                # Rate rules replace the reaction-based ODE
+                odes[var_sym] = rate_expr
 
     # ========================================================================
     # STEP 6a: Handle assignment rules (V_1 := expression)
@@ -1081,31 +1379,40 @@ def _parse_sbml_document(doc, source: str = "<unknown>") -> "SymSystem":
         formula_str = libsbml.formulaToString(ia.getMath())
 
         if var_id in species_info:
-            try:
-                # Evaluate the formula with known parameters
-                init_expr = sp.sympify(formula_str, locals=all_syms)
-                # Substitute parameter values using correct symbols from all_syms
-                for param_name, param_val in params.items():
-                    if param_name in all_syms:
-                        init_expr = init_expr.subs(all_syms[param_name], param_val)
-                # Update the species initial value
-                species_info[var_id]["init"] = float(init_expr)
-            except Exception:
-                pass  # Keep default if evaluation fails
+            init_value = _evaluate_initial_assignment(
+                formula_str,
+                all_syms,
+                params,
+                source=source,
+                variable=var_id,
+                warn_initial_assignment_failures=warn_initial_assignment_failures,
+            )
+            if init_value is not None:
+                species_info[var_id]["init"] = init_value
 
         elif var_id in params:
             # Handle parameter expressions like gamma_rate = 1/7
-            try:
-                # Evaluate the formula
-                init_expr = sp.sympify(formula_str, locals=all_syms)
-                # Substitute known parameter values
-                for param_name, param_val in params.items():
-                    if param_name != var_id and param_name in all_syms:
-                        init_expr = init_expr.subs(all_syms[param_name], param_val)
-                # Update the parameter value
-                params[var_id] = float(init_expr)
-            except Exception:
-                pass  # Keep default if evaluation fails
+            init_value = _evaluate_initial_assignment(
+                formula_str,
+                all_syms,
+                params,
+                source=source,
+                variable=var_id,
+                warn_initial_assignment_failures=warn_initial_assignment_failures,
+            )
+            if init_value is not None:
+                params[var_id] = init_value
+        elif var_id in compartments:
+            init_value = _evaluate_initial_assignment(
+                formula_str,
+                all_syms,
+                params,
+                source=source,
+                variable=var_id,
+                warn_initial_assignment_failures=warn_initial_assignment_failures,
+            )
+            if init_value is not None:
+                compartments[var_id] = init_value
 
     # ========================================================================
     # STEP 7: Build SymSystem
@@ -1239,7 +1546,7 @@ def build_sym_system(ir: ModelIR) -> SymSystem:
     # Parse assignment rules into symbolic expressions
     # Handle nested rules by expanding iteratively until stable
     assignment_exprs: dict[str, sp.Expr] = {}
-    for name, expr_str in ir.assignment_rules.items():
+    for name, expr_str in expanded_assignment_rules.items():
         assignment_exprs[name] = sp.sympify(expr_str, locals={**var_syms, **param_syms})
 
     # Expand nested assignment rules (rule A may reference rule B)
@@ -1259,7 +1566,8 @@ def build_sym_system(ir: ModelIR) -> SymSystem:
 
     odes: dict[sp.Symbol, sp.Expr] = {var_syms[nm]: sp.Integer(0) for nm in var_syms}
     for rxn in ir.reactions:
-        rate = sp.sympify(rxn.rate_expr, locals={**var_syms, **param_syms})
+        rate_expr = _expand_function_calls(rxn.rate_expr, ir.function_templates)
+        rate = sp.sympify(rate_expr, locals={**var_syms, **param_syms})
         # NOTE: Do NOT substitute assignment rules into rate expressions
         # This preserves the compact form with rule names (like k_23) instead of expanded expressions
         # Assignment rules are passed through to the final output unchanged
@@ -1301,7 +1609,7 @@ def build_sym_system(ir: ModelIR) -> SymSystem:
         odes=odes,
         initials=initials,
         initial_exprs=initial_exprs,
-        assignment_rules=dict(ir.assignment_rules),  # Pass through from ModelIR
+        assignment_rules=expanded_assignment_rules,  # Pass through expanded legacy templates
     )
 
 

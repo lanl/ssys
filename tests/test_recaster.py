@@ -15,6 +15,29 @@ from ssys import (
 )
 
 
+def _minimal_sbml(
+    *,
+    species: str,
+    reactions: str = "",
+    rules: str = "",
+    initial_assignments: str = "",
+) -> str:
+    return f"""<?xml version="1.0" encoding="UTF-8"?>
+<sbml xmlns="http://www.sbml.org/sbml/level3/version2/core" level="3" version="2">
+  <model id="m" substanceUnits="mole" timeUnits="second" extentUnits="mole">
+    <listOfCompartments>
+      <compartment id="cell" spatialDimensions="3" size="1" units="litre" constant="true"/>
+    </listOfCompartments>
+    <listOfSpecies>
+{species}
+    </listOfSpecies>
+{reactions}
+{rules}
+{initial_assignments}
+  </model>
+</sbml>"""
+
+
 class TestAntimonyParser:
     """Tests for Antimony parsing."""
 
@@ -45,6 +68,58 @@ class TestAntimonyParser:
         assert "X" in ir.species
         assert "X" in ir.explicit_rates
         assert ir.explicit_rates["X"] == "-k*X"
+
+    def test_function_template_substitution_parenthesizes_expression_arguments(self):
+        """Regression: f(x+1) must not become X + 1/(X + 2)."""
+        text = """
+        f(x) := x/(1+x)
+        g(x) := f(x+1)
+        X' = g(X)
+        X = 1.0
+        """
+        ir = parse_antimony(text)
+        sym = build_sym_system(ir)
+
+        X = sp.Symbol("X", positive=True)
+        expected = (X + 1) / (X + 2)
+
+        assert sp.simplify(sym.odes[X] - expected) == 0
+
+    def test_nested_multi_argument_function_templates_still_expand(self):
+        """Nested calls and multi-argument templates use the shared expander."""
+        text = """
+        f(x, y) := x/(1+y)
+        g(x) := f(x+1, x*2)
+        X' = g(X)
+        X = 1.0
+        """
+        ir = parse_antimony(text)
+        sym = build_sym_system(ir)
+
+        X = sp.Symbol("X", positive=True)
+        expected = (X + 1) / (1 + 2 * X)
+
+        assert sp.simplify(sym.odes[X] - expected) == 0
+
+    def test_roadrunner_preprocessor_uses_shared_function_expansion(self):
+        """RoadRunner backend expands legacy templates before Antimony parsing."""
+        import antimony
+
+        from ssys.ode_backends.roadrunner_backend import _expand_parametric_functions
+
+        text = """
+        model ftest
+          f(x) := x/(1+x)
+          g(x) := f(x+1)
+          X' = g(X)
+          X = 1
+        end
+        """
+        expanded = _expand_parametric_functions(text)
+
+        assert ":=" not in expanded
+        antimony.clearPreviousLoads()
+        assert antimony.loadAntimonyString(expanded) >= 0, antimony.getLastError()
 
 
 class TestSymbolicSystem:
@@ -472,6 +547,170 @@ class TestSbmlParserIcHandling:
     conditions may end up in the params dict instead of the initials dict.
     These tests ensure the recaster handles this correctly.
     """
+
+    def test_unparseable_kinetic_law_raises_structured_error(self, monkeypatch):
+        """An unparseable reaction rate must not be silently dropped."""
+        import libsbml
+
+        from ssys.recaster import SBMLParseError, parse_sbml_from_string
+
+        species = """
+      <species id="S" compartment="cell" initialAmount="1" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="P" compartment="cell" initialAmount="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        reactions = """
+    <listOfReactions>
+      <reaction id="J_bad" name="bad reaction" reversible="false">
+        <listOfReactants>
+          <speciesReference species="S" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="P" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><times/><ci> S </ci><cn> 1 </cn></apply>
+          </math>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>"""
+        sbml = _minimal_sbml(species=species, reactions=reactions)
+
+        monkeypatch.setattr(libsbml, "formulaToString", lambda _math: "bad +")
+
+        with pytest.raises(SBMLParseError) as exc_info:
+            parse_sbml_from_string(sbml)
+
+        err = exc_info.value
+        assert err.kind == "kinetic_law"
+        assert err.reaction_id == "J_bad"
+        assert err.reaction_name == "bad reaction"
+        assert err.formula == "bad +"
+
+    def test_unparseable_rate_rule_raises_structured_error(self, monkeypatch):
+        """An unparseable rate rule must not leave the state derivative at zero."""
+        import libsbml
+
+        from ssys.recaster import SBMLParseError, parse_sbml_from_string
+
+        species = """
+      <species id="S" compartment="cell" initialAmount="1" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        rules = """
+    <listOfRules>
+      <rateRule variable="S">
+        <math xmlns="http://www.w3.org/1998/Math/MathML"><cn> 1 </cn></math>
+      </rateRule>
+    </listOfRules>"""
+        sbml = _minimal_sbml(species=species, rules=rules)
+
+        monkeypatch.setattr(libsbml, "formulaToString", lambda _math: "bad +")
+
+        with pytest.raises(SBMLParseError) as exc_info:
+            parse_sbml_from_string(sbml)
+
+        err = exc_info.value
+        assert err.kind == "rate_rule"
+        assert err.variable == "S"
+        assert err.formula == "bad +"
+
+    def test_initial_assignment_evaluation_failure_raises_by_default(self):
+        """InitialAssignment formulas fail closed unless warning mode is requested."""
+        from ssys.recaster import SBMLParseError, parse_sbml_from_string
+
+        species = """
+      <species id="S" compartment="cell" initialAmount="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        initial_assignments = """
+    <listOfInitialAssignments>
+      <initialAssignment symbol="S">
+        <math xmlns="http://www.w3.org/1998/Math/MathML"><ci> missing_param </ci></math>
+      </initialAssignment>
+    </listOfInitialAssignments>"""
+        sbml = _minimal_sbml(species=species, initial_assignments=initial_assignments)
+
+        with pytest.raises(SBMLParseError) as exc_info:
+            parse_sbml_from_string(sbml)
+
+        err = exc_info.value
+        assert err.kind == "initial_assignment"
+        assert err.variable == "S"
+        assert err.formula == "missing_param"
+
+    def test_initial_assignment_failure_can_warn_for_exploratory_mode(self):
+        """Exploratory mode keeps the previous default only when explicitly requested."""
+        from ssys.recaster import parse_sbml_from_string
+
+        species = """
+      <species id="S" compartment="cell" initialAmount="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        initial_assignments = """
+    <listOfInitialAssignments>
+      <initialAssignment symbol="S">
+        <math xmlns="http://www.w3.org/1998/Math/MathML"><ci> missing_param </ci></math>
+      </initialAssignment>
+    </listOfInitialAssignments>"""
+        sbml = _minimal_sbml(species=species, initial_assignments=initial_assignments)
+
+        with pytest.warns(RuntimeWarning, match="initial assignment"):
+            sym = parse_sbml_from_string(sbml, warn_initial_assignment_failures=True)
+
+        S = sp.Symbol("S", positive=True)
+        assert sym.initials[S] == 0.0
+
+    def test_same_named_local_parameters_are_scoped_by_reaction(self):
+        """Same local parameter ids in different reactions preserve distinct values."""
+        from ssys.recaster import parse_sbml_from_string
+
+        species = """
+      <species id="S" compartment="cell" initialAmount="1" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="P" compartment="cell" initialAmount="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        reactions = """
+    <listOfReactions>
+      <reaction id="J0" reversible="false">
+        <listOfReactants>
+          <speciesReference species="S" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="P" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><times/><ci> k </ci><ci> S </ci></apply>
+          </math>
+          <listOfLocalParameters>
+            <localParameter id="k" value="1"/>
+          </listOfLocalParameters>
+        </kineticLaw>
+      </reaction>
+      <reaction id="J1" reversible="false">
+        <listOfReactants>
+          <speciesReference species="P" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><times/><ci> k </ci><ci> P </ci></apply>
+          </math>
+          <listOfLocalParameters>
+            <localParameter id="k" value="2"/>
+          </listOfLocalParameters>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>"""
+        sbml = _minimal_sbml(species=species, reactions=reactions)
+
+        sym = parse_sbml_from_string(sbml)
+
+        assert sym.params["J0__k"] == 1.0
+        assert sym.params["J1__k"] == 2.0
+        assert "k" not in sym.params
+
+        S = sp.Symbol("S", positive=True)
+        P = sp.Symbol("P", positive=True)
+        J0_k = sp.Symbol("J0__k", positive=True)
+        J1_k = sp.Symbol("J1__k", positive=True)
+
+        assert sp.simplify(sym.odes[S] + J0_k * S) == 0
+        assert sp.simplify(sym.odes[P] - (J0_k * S - J1_k * P)) == 0
+
+        numeric_subs = {J0_k: sym.params["J0__k"], J1_k: sym.params["J1__k"]}
+        assert sp.simplify(sym.odes[P].subs(numeric_subs) - (S - 2 * P)) == 0
 
     def test_species_ic_in_params_used_for_auxiliary_ic(self):
         """Test that species ICs in params are used for auxiliary IC."""
