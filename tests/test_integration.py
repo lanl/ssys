@@ -14,6 +14,7 @@ Expected runtime: ~2-5 minutes depending on hardware
 
 import subprocess
 import sys
+from importlib.util import find_spec
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,9 @@ def test_recast_all_models(test_dir: str, mode: str, tmp_path: Path):
         mode: Recasting mode ('simplified' or 'canonical')
         tmp_path: pytest fixture providing temporary directory for output
     """
+    if find_spec("sksundae") is None:
+        pytest.skip("full manifest validation with dae_required models needs `uv sync --extra dae`")
+
     project_root = get_project_root()
     manifest = project_root / test_dir / "models.manifest"
 

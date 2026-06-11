@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 import sympy as sp
 
+from ssys.ode_backends.ida_sundials_backend import IDASundialsUnavailable
 from ssys.recaster import SolverRequirement, SystemClass
 from ssys.validator import (
     EquivalenceTest,
@@ -369,6 +370,54 @@ class TestSolverAwareValidation:
         assert result.result == ValidationResult.UNSUPPORTED
         assert "unsupported dae_required" in result.details
         assert result.metadata["recast_backend"] == "dae_projection"
+
+    def test_dae_required_missing_ida_dependency_is_unsupported(self, tmp_path, monkeypatch):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                // @SSYS SOLVER_REQUIREMENT=dae_required
+                species X;
+                Y_1 := X + 1;
+                X' = -k*X;
+                k = 0.5;
+                X = 1;
+            end
+        """)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+
+        def fake_simulate_ode(*args, **kwargs):
+            return {
+                "success": True,
+                "t": np.array([0.0, 1.0]),
+                "y": np.array([[1.0], [0.5]]),
+                "state_names": ["X"],
+                "message": "",
+                "integrator_stats": {},
+            }
+
+        def missing_ida():
+            raise IDASundialsUnavailable("scikit-SUNDAE is not installed. uv sync --extra dae")
+
+        monkeypatch.setattr("ssys.ode_backends.interface.simulate_ode", fake_simulate_ode)
+        monkeypatch.setattr(
+            "ssys.ode_backends.ida_sundials_backend._load_ida_binding",
+            missing_ida,
+        )
+
+        result = validator.check_trajectory_comparison()
+
+        assert result.result == ValidationResult.UNSUPPORTED
+        assert "uv sync --extra dae" in result.details
+        assert result.metadata["recast_backend"] == "ida_sundials"
 
     def test_algebraic_residual_detects_ode_mode_drift(self, tmp_path):
         original = tmp_path / "original.ant"

@@ -1,159 +1,64 @@
-# ODE Solver Backends
+# Solver Backends
 
-This module provides a unified interface for simulating ODE systems with different solver backends.
-
-## Overview
-
-The `simulate_ode()` function provides a consistent API for running ODE simulations, with support for:
-- **libRoadRunner** (default) - Production-quality CVODE integrator
-- **RK4** (fallback) - Simple Runge-Kutta 4th order method
-
-## Usage
-
-```python
-from src.ssys.recaster import parse_antimony
-from src.ssys.ode_backends import simulate_ode
-
-# Parse a model
-model_ir = parse_antimony(antimony_text)
-
-# Simulate with default (roadrunner) backend
-result = simulate_ode(
-    model_ir,
-    t0=0.0,
-    t_end=10.0,
-    n_points=100,
-    backend="roadrunner"
-)
-
-if result["success"]:
-    t = result["t"]        # Time array
-    y = result["y"]        # State trajectories
-    names = result["state_names"]  # Variable names
-```
+This module provides the validation-time solver interface used by `ssys`.
 
 ## Backend Selection
 
-### libRoadRunner (Recommended)
+- `ode_only`: uses `roadrunner_cvode`.
+- `ode_with_assignment_rules`: uses `roadrunner_cvode_assignment_rules`.
+- `dae_required`: uses `ida_sundials` by default.
 
-Uses CVODE integrator with adaptive step sizing. Best for:
-- Production simulations
-- Stiff systems
-- High accuracy requirements
-
-```python
-result = simulate_ode(
-    model_ir,
-    t0=0.0,
-    t_end=10.0,
-    n_points=100,
-    backend="roadrunner",
-    options={
-        "integrator": "cvode",
-        "absolute_tolerance": 1e-9,
-        "relative_tolerance": 1e-6,
-        "maximum_num_steps": 20000,
-        "log_solver_details": False
-    }
-)
-```
-
-**Installation**: `pip install libroadrunner`
-
-### RK4 (Fallback)
-
-Simple fixed-step RK4 integrator. Best for:
-- Debugging
-- Simple non-stiff systems
-- When RoadRunner unavailable
+The older `dae_projection` path is still available for diagnostics:
 
 ```python
-result = simulate_ode(
-    model_ir,
-    t0=0.0,
-    t_end=10.0,
-    n_points=100,
-    backend="rk4"
-)
+simulate_model(model_ir, 0.0, 10.0, 101, options={"dae_backend": "dae_projection"})
 ```
 
-**Note**: RK4 backend requires integration of existing RK4 code.
+Projection integrates the differential part and recomputes explicit algebraic
+quantities afterward. It is not a general DAE solver and is not selected by
+default for production validation.
 
-## Return Format
+## Optional DAE Dependency
 
-All backends return a dictionary with:
+IDA/SUNDIALS support is optional:
 
-```python
-{
-    "t": np.ndarray,              # Time points (n_points,)
-    "y": np.ndarray,              # States (n_points, n_variables)
-    "state_names": List[str],     # Variable names
-    "success": bool,              # True if completed
-    "message": str,               # Error message if failed
-    "integrator_stats": dict      # Step counts, etc.
-}
+```bash
+uv sync --extra dae
 ```
 
-## Error Handling
+or, for an editable install:
 
-Simulations that fail return `success=False` with diagnostic info:
-
-```python
-result = simulate_ode(...)
-if not result["success"]:
-    print(f"Simulation failed: {result['message']}")
+```bash
+uv pip install -e ".[dae]"
 ```
 
-## Automatic Fallback
+The `dae` extra currently uses `scikit-sundae`, which provides Python bindings
+to SUNDIALS IDA. It is kept out of the base install because SUNDIALS-backed
+binary wheels and supported Python/platform combinations can lag the pure Python
+and RoadRunner dependency set. If the extra is missing, `dae_required` validation
+returns `UNSUPPORTED` with the installation hint instead of passing.
 
-By default, if RoadRunner is unavailable, the system falls back to RK4:
+## IDA Residual Form
 
-```python
-result = simulate_ode(
-    model_ir, ...,
-    backend="roadrunner",
-    options={"fallback_to_rk4": True}  # Default
-)
-```
+The `ida_sundials` backend builds a residual system `F(t, y, ydot) = 0`:
 
-To disable fallback:
+- Differential states: `ydot_i - f_i(y, z, t) = 0`.
+- Explicit assignment auxiliaries: `z_j - g_j(y, z, t) = 0`.
+- Implicit algebraic constraints: `h_k(y, z, t) = 0`.
 
-```python
-result = simulate_ode(
-    model_ir, ...,
-    backend="roadrunner",
-    options={"fallback_to_rk4": False}
-)
-```
+Explicit algebraic variables are initialized from their definitions when possible.
+If a caller provides inconsistent algebraic initial conditions, the backend fails
+unless `repair_consistent_initial_conditions=True` is set.
 
-## Architecture
+## Result Metadata
 
-```
-ode_backends/
-├── __init__.py           # Exports simulate_ode()
-├── interface.py          # Main API and backend routing
-├── roadrunner_backend.py # libRoadRunner implementation
-├── rk4_backend.py        # RK4 implementation
-└── README.md            # This file
-```
+All backend results include:
 
-## Development Status
+- `backend`
+- `solver_requirement`
+- `unsupported_solver_requirement`
+- `integrator_stats`
 
-**Phase 1 (MVP)**: ✅ Complete
-- Unified interface
-- RoadRunner backend
-- RK4 placeholder
-- Basic tests
-
-**Phase 2**: ✅ Complete
-- ✅ RK4 backend fully integrated
-- ✅ Symbol identity handling
-- ✅ All tests passing (2 passed, 1 skipped)
-- Validator integration (planned for Phase 3)
-- Performance benchmarks (planned for Phase 3)
-
-**Phase 3** (Future):
-- Validator trajectory testing integration
-- Performance benchmarks (RK4 vs RoadRunner)
-- Additional backends (scipy, Julia)
-- Advanced features (sensitivity, steady state)
+IDA results also record the selected package/version, tolerances, algebraic
+indices, return status, solver message, initial residual norms, and algebraic
+residual norms over the trajectory.

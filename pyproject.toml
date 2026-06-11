@@ -46,6 +46,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+dae = [
+    # scikit-SUNDAE provides Python bindings to SUNDIALS IDA. It is optional
+    # because binary wheels and supported platforms can lag the base package.
+    "scikit-sundae>=1.1",
+]
 dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",

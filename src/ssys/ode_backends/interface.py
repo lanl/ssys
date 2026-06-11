@@ -1,10 +1,10 @@
 """
 Unified interface for solver backends.
 
-ODE-only models use libRoadRunner/CVODE. Recast outputs that carry explicit
-assignment-rule manifolds can use the DAE projection backend, which integrates
-the differential part and recomputes algebraic quantities from their defining
-rules over the trajectory.
+ODE-only models use libRoadRunner/CVODE. Recast outputs that require DAE
+simulation use the optional IDA/SUNDIALS backend by default. The projection
+backend remains available as an explicit diagnostic fallback for simple
+explicit manifolds.
 """
 
 from typing import Any
@@ -113,13 +113,51 @@ def simulate_dae(
     y0_override: dict[str, float] | None = None,
     options: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """
-    Simulate an explicit algebraic-manifold model with a projection backend.
+    """Simulate a DAE model using the selected DAE-capable backend."""
+    if options is None:
+        options = {}
 
-    The backend supports explicit assignment rules and auxiliary definitions.
-    Implicit algebraic constraints are reported as unsupported rather than being
-    accepted as an ODE validation pass.
-    """
+    requirement = SolverRequirement.DAE_REQUIRED
+    backend = options.get("dae_backend", options.get("backend", "ida_sundials"))
+
+    if backend in {"projection", "dae_projection"}:
+        return simulate_dae_projection(
+            model_ir, t0, t_end, n_points, y0_override, options
+        )
+
+    if backend not in {"ida", "ida_sundials", "sundials_ida"}:
+        return _failure_result(
+            message=f"Unsupported DAE backend {backend!r}",
+            backend=str(backend),
+            requirement=requirement,
+            unsupported=True,
+        )
+
+    try:
+        from .ida_sundials_backend import simulate_with_ida_sundials
+    except ImportError as e:
+        return _failure_result(
+            message=f"IDA/SUNDIALS backend unavailable: {e}",
+            backend="ida_sundials",
+            requirement=requirement,
+            unsupported=True,
+        )
+
+    result = simulate_with_ida_sundials(
+        model_ir, t0, t_end, n_points, y0_override, options
+    )
+    return _annotate_result(result, backend="ida_sundials", requirement=requirement)
+
+
+def simulate_dae_projection(
+    model_ir: ModelIR,
+    t0: float,
+    t_end: float,
+    n_points: int,
+    y0_override: dict[str, float] | None = None,
+    options: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Simulate a DAE-required model with the explicit projection fallback."""
     requirement = SolverRequirement.DAE_REQUIRED
     try:
         from .dae_backend import simulate_with_dae_projection
