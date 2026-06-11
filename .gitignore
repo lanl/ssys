@@ -15,6 +15,7 @@ build/
 # Output directories
 out/
 out_*/
+dev/
 
 # IDE
 .DS_Store
