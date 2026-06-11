@@ -270,7 +270,8 @@ class TestValidationCliExit:
         assert exc.value.code == 1
         report = json.loads((outdir / "invalid_validation.json").read_text())
         assert report["overall_pass"] is False
-        assert "Validation crashed" in report["summary"]
+        assert report["overall_result"] == "failed"
+        assert report["tests"]["generated_output"]["result"] == "failed"
 
 
 class TestBuildNotebook:

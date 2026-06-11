@@ -1,5 +1,7 @@
 """Tests for validator module."""
 
+import json
+
 import pytest
 
 from ssys.recaster import SystemClass
@@ -8,6 +10,8 @@ from ssys.validator import (
     RecastValidator,
     ValidationReport,
     ValidationResult,
+    validate_generated_output_roundtrip,
+    validate_recast_pair,
 )
 
 
@@ -20,11 +24,14 @@ class TestValidationResult:
         assert ValidationResult.FAIL is not None
         assert ValidationResult.TIMEOUT is not None
         assert ValidationResult.NOT_ATTEMPTED is not None
+        assert ValidationResult.UNSUPPORTED is not None
+        assert ValidationResult.INCONCLUSIVE is not None
 
     def test_validation_result_names(self):
         """Test result name access."""
         assert ValidationResult.PASS.name == "PASS"
         assert ValidationResult.FAIL.name == "FAIL"
+        assert ValidationResult.FAIL.value == "failed"
 
 
 class TestEquivalenceTest:
@@ -98,6 +105,164 @@ class TestValidationReport:
 
         assert d["original_file"] == "/path/to/original.ant"
         assert d["overall_pass"] is True
+
+
+class TestFailClosedValidation:
+    """Tests for fail-closed report aggregation."""
+
+    def test_not_attempted_required_symbolic_test_fails_overall(self, tmp_path, monkeypatch):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+
+        def not_attempted(*args, **kwargs):
+            return EquivalenceTest(
+                name="symbolic_equivalence",
+                result=ValidationResult.NOT_ATTEMPTED,
+                details="forced skip",
+            )
+
+        monkeypatch.setattr(validator, "check_symbolic_equivalence", not_attempted)
+        report = validator.validate(
+            run_symbolic=True,
+            run_numerical=False,
+            run_trajectory=False,
+            run_auxiliaries=False,
+        )
+
+        assert report.overall_pass is False
+        assert report.overall_result == ValidationResult.NOT_ATTEMPTED
+
+    def test_simulation_failure_fails_overall(self, tmp_path, monkeypatch):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+
+        def simulation_failed(*args, **kwargs):
+            return EquivalenceTest(
+                name="trajectory_comparison",
+                result=ValidationResult.INCONCLUSIVE,
+                details="forced simulation failure",
+            )
+
+        monkeypatch.setattr(validator, "check_trajectory_comparison", simulation_failed)
+        report = validator.validate(
+            run_symbolic=False,
+            run_numerical=False,
+            run_trajectory=True,
+            run_auxiliaries=False,
+        )
+
+        assert report.overall_pass is False
+        assert report.overall_result == ValidationResult.INCONCLUSIVE
+
+    def test_missing_mapping_fails_overall(self, tmp_path):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species Z_1;
+                Z_1' = -k*Z_1;
+                k = 0.5;
+                Z_1 = 1.0;
+            end
+        """)
+
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        report = validator.validate(
+            run_symbolic=False,
+            run_numerical=False,
+            run_trajectory=False,
+            run_auxiliaries=False,
+        )
+
+        assert report.overall_pass is False
+        assert report.mapping_test is not None
+        assert report.mapping_test.result == ValidationResult.FAIL
+        assert report.overall_result == ValidationResult.FAIL
+
+    def test_invalid_generated_output_roundtrip_is_reported(self, tmp_path):
+        invalid = tmp_path / "invalid.ant"
+        invalid.write_text("model invalid()\n    DNA := Z_1;\nend\n")
+
+        result = validate_generated_output_roundtrip(str(invalid))
+
+        assert result.result == ValidationResult.FAIL
+        assert result.metadata["antimony_parse_success"] is False
+        assert result.metadata["parser_diagnostics"]
+
+    def test_validate_recast_pair_writes_parser_failure_report(self, tmp_path):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        recast = tmp_path / "bad_recast.ant"
+        recast.write_text("model bad_recast()\n    DNA := Z_1;\nend\n")
+        output_json = tmp_path / "validation.json"
+
+        report = validate_recast_pair(
+            str(original),
+            str(recast),
+            output_json=str(output_json),
+            parser="sbml",
+            run_symbolic=False,
+            run_numerical=False,
+            run_trajectory=False,
+            run_auxiliaries=False,
+        )
+
+        assert report.overall_pass is False
+        data = json.loads(output_json.read_text())
+        assert data["tests"]["generated_output"]["result"] == "failed"
+        assert data["tests"]["parser"]["result"] == "failed"
+        assert data["overall_result"] == "failed"
 
 
 class TestRecastValidator:
@@ -180,6 +345,212 @@ class TestRecastValidatorAuxiliaryExtraction:
 
         # Should parse without error
         assert validator is not None
+
+
+class TestAuxiliaryIdentityValidation:
+    """Tests for auxiliary and observable identity validation."""
+
+    def test_assignment_rule_auxiliary_matches_definition(self, tmp_path):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -X/(K + X);
+                K = 1;
+                X = 1;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species X;
+                // ========================================================================
+                // AUXILIARY DEFINITIONS (for lifted variables)
+                // ========================================================================
+                // Y_1 := K + X
+                // ========================================================================
+                Y_1 := K + X;
+                X' = -X/Y_1;
+                K = 1;
+                X = 1;
+            end
+        """)
+
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        report = validator.validate(
+            run_symbolic=False,
+            run_numerical=False,
+            run_trajectory=False,
+        )
+
+        assignment_tests = [
+            test for test in report.auxiliary_tests if test.name == "assignment_auxiliary:Y_1"
+        ]
+        assert assignment_tests
+        assert assignment_tests[0].result == ValidationResult.PASS
+        assert report.overall_pass is True
+
+    def test_ode_auxiliary_lifted_denominator_matches_definition(self, tmp_path):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -X/(K + X);
+                K = 1;
+                X = 1;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species X, Y_1;
+                // ========================================================================
+                // AUXILIARY DEFINITIONS (for lifted variables)
+                // ========================================================================
+                // Y_1 := K + X
+                // ========================================================================
+                X' = -X/Y_1;
+                Y_1' = -X/Y_1;
+                K = 1;
+                X = 1;
+                Y_1 = 2;
+            end
+        """)
+
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        report = validator.validate(
+            run_symbolic=False,
+            run_numerical=False,
+            run_trajectory=False,
+        )
+
+        ode_tests = [
+            test for test in report.auxiliary_tests if test.name == "ode_auxiliary_identity:Y_1"
+        ]
+        assert ode_tests
+        assert ode_tests[0].result == ValidationResult.PASS
+        assert report.overall_pass is True
+
+    def test_ode_auxiliary_composite_function_matches_definition(self, tmp_path):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = exp(X);
+                X = 1;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species X, Z_1;
+                // ========================================================================
+                // AUXILIARY DEFINITIONS (for lifted variables)
+                // ========================================================================
+                // Z_1 := exp(X)
+                // ========================================================================
+                X' = Z_1;
+                Z_1' = Z_1^2;
+                X = 1;
+                Z_1 = 2.718281828;
+            end
+        """)
+
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        report = validator.validate(
+            run_symbolic=False,
+            run_numerical=False,
+            run_trajectory=False,
+        )
+
+        ode_tests = [
+            test for test in report.auxiliary_tests if test.name == "ode_auxiliary_identity:Z_1"
+        ]
+        assert ode_tests
+        assert ode_tests[0].result == ValidationResult.PASS
+        assert report.overall_pass is True
+
+    def test_clock_auxiliary_matches_definition(self, tmp_path):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            X' = -X / (time + 1)
+            X = 1.0
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+            // ============================================================
+            // AUXILIARY DEFINITIONS (for lifted variables)
+            // ============================================================
+            // T := time
+            // Y_1 := T + 1
+            // ============================================================
+
+            T' = 1
+            Y_1' = 1
+            X' = -X / Y_1
+
+            T = 0
+            Y_1 = 1
+            X = 1.0
+            end
+        """)
+
+        validator = RecastValidator(str(original), str(recast))
+        report = validator.validate(
+            run_symbolic=False,
+            run_numerical=False,
+            run_trajectory=False,
+        )
+
+        ode_results = {
+            test.name: test.result
+            for test in report.auxiliary_tests
+            if test.name.startswith("ode_auxiliary_identity:")
+        }
+        assert ode_results["ode_auxiliary_identity:T"] == ValidationResult.PASS
+        assert ode_results["ode_auxiliary_identity:Y_1"] == ValidationResult.PASS
+        assert report.overall_pass is True
+
+    def test_observable_assignment_matches_variable_mapping(self, tmp_path):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species Z_1;
+                // ========================================================================
+                // VARIABLE MAPPING
+                // ========================================================================
+                // X = Z_1
+                // ========================================================================
+                X := Z_1;
+                Z_1' = -k*Z_1;
+                k = 0.5;
+                Z_1 = 1;
+            end
+        """)
+
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        report = validator.validate(
+            run_symbolic=False,
+            run_numerical=False,
+            run_trajectory=False,
+        )
+
+        observable_tests = [
+            test for test in report.auxiliary_tests if test.name == "observable_mapping:X"
+        ]
+        assert observable_tests
+        assert observable_tests[0].result == ValidationResult.PASS
+        assert report.overall_pass is True
 
 
 class TestRecastValidatorEdgeCases:

@@ -765,9 +765,15 @@ def load_and_report(
                 max_err = test_data.get("max_error")
                 mean_err = test_data.get("mean_error")
 
-                result_emoji = {"pass": "✓", "fail": "✗", "timeout": "⏱", "not_attempted": "⊘"}.get(
-                    result, "?"
-                )
+                result_emoji = {
+                    "pass": "✓",
+                    "fail": "✗",
+                    "failed": "✗",
+                    "timeout": "⏱",
+                    "not_attempted": "⊘",
+                    "unsupported": "⊘",
+                    "inconclusive": "?",
+                }.get(result, "?")
 
                 max_str = f"{max_err:.2e}" if max_err is not None else "N/A"
                 mean_str = f"{mean_err:.2e}" if mean_err is not None else "N/A"
@@ -780,7 +786,12 @@ def load_and_report(
 
         # Show details for failed tests
         for test_name, test_data in tests.items():
-            if test_data and test_data.get("result") == "fail" and test_name != "auxiliaries":
+            failed_results = {"fail", "failed", "unsupported", "inconclusive"}
+            if (
+                test_data
+                and test_data.get("result") in failed_results
+                and test_name != "auxiliaries"
+            ):
                 details = test_data.get("details", "")
                 if details:
                     display(Markdown(f"**{test_name} details:** {details}"))

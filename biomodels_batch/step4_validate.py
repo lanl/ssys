@@ -232,9 +232,10 @@ def format_test_result(report: dict) -> str:
     numerical = num_test.get("result", "?") if num_test else "-"
     trajectory = traj_test.get("result", "?") if traj_test else "-"
 
-    s = "✓" if symbolic == "pass" else ("✗" if symbolic == "fail" else "-")
-    n = "✓" if numerical == "pass" else ("✗" if numerical == "fail" else "-")
-    t = "✓" if trajectory == "pass" else ("✗" if trajectory == "fail" else "-")
+    failed_results = {"fail", "failed"}
+    s = "✓" if symbolic == "pass" else ("✗" if symbolic in failed_results else "-")
+    n = "✓" if numerical == "pass" else ("✗" if numerical in failed_results else "-")
+    t = "✓" if trajectory == "pass" else ("✗" if trajectory in failed_results else "-")
 
     return f"sym:{s} num:{n} traj:{t}"
 

@@ -121,11 +121,12 @@ def recast_file(
                 "tests": {
                     "validation": {
                         "name": "validation",
-                        "result": "fail",
+                        "result": "failed",
                         "details": str(e),
                     }
                 },
                 "overall_pass": False,
+                "overall_result": "failed",
                 "summary": f"Validation crashed: {e}",
             }
             try:

@@ -31,9 +31,195 @@ class ValidationResult(Enum):
     """Validation test outcomes."""
 
     PASS = "pass"
-    FAIL = "fail"
+    FAIL = "failed"
     TIMEOUT = "timeout"
     NOT_ATTEMPTED = "not_attempted"
+    UNSUPPORTED = "unsupported"
+    INCONCLUSIVE = "inconclusive"
+
+
+PASSING_RESULTS = frozenset({ValidationResult.PASS})
+
+
+def _test_passed(test: "EquivalenceTest | None") -> bool:
+    return test is not None and test.result in PASSING_RESULTS
+
+
+def _canonicalize_expr_by_name(expr: sp.Expr, symbols_by_name: dict[str, sp.Symbol]) -> sp.Expr:
+    """Return an expression whose symbols are the canonical objects for each name."""
+    if not hasattr(expr, "free_symbols"):
+        expr = sp.sympify(expr)
+    if not expr.free_symbols:
+        expr_str = str(expr)
+        if expr_str in symbols_by_name:
+            return symbols_by_name[expr_str]
+        return expr
+    subs = {sym: symbols_by_name[sym.name] for sym in expr.free_symbols if sym.name in symbols_by_name}
+    return expr.subs(subs) if subs else expr
+
+
+def _substitute_symbols_by_name(
+    expr: sp.Expr, replacements_by_name: dict[str, sp.Symbol | sp.Expr]
+) -> sp.Expr:
+    """Substitute expression symbols by matching symbol names, not object identity."""
+    subs = {sym: replacements_by_name[sym.name] for sym in expr.free_symbols if sym.name in replacements_by_name}
+    return expr.subs(subs) if subs else expr
+
+
+def _simplify_identity_difference(expr: sp.Expr) -> sp.Expr:
+    """Apply the validator's common simplification strategy to an identity difference."""
+    try:
+        expr = sp.nsimplify(expr, rational=True, tolerance=1e-10)
+    except Exception:
+        pass
+
+    candidates = [
+        sp.simplify,
+        lambda e: sp.cancel(sp.expand(e)),
+        sp.ratsimp,
+        lambda e: sp.simplify(sp.factor(e)),
+        lambda e: sp.simplify(sp.expand(e)),
+    ]
+
+    current = expr
+    for simplify_func in candidates:
+        if current == 0:
+            return sp.Integer(0)
+        try:
+            current = simplify_func(current)
+        except Exception:
+            continue
+
+    if current != 0:
+        try:
+            numer, _denom = current.as_numer_denom()
+            if sp.simplify(sp.expand(numer)) == 0:
+                return sp.Integer(0)
+        except Exception:
+            pass
+
+    return current
+
+
+def validate_generated_output_roundtrip(
+    recast_file: str, recast_text: str | None = None
+) -> "EquivalenceTest":
+    """Validate that generated Antimony parses and converts through SBML."""
+    metadata: dict[str, Any] = {
+        "antimony_parse_success": False,
+        "sbml_conversion_success": False,
+        "sbml_parse_success": False,
+        "parser_diagnostics": "",
+    }
+
+    try:
+        import antimony
+        import libsbml
+    except ImportError as e:
+        metadata["parser_diagnostics"] = str(e)
+        return EquivalenceTest(
+            name="generated_output_roundtrip",
+            result=ValidationResult.UNSUPPORTED,
+            details=f"Antimony/SBML parser dependency unavailable: {e}",
+            metadata=metadata,
+        )
+
+    try:
+        text = recast_text if recast_text is not None else open(recast_file).read()
+    except OSError as e:
+        metadata["parser_diagnostics"] = str(e)
+        return EquivalenceTest(
+            name="generated_output_roundtrip",
+            result=ValidationResult.FAIL,
+            details=f"Could not read recast file: {e}",
+            metadata=metadata,
+        )
+
+    try:
+        antimony.clearPreviousLoads()
+        load_code = antimony.loadAntimonyString(text)
+        metadata["antimony_load_code"] = load_code
+        antimony_diagnostics = antimony.getLastError() or ""
+        metadata["parser_diagnostics"] = antimony_diagnostics
+
+        if load_code < 0:
+            return EquivalenceTest(
+                name="generated_output_roundtrip",
+                result=ValidationResult.FAIL,
+                details=f"Antimony parse failed: {antimony_diagnostics}",
+                metadata=metadata,
+            )
+        metadata["antimony_parse_success"] = True
+
+        module_name = antimony.getMainModuleName()
+        metadata["module_name"] = module_name
+        if not module_name:
+            metadata["parser_diagnostics"] = "No main Antimony module found"
+            return EquivalenceTest(
+                name="generated_output_roundtrip",
+                result=ValidationResult.FAIL,
+                details="Antimony parse succeeded but no main module was found",
+                metadata=metadata,
+            )
+
+        sbml = antimony.getSBMLString(module_name)
+        conversion_diagnostics = antimony.getLastError() or ""
+        if not sbml:
+            metadata["parser_diagnostics"] = conversion_diagnostics
+            return EquivalenceTest(
+                name="generated_output_roundtrip",
+                result=ValidationResult.FAIL,
+                details=f"Antimony to SBML conversion failed: {conversion_diagnostics}",
+                metadata=metadata,
+            )
+        metadata["sbml_conversion_success"] = True
+
+        document = libsbml.readSBMLFromString(sbml)
+        error_log = document.getErrorLog()
+        sbml_diagnostics = error_log.toString() if error_log is not None else ""
+        metadata["sbml_diagnostics"] = sbml_diagnostics
+        metadata["libsbml_error_count"] = document.getNumErrors()
+
+        serious_errors = []
+        for i in range(document.getNumErrors()):
+            err = document.getError(i)
+            severity = err.getSeverityAsString().lower()
+            if severity in {"error", "fatal"}:
+                serious_errors.append(err.getMessage())
+
+        if serious_errors:
+            metadata["parser_diagnostics"] = sbml_diagnostics
+            return EquivalenceTest(
+                name="generated_output_roundtrip",
+                result=ValidationResult.FAIL,
+                details=f"SBML parse failed: {sbml_diagnostics}",
+                metadata=metadata,
+            )
+
+        if document.getModel() is None:
+            metadata["parser_diagnostics"] = sbml_diagnostics or "SBML document has no model"
+            return EquivalenceTest(
+                name="generated_output_roundtrip",
+                result=ValidationResult.FAIL,
+                details="SBML parse succeeded but no model was found",
+                metadata=metadata,
+            )
+
+        metadata["sbml_parse_success"] = True
+        return EquivalenceTest(
+            name="generated_output_roundtrip",
+            result=ValidationResult.PASS,
+            details="Generated Antimony parsed and converted through SBML",
+            metadata=metadata,
+        )
+    except Exception as e:
+        metadata["parser_diagnostics"] = str(e)
+        return EquivalenceTest(
+            name="generated_output_roundtrip",
+            result=ValidationResult.INCONCLUSIVE,
+            details=f"Roundtrip check crashed: {e}",
+            metadata=metadata,
+        )
 
 
 def _is_dev_mode() -> bool:
@@ -62,6 +248,7 @@ class EquivalenceTest:
     mean_error: float | None = None
     details: str = ""
     counterexamples: list[dict[str, Any]] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -72,12 +259,15 @@ class ValidationReport:
     recast_file: str
 
     # Structural classification
-    original_class: SystemClass
-    recast_class: SystemClass
+    original_class: SystemClass | None
+    recast_class: SystemClass | None
     expected_class: SystemClass | None = None
     canonical_refusal_reason: str | None = None
 
     # Test results
+    generated_output_test: EquivalenceTest | None = None
+    parser_test: EquivalenceTest | None = None
+    mapping_test: EquivalenceTest | None = None
     symbolic_test: EquivalenceTest | None = None
     numerical_test: EquivalenceTest | None = None
     trajectory_test: EquivalenceTest | None = None
@@ -85,6 +275,7 @@ class ValidationReport:
 
     # Overall verdict
     overall_pass: bool = False
+    overall_result: ValidationResult = ValidationResult.INCONCLUSIVE
     summary: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -100,24 +291,29 @@ class ValidationReport:
                 "mean_error": test.mean_error,
                 "details": test.details,
                 "counterexamples": test.counterexamples[:5],  # Limit to first 5
+                "metadata": test.metadata,
             }
 
         return {
             "original_file": self.original_file,
             "recast_file": self.recast_file,
             "classification": {
-                "original": self.original_class.value,
-                "recast": self.recast_class.value,
+                "original": self.original_class.value if self.original_class else None,
+                "recast": self.recast_class.value if self.recast_class else None,
                 "expected": self.expected_class.value if self.expected_class else None,
                 "canonical_refusal_reason": self.canonical_refusal_reason,
             },
             "tests": {
+                "generated_output": test_to_dict(self.generated_output_test),
+                "parser": test_to_dict(self.parser_test),
+                "mapping": test_to_dict(self.mapping_test),
                 "symbolic": test_to_dict(self.symbolic_test),
                 "numerical": test_to_dict(self.numerical_test),
                 "trajectory": test_to_dict(self.trajectory_test),
                 "auxiliaries": [test_to_dict(t) for t in self.auxiliary_tests],
             },
             "overall_pass": self.overall_pass,
+            "overall_result": self.overall_result.value,
             "summary": self.summary,
         }
 
@@ -155,9 +351,11 @@ class RecastValidator:
         self.recast_file = recast_file
         self.mode = mode
         self.parser = parser
+        self.expected_class = self._expected_class_for_mode(mode)
 
         # Read recast file to extract mapping comments
         recast_text = open(recast_file).read()
+        self.recast_text = recast_text
 
         # Read original file text
         orig_text = open(original_file).read()
@@ -275,6 +473,16 @@ class RecastValidator:
         self.orig_odes_expanded = self._expand_assignment_rules_in_odes(
             self.orig_odes, self.orig_ir
         )
+
+    def _expected_class_for_mode(self, mode: str) -> SystemClass | None:
+        """Return the selected target class implied by the recast mode."""
+        if mode == "canonical":
+            return SystemClass.CANONICAL_SSYSTEM
+        if mode == "simplified":
+            return SystemClass.SSYSTEM
+        if mode == "gma":
+            return SystemClass.GMA
+        return None
 
     def _extract_mapping_from_comments(self, recast_text: str) -> dict:
         """
@@ -798,17 +1006,8 @@ class RecastValidator:
         # Store canonical symbols for later use (e.g., in numerical validation)
         self.canonical_symbols = canon
 
-        # Helper to rename all symbols in an expression
         def rename_expr(expr):
-            # Handle sympy constants (I=imaginary, E=Euler) that match variable names
-            # These have empty free_symbols, so normal substitution won't catch them
-            if not expr.free_symbols:
-                expr_str = str(expr)
-                if expr_str in canon:
-                    return canon[expr_str]
-            # Handle compound expressions by substituting all symbols
-            subs = {s: canon[s.name] for s in expr.free_symbols if s.name in canon}
-            return expr.subs(subs) if subs else expr
+            return _canonicalize_expr_by_name(expr, canon)
 
         # Canonicalize original ODEs
         self.orig_odes = {
@@ -838,6 +1037,278 @@ class RecastValidator:
         self.recast_system.initials = {
             canon.get(str(k), k): v for k, v in self.recast_system.initials.items()
         }
+
+    def _canonical_expr(self, expr: sp.Expr) -> sp.Expr:
+        """Canonicalize expression symbols using this validator's symbol table."""
+        return _canonicalize_expr_by_name(expr, self.canonical_symbols)
+
+    def _parse_expr_with_canonical_symbols(self, expr: str | sp.Expr) -> sp.Expr:
+        """Parse an expression using canonical symbols for every identifier."""
+        if isinstance(expr, sp.Expr):
+            return self._canonical_expr(expr)
+
+        import re
+
+        sympy_functions = {
+            "exp",
+            "log",
+            "sin",
+            "cos",
+            "tan",
+            "sqrt",
+            "sinh",
+            "cosh",
+            "tanh",
+            "asin",
+            "acos",
+            "atan",
+        }
+        local_dict = dict(self.canonical_symbols)
+        for name in re.findall(r"[a-zA-Z_][a-zA-Z0-9_]*", expr):
+            if name not in local_dict and name not in sympy_functions:
+                local_dict[name] = sp.Symbol(name, positive=True)
+        return self._canonical_expr(sp.sympify(expr, locals=local_dict))
+
+    def _expressions_equivalent(
+        self,
+        lhs: sp.Expr,
+        rhs: sp.Expr,
+        extra_subs: dict[sp.Symbol, sp.Expr] | None = None,
+    ) -> tuple[bool, sp.Expr]:
+        """Compare expressions after canonical symbol and auxiliary substitutions."""
+        lhs = self._canonical_expr(lhs)
+        rhs = self._canonical_expr(rhs)
+        clock_vars = self._clock_variable_by_name()
+        if clock_vars:
+            lhs = _substitute_symbols_by_name(lhs, clock_vars)
+            rhs = _substitute_symbols_by_name(rhs, clock_vars)
+        diff = lhs - rhs
+
+        if extra_subs:
+            diff = diff.subs(extra_subs)
+
+        aux_to_def: dict[sp.Symbol, sp.Expr] = {}
+        def_to_aux: dict[sp.Expr, sp.Symbol] = {}
+        for aux, defn in self.auxiliary_defs.items():
+            aux_c = self._canonical_expr(aux)
+            defn_c = self._canonical_expr(defn)
+            if self._is_clock_definition(defn_c):
+                continue
+            if clock_vars:
+                defn_c = _substitute_symbols_by_name(defn_c, clock_vars)
+            aux_to_def[aux_c] = defn_c
+            def_to_aux[defn_c] = aux_c
+
+        candidates = [diff]
+        if aux_to_def:
+            candidates.append(diff.subs(aux_to_def))
+        if def_to_aux:
+            candidates.append(diff.subs(def_to_aux))
+        if aux_to_def and def_to_aux:
+            candidates.append(diff.subs(aux_to_def).subs(def_to_aux))
+
+        best = candidates[0]
+        for candidate in candidates:
+            simplified = _simplify_identity_difference(candidate)
+            if simplified == 0:
+                return True, sp.Integer(0)
+            best = simplified
+
+        return False, best
+
+    def _is_clock_definition(self, expr: sp.Expr) -> bool:
+        """Return True when an auxiliary definition is the integration clock."""
+        return isinstance(expr, sp.Symbol) and str(expr).lower() in {"time", "t"}
+
+    def _clock_variable_by_name(self) -> dict[str, sp.Symbol]:
+        """Map clock source names such as time/t to the recast clock state symbol."""
+        clocks = {}
+        recast_vars_by_name = {str(v): v for v in self.recast_state_vars}
+        for aux, defn in self.auxiliary_defs.items():
+            defn_c = self._canonical_expr(defn)
+            if self._is_clock_definition(defn_c):
+                aux_name = str(aux)
+                if aux_name in recast_vars_by_name:
+                    clocks[str(defn_c).lower()] = recast_vars_by_name[aux_name]
+        return clocks
+
+    def check_mapping_complete(self) -> EquivalenceTest:
+        """Verify every original state has an explicit or valid identity mapping."""
+        recast_var_names = {str(v) for v in self.recast_state_vars}
+        assignment_rule_names = set(self.recast_ir.assignment_rules.keys())
+        missing = []
+
+        for orig_var in sorted(self.orig_odes.keys(), key=str):
+            orig_name = str(orig_var)
+            mapped_expr = self.mapping.get(orig_var)
+            if mapped_expr is None:
+                missing.append(orig_name)
+                continue
+
+            identity_ok = (
+                mapped_expr == orig_var
+                and (orig_name in recast_var_names or orig_name in assignment_rule_names)
+            )
+            explicit_ok = mapped_expr != orig_var
+            if not identity_ok and not explicit_ok:
+                missing.append(orig_name)
+
+        if missing:
+            return EquivalenceTest(
+                name="mapping_completeness",
+                result=ValidationResult.FAIL,
+                details=(
+                    "Missing reconstruction mapping for original variables: "
+                    + ", ".join(missing)
+                ),
+                metadata={"missing_variables": missing},
+            )
+
+        return EquivalenceTest(
+            name="mapping_completeness",
+            result=ValidationResult.PASS,
+            details="Every original state has an explicit or valid identity mapping",
+        )
+
+    def _assignment_identity_tests(self) -> list[EquivalenceTest]:
+        """Validate assignment-rule auxiliaries and observable reconstruction rules."""
+        tests: list[EquivalenceTest] = []
+        orig_vars_by_name = {str(v): v for v in self.orig_odes}
+        mapping_by_name = {str(k): v for k, v in self.mapping.items()}
+        aux_defs_by_name = {str(k): v for k, v in self.auxiliary_defs.items()}
+
+        for rule_name, rule_expr in sorted(self.recast_ir.assignment_rules.items()):
+            expected = None
+            kind = None
+            if rule_name in orig_vars_by_name and rule_name in mapping_by_name:
+                expected = mapping_by_name[rule_name]
+                kind = "observable_mapping"
+            elif rule_name in aux_defs_by_name:
+                expected = aux_defs_by_name[rule_name]
+                kind = "assignment_auxiliary"
+
+            if expected is None:
+                continue
+
+            try:
+                actual_expr = self._parse_expr_with_canonical_symbols(rule_expr)
+                equivalent, residual = self._expressions_equivalent(actual_expr, expected)
+                result = ValidationResult.PASS if equivalent else ValidationResult.FAIL
+                details = (
+                    f"{rule_name} assignment matches {kind} definition"
+                    if equivalent
+                    else f"{rule_name} assignment residual: {residual}"
+                )
+            except Exception as e:
+                result = ValidationResult.INCONCLUSIVE
+                details = f"Could not parse {rule_name} assignment rule {rule_expr!r}: {e}"
+
+            tests.append(
+                EquivalenceTest(
+                    name=f"{kind}:{rule_name}",
+                    result=result,
+                    details=details,
+                    metadata={"rule": rule_name, "kind": kind},
+                )
+            )
+
+        return tests
+
+    def _ode_auxiliary_identity_tests(self) -> list[EquivalenceTest]:
+        """Validate ODE-carried auxiliaries against their declared definitions."""
+        tests: list[EquivalenceTest] = []
+        recast_odes_by_name = {str(k): (k, v) for k, v in self.recast_odes.items()}
+        orig_odes_by_name = {str(k): v for k, v in self.orig_odes_expanded.items()}
+        clock_vars = self._clock_variable_by_name()
+
+        for aux, defn in sorted(self.auxiliary_defs.items(), key=lambda kv: str(kv[0])):
+            aux_name = str(aux)
+            if aux_name in self.recast_ir.assignment_rules:
+                continue
+            if aux_name not in recast_odes_by_name:
+                if aux_name not in {str(v) for v in self.orig_odes.keys()}:
+                    tests.append(
+                        EquivalenceTest(
+                            name=f"ode_auxiliary_identity:{aux_name}",
+                            result=ValidationResult.INCONCLUSIVE,
+                            details=f"{aux_name} has a definition but no ODE or assignment rule",
+                        )
+                    )
+                continue
+
+            _aux_var, actual_ode = recast_odes_by_name[aux_name]
+            try:
+                defn_c = self._canonical_expr(defn)
+                if self._is_clock_definition(defn_c):
+                    expected_ode = sp.Integer(1)
+                else:
+                    if clock_vars:
+                        defn_c = _substitute_symbols_by_name(defn_c, clock_vars)
+                    expected_ode = sp.Integer(0)
+                    unresolved_dynamic_symbols = []
+                    for sym in sorted(defn_c.free_symbols, key=str):
+                        sym_name = str(sym)
+                        sym_name_lower = sym_name.lower()
+                        if sym_name_lower in {"time", "t"}:
+                            expected_ode += sp.diff(defn_c, sym)
+                        elif sym_name in recast_odes_by_name:
+                            _state_var, state_ode = recast_odes_by_name[sym_name]
+                            expected_ode += sp.diff(defn_c, sym) * state_ode
+                        elif sym_name in orig_odes_by_name:
+                            ode_at_mapping = orig_odes_by_name[sym_name].subs(self.mapping)
+                            if clock_vars:
+                                ode_at_mapping = _substitute_symbols_by_name(
+                                    ode_at_mapping, clock_vars
+                                )
+                            expected_ode += sp.diff(defn_c, sym) * ode_at_mapping
+                        elif sym_name in self.recast_ir.params:
+                            continue
+                        else:
+                            unresolved_dynamic_symbols.append(sym_name)
+
+                    if unresolved_dynamic_symbols:
+                        tests.append(
+                            EquivalenceTest(
+                                name=f"ode_auxiliary_identity:{aux_name}",
+                                result=ValidationResult.INCONCLUSIVE,
+                                details=(
+                                    f"Could not resolve dynamics for symbols in {aux_name}: "
+                                    + ", ".join(unresolved_dynamic_symbols)
+                                ),
+                                metadata={"unresolved_symbols": unresolved_dynamic_symbols},
+                            )
+                        )
+                        continue
+
+                equivalent, residual = self._expressions_equivalent(actual_ode, expected_ode)
+                tests.append(
+                    EquivalenceTest(
+                        name=f"ode_auxiliary_identity:{aux_name}",
+                        result=ValidationResult.PASS if equivalent else ValidationResult.FAIL,
+                        details=(
+                            f"{aux_name} ODE matches derivative of its definition"
+                            if equivalent
+                            else f"{aux_name} ODE identity residual: {residual}"
+                        ),
+                        metadata={"auxiliary": aux_name},
+                    )
+                )
+            except Exception as e:
+                tests.append(
+                    EquivalenceTest(
+                        name=f"ode_auxiliary_identity:{aux_name}",
+                        result=ValidationResult.INCONCLUSIVE,
+                        details=f"Could not validate {aux_name} ODE identity: {e}",
+                    )
+                )
+
+        return tests
+
+    def check_auxiliary_identities(self) -> list[EquivalenceTest]:
+        """Validate lifted auxiliaries and observable assignments against definitions."""
+        tests = self._assignment_identity_tests()
+        tests.extend(self._ode_auxiliary_identity_tests())
+        return tests
 
     def check_symbolic_equivalence(self, timeout: float = 30.0) -> EquivalenceTest:
         """
@@ -2094,6 +2565,7 @@ class RecastValidator:
         run_numerical: bool = True,
         run_trajectory: bool = True,
         use_jax: bool = False,
+        run_auxiliaries: bool = True,
     ) -> ValidationReport:
         """
         Run full validation suite.
@@ -2103,6 +2575,7 @@ class RecastValidator:
             run_numerical: Run numerical pointwise test
             run_trajectory: Run trajectory comparison test
             use_jax: Use JAX autodiff for numerical validation (faster, no symbolic)
+            run_auxiliaries: Run auxiliary identity validation
 
         Returns:
             ValidationReport with all test results
@@ -2112,7 +2585,18 @@ class RecastValidator:
             recast_file=self.recast_file,
             original_class=self.orig_class,
             recast_class=self.recast_class,
+            expected_class=self.expected_class,
             canonical_refusal_reason=self.canonical_refusal_reason,
+            generated_output_test=validate_generated_output_roundtrip(
+                self.recast_file, self.recast_text
+            ),
+            parser_test=EquivalenceTest(
+                name="validator_parser",
+                result=ValidationResult.PASS,
+                details=f"Original and recast parsed with {self.parser} parser",
+                metadata={"parser": self.parser},
+            ),
+            mapping_test=self.check_mapping_complete(),
         )
 
         # Run tests
@@ -2128,50 +2612,54 @@ class RecastValidator:
         if run_trajectory:
             report.trajectory_test = self.check_trajectory_comparison()
 
-        # Determine overall pass/fail
-        # Only REQUESTED tests must pass - if a test wasn't run, don't require it
-        # If any requested test fails or times out, overall validation fails
+        if run_auxiliaries:
+            report.auxiliary_tests = self.check_auxiliary_identities()
 
-        symbolic_pass = (
-            report.symbolic_test is not None
-            and report.symbolic_test.result == ValidationResult.PASS
-        )
-        numerical_pass = (
-            report.numerical_test is not None
-            and report.numerical_test.result == ValidationResult.PASS
-        )
-        trajectory_pass = (
-            report.trajectory_test is not None
-            and report.trajectory_test.result == ValidationResult.PASS
-        )
-
-        # Only require tests that were actually run
-        # If a test was run, it must pass. If not run, don't count it.
-        required_tests = []
+        required_tests: list[EquivalenceTest | None] = [
+            report.generated_output_test,
+            report.parser_test,
+            report.mapping_test,
+        ]
         if run_symbolic:
-            required_tests.append(symbolic_pass)
+            required_tests.append(report.symbolic_test)
         if run_numerical:
-            required_tests.append(numerical_pass)
+            required_tests.append(report.numerical_test)
         if run_trajectory:
-            required_tests.append(trajectory_pass)
+            required_tests.append(report.trajectory_test)
+        if run_auxiliaries:
+            required_tests.extend(report.auxiliary_tests)
 
-        # All REQUESTED tests must pass for overall pass
-        report.overall_pass = all(required_tests) if required_tests else False
+        report.overall_pass = all(_test_passed(test) for test in required_tests)
+        report.overall_result = self._overall_result(required_tests)
 
         # Generate summary
         if report.overall_pass:
-            report.summary = "✓ Validation PASSED: Recast is mathematically equivalent"
+            report.summary = "Validation PASSED: recast roundtrips and required checks passed"
         else:
-            # Check if any test actually failed (vs. not attempted)
-            tests = [report.symbolic_test, report.numerical_test, report.trajectory_test]
-            any_fail = any(t is not None and t.result == ValidationResult.FAIL for t in tests)
-
-            if any_fail:
-                report.summary = "✗ Validation FAILED: Recast differs from original"
+            if report.overall_result == ValidationResult.FAIL:
+                report.summary = "Validation FAILED: at least one required check failed"
+            elif report.overall_result == ValidationResult.UNSUPPORTED:
+                report.summary = "Validation UNSUPPORTED: a required backend is unavailable"
+            elif report.overall_result == ValidationResult.NOT_ATTEMPTED:
+                report.summary = "Validation NOT ATTEMPTED: a required check was skipped"
             else:
-                report.summary = "? Validation INCONCLUSIVE: Not all tests passed or were attempted"
+                report.summary = "Validation INCONCLUSIVE: required checks did not all pass"
 
         return report
+
+    def _overall_result(self, required_tests: list[EquivalenceTest | None]) -> ValidationResult:
+        """Reduce required test statuses to one fail-closed report status."""
+        if required_tests and all(_test_passed(test) for test in required_tests):
+            return ValidationResult.PASS
+
+        results = [test.result for test in required_tests if test is not None]
+        if any(result == ValidationResult.FAIL for result in results):
+            return ValidationResult.FAIL
+        if any(result == ValidationResult.UNSUPPORTED for result in results):
+            return ValidationResult.UNSUPPORTED
+        if any(result == ValidationResult.NOT_ATTEMPTED for result in results):
+            return ValidationResult.NOT_ATTEMPTED
+        return ValidationResult.INCONCLUSIVE
 
 
 def validate_recast_pair(
@@ -2185,6 +2673,7 @@ def validate_recast_pair(
     run_numerical: bool = True,
     run_trajectory: bool = True,
     use_jax: bool = False,
+    run_auxiliaries: bool = True,
 ) -> ValidationReport:
     """
     Convenience function to validate a recast.
@@ -2200,12 +2689,48 @@ def validate_recast_pair(
         run_numerical: Run numerical pointwise test
         run_trajectory: Run trajectory comparison test
         use_jax: Use JAX autodiff for numerical validation
+        run_auxiliaries: Run auxiliary identity validation
 
     Returns:
         ValidationReport
     """
-    validator = RecastValidator(original_file, recast_file, factor_map, mode, parser)
-    report = validator.validate(run_symbolic, run_numerical, run_trajectory, use_jax)
+    generated_output_test = validate_generated_output_roundtrip(recast_file)
+    try:
+        validator = RecastValidator(original_file, recast_file, factor_map, mode, parser)
+        report = validator.validate(
+            run_symbolic,
+            run_numerical,
+            run_trajectory,
+            use_jax,
+            run_auxiliaries,
+        )
+    except Exception as e:
+        expected_class = None
+        if mode == "canonical":
+            expected_class = SystemClass.CANONICAL_SSYSTEM
+        elif mode == "simplified":
+            expected_class = SystemClass.SSYSTEM
+        elif mode == "gma":
+            expected_class = SystemClass.GMA
+
+        parser_test = EquivalenceTest(
+            name="validator_parser",
+            result=ValidationResult.FAIL,
+            details=f"Validator parser failed with {parser} parser: {e}",
+            metadata={"parser": parser, "exception": str(e)},
+        )
+        report = ValidationReport(
+            original_file=original_file,
+            recast_file=recast_file,
+            original_class=None,
+            recast_class=None,
+            expected_class=expected_class,
+            generated_output_test=generated_output_test,
+            parser_test=parser_test,
+            overall_pass=False,
+            overall_result=ValidationResult.FAIL,
+            summary="Validation FAILED: validator parser failed",
+        )
 
     if output_json:
         with open(output_json, "w") as f:
