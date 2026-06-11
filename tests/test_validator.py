@@ -2,9 +2,11 @@
 
 import json
 
+import numpy as np
 import pytest
+import sympy as sp
 
-from ssys.recaster import SystemClass
+from ssys.recaster import SolverRequirement, SystemClass
 from ssys.validator import (
     EquivalenceTest,
     RecastValidator,
@@ -263,6 +265,187 @@ class TestFailClosedValidation:
         assert data["tests"]["generated_output"]["result"] == "failed"
         assert data["tests"]["parser"]["result"] == "failed"
         assert data["overall_result"] == "failed"
+
+
+class TestSolverAwareValidation:
+    """Tests for solver requirement reporting and algebraic residual checks."""
+
+    def _write_identity_pair(self, tmp_path):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                // @SSYS SOLVER_REQUIREMENT=ode_only
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1;
+            end
+        """)
+        return original, recast
+
+    def test_report_records_solver_requirements(self, tmp_path):
+        original, recast = self._write_identity_pair(tmp_path)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+
+        report = validator.validate(
+            run_symbolic=False,
+            run_numerical=False,
+            run_trajectory=False,
+            run_auxiliaries=False,
+        )
+        data = report.to_dict()
+
+        assert data["solver"]["recast_requirement"] == SolverRequirement.ODE_ONLY.value
+        assert data["tests"]["parser"]["metadata"]["recast_solver_requirement"] == (
+            SolverRequirement.ODE_ONLY.value
+        )
+
+    def test_trajectory_report_includes_backend_selection(self, tmp_path, monkeypatch):
+        original, recast = self._write_identity_pair(tmp_path)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+
+        def fake_simulate_model(*args, **kwargs):
+            model_name = args[7]
+            return {
+                "success": True,
+                "t": np.array([0.0, 1.0]),
+                "y": np.array([[1.0], [0.5]]),
+                "message": "",
+                "backend": f"{model_name}_backend",
+                "solver_requirement": SolverRequirement.ODE_ONLY.value,
+                "unsupported_solver_requirement": False,
+                "algebraic_residuals": {},
+            }
+
+        monkeypatch.setattr(validator, "_simulate_model", fake_simulate_model)
+
+        result = validator.check_trajectory_comparison()
+
+        assert result.result == ValidationResult.PASS
+        assert result.metadata["original_backend"] == "original_backend"
+        assert result.metadata["recast_backend"] == "recast_backend"
+
+    def test_unsupported_recast_solver_requirement_is_unsupported(self, tmp_path, monkeypatch):
+        original, recast = self._write_identity_pair(tmp_path)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+
+        def fake_simulate_model(*args, **kwargs):
+            model_name = args[7]
+            if model_name == "original":
+                return {
+                    "success": True,
+                    "t": np.array([0.0, 1.0]),
+                    "y": np.array([[1.0], [0.5]]),
+                    "message": "",
+                    "backend": "original_backend",
+                    "solver_requirement": SolverRequirement.ODE_ONLY.value,
+                    "unsupported_solver_requirement": False,
+                    "algebraic_residuals": {},
+                }
+            return {
+                "success": False,
+                "t": np.array([]),
+                "y": np.array([]),
+                "message": "unsupported dae_required",
+                "backend": "dae_projection",
+                "solver_requirement": SolverRequirement.DAE_REQUIRED.value,
+                "unsupported_solver_requirement": True,
+                "algebraic_residuals": {},
+            }
+
+        monkeypatch.setattr(validator, "_simulate_model", fake_simulate_model)
+
+        result = validator.check_trajectory_comparison()
+
+        assert result.result == ValidationResult.UNSUPPORTED
+        assert "unsupported dae_required" in result.details
+        assert result.metadata["recast_backend"] == "dae_projection"
+
+    def test_algebraic_residual_detects_ode_mode_drift(self, tmp_path):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -X/(K + X);
+                K = 1;
+                X = 1;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species X, Y_1;
+                // ========================================================================
+                // AUXILIARY DEFINITIONS (for lifted variables)
+                // ========================================================================
+                // Y_1 := K + X
+                // ========================================================================
+                X' = -X/Y_1;
+                Y_1' = -X/Y_1;
+                K = 1;
+                X = 1;
+                Y_1 = 2;
+            end
+        """)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        X = sp.Symbol("X", positive=True)
+        Y = sp.Symbol("Y_1", positive=True)
+        residuals, errors = validator._compute_algebraic_residual_norms(
+            np.array([[1.0, 2.2], [0.5, 1.8]]),
+            [X, Y],
+            {"K": 1.0},
+            np.array([0.0, 1.0]),
+        )
+
+        assert errors == []
+        assert residuals["Y_1"]["max_abs"] > 0.1
+
+    def test_assignment_rule_auxiliary_residual_is_enforced(self, tmp_path):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -X/(K + X);
+                K = 1;
+                X = 1;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species X;
+                // ========================================================================
+                // AUXILIARY DEFINITIONS (for lifted variables)
+                // ========================================================================
+                // Y_1 := K + X
+                // ========================================================================
+                Y_1 := K + X;
+                X' = -X/Y_1;
+                K = 1;
+                X = 1;
+            end
+        """)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        X = sp.Symbol("X", positive=True)
+        residuals, errors = validator._compute_algebraic_residual_norms(
+            np.array([[1.0], [0.5]]),
+            [X],
+            {"K": 1.0},
+            np.array([0.0, 1.0]),
+        )
+
+        assert errors == []
+        assert residuals["Y_1"]["max_abs"] == 0.0
+        assert residuals["Y_1"]["enforced_by_assignment_rule"] is True
 
 
 class TestRecastValidator:

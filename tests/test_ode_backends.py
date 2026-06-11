@@ -5,7 +5,47 @@ Tests for ODE solver backends.
 import pytest
 
 from src.ssys.ode_backends import simulate_ode
-from src.ssys.recaster import parse_antimony
+from src.ssys.ode_backends.interface import simulate_model
+from src.ssys.recaster import ModelIR, SolverRequirement, parse_antimony
+
+
+def test_simulate_model_selects_assignment_rule_backend(monkeypatch):
+    """ODE-with-assignment models use the ODE backend with explicit metadata."""
+    model_ir = ModelIR()
+    model_ir.solver_requirement = SolverRequirement.ODE_WITH_ASSIGNMENT_RULES
+    model_ir.assignment_rules = {"A": "S + 1"}
+
+    def fake_simulate_ode(*args, **kwargs):
+        return {
+            "t": [],
+            "y": [],
+            "state_names": [],
+            "success": True,
+            "message": "",
+            "integrator_stats": {},
+        }
+
+    monkeypatch.setattr("src.ssys.ode_backends.interface.simulate_ode", fake_simulate_ode)
+
+    result = simulate_model(model_ir, t0=0.0, t_end=1.0, n_points=2)
+
+    assert result["success"] is True
+    assert result["solver_requirement"] == SolverRequirement.ODE_WITH_ASSIGNMENT_RULES.value
+    assert result["backend"] == "roadrunner_cvode_assignment_rules"
+
+
+def test_unsupported_implicit_dae_requirement_fails_clear():
+    """Implicit algebraic constraints are not accepted as an ODE validation pass."""
+    model_ir = ModelIR()
+    model_ir.solver_requirement = SolverRequirement.DAE_REQUIRED
+    model_ir.algebraic_constraints = ["X - 1"]
+
+    result = simulate_model(model_ir, t0=0.0, t_end=1.0, n_points=2)
+
+    assert result["success"] is False
+    assert result["unsupported_solver_requirement"] is True
+    assert result["solver_requirement"] == SolverRequirement.DAE_REQUIRED.value
+    assert "implicit algebraic constraints" in result["message"]
 
 
 def test_simulate_ode_interface():

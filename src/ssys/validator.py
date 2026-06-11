@@ -19,8 +19,10 @@ import sympy as sp
 from sympy import Matrix, lambdify
 
 from .recaster import (
+    SolverRequirement,
     SystemClass,
     build_sym_system,
+    classify_sym_system_solver_requirement,
     classify_system,
     parse_antimony,
     parse_antimony_via_sbml,
@@ -263,6 +265,8 @@ class ValidationReport:
     recast_class: SystemClass | None
     expected_class: SystemClass | None = None
     canonical_refusal_reason: str | None = None
+    original_solver_requirement: SolverRequirement | None = None
+    recast_solver_requirement: SolverRequirement | None = None
 
     # Test results
     generated_output_test: EquivalenceTest | None = None
@@ -271,6 +275,7 @@ class ValidationReport:
     symbolic_test: EquivalenceTest | None = None
     numerical_test: EquivalenceTest | None = None
     trajectory_test: EquivalenceTest | None = None
+    algebraic_residual_test: EquivalenceTest | None = None
     auxiliary_tests: list[EquivalenceTest] = field(default_factory=list)
 
     # Overall verdict
@@ -303,6 +308,18 @@ class ValidationReport:
                 "expected": self.expected_class.value if self.expected_class else None,
                 "canonical_refusal_reason": self.canonical_refusal_reason,
             },
+            "solver": {
+                "original_requirement": (
+                    self.original_solver_requirement.value
+                    if self.original_solver_requirement
+                    else None
+                ),
+                "recast_requirement": (
+                    self.recast_solver_requirement.value
+                    if self.recast_solver_requirement
+                    else None
+                ),
+            },
             "tests": {
                 "generated_output": test_to_dict(self.generated_output_test),
                 "parser": test_to_dict(self.parser_test),
@@ -310,6 +327,7 @@ class ValidationReport:
                 "symbolic": test_to_dict(self.symbolic_test),
                 "numerical": test_to_dict(self.numerical_test),
                 "trajectory": test_to_dict(self.trajectory_test),
+                "algebraic_residuals": test_to_dict(self.algebraic_residual_test),
                 "auxiliaries": [test_to_dict(t) for t in self.auxiliary_tests],
             },
             "overall_pass": self.overall_pass,
@@ -424,6 +442,10 @@ class RecastValidator:
         # Extract ODE dictionaries
         self.orig_odes = self.orig_system.odes
         self.recast_odes = self.recast_system.odes
+        self.orig_solver_requirement = classify_sym_system_solver_requirement(self.orig_system)
+        self.recast_solver_requirement = classify_sym_system_solver_requirement(
+            self.recast_system
+        )
 
         # Extract mapping from comments if not provided
         if factor_map is None:
@@ -438,6 +460,7 @@ class RecastValidator:
         # (not just comment definitions). This handles lifted_mode='assignment' output
         # where Y_1 := a^2 + 1 is an actual Antimony statement, not a comment.
         self._merge_assignment_rules_as_auxiliaries()
+        self._refine_recast_solver_requirement_from_auxiliaries()
 
         # Merge auxiliary definitions into factor_map for use in validation
         self.factor_map.update(self.auxiliary_defs)
@@ -483,6 +506,25 @@ class RecastValidator:
         if mode == "gma":
             return SystemClass.GMA
         return None
+
+    def _refine_recast_solver_requirement_from_auxiliaries(self) -> None:
+        """Use auxiliary definition comments to classify manifold-constrained recasts."""
+        if self.recast_solver_requirement == SolverRequirement.DAE_REQUIRED:
+            return
+        state_names = {str(var) for var in self.recast_odes.keys()}
+        assignment_rule_names = set(self.recast_ir.assignment_rules.keys())
+        for aux, defn in self.auxiliary_defs.items():
+            aux_name = str(aux)
+            if aux_name in assignment_rule_names:
+                continue
+            if aux_name not in state_names:
+                continue
+            if self._is_clock_definition(defn):
+                continue
+            if any(sym.name in state_names for sym in defn.free_symbols):
+                self.recast_solver_requirement = SolverRequirement.DAE_REQUIRED
+                self.recast_system.solver_requirement = SolverRequirement.DAE_REQUIRED
+                return
 
     def _extract_mapping_from_comments(self, recast_text: str) -> dict:
         """
@@ -606,6 +648,7 @@ class RecastValidator:
                         "cos",
                         "tan",
                         "sqrt",
+                        "pow",
                         "sinh",
                         "cosh",
                         "tanh",
@@ -718,6 +761,7 @@ class RecastValidator:
                                 "cos",
                                 "tan",
                                 "sqrt",
+                                "pow",
                                 "sinh",
                                 "cosh",
                                 "tanh",
@@ -1056,6 +1100,7 @@ class RecastValidator:
             "cos",
             "tan",
             "sqrt",
+            "pow",
             "sinh",
             "cosh",
             "tanh",
@@ -2197,12 +2242,23 @@ class RecastValidator:
                 time_symbol,
                 "original",
             )
+            trajectory_metadata = {
+                "original_solver_requirement": self.orig_solver_requirement.value,
+                "recast_solver_requirement": self.recast_solver_requirement.value,
+                "original_backend": orig_result.get("backend"),
+                "recast_backend": None,
+            }
 
             if not orig_result["success"]:
                 return EquivalenceTest(
                     name="trajectory_comparison",
-                    result=ValidationResult.NOT_ATTEMPTED,
+                    result=(
+                        ValidationResult.UNSUPPORTED
+                        if orig_result.get("unsupported_solver_requirement")
+                        else ValidationResult.NOT_ATTEMPTED
+                    ),
                     details=f"Original simulation failed: {orig_result['message']}",
+                    metadata=trajectory_metadata,
                 )
 
             # Step 2: Simulate recast model
@@ -2222,12 +2278,21 @@ class RecastValidator:
                 "recast",
                 y0_override=recast_y0,
             )
+            trajectory_metadata["recast_backend"] = recast_result.get("backend")
+            trajectory_metadata["algebraic_residuals"] = recast_result.get(
+                "algebraic_residuals", {}
+            )
 
             if not recast_result["success"]:
                 return EquivalenceTest(
                     name="trajectory_comparison",
-                    result=ValidationResult.NOT_ATTEMPTED,
+                    result=(
+                        ValidationResult.UNSUPPORTED
+                        if recast_result.get("unsupported_solver_requirement")
+                        else ValidationResult.NOT_ATTEMPTED
+                    ),
                     details=f"Recast simulation failed: {recast_result['message']}",
+                    metadata=trajectory_metadata,
                 )
 
             # Step 3: Reconstruct original variables from recast
@@ -2286,6 +2351,7 @@ class RecastValidator:
                     max_error=max_error,
                     mean_error=mean_error,
                     details=f"Trajectories match. Max scaled error: {max_error:.2e} at t={worst_t:.2g} ({worst_var})",
+                    metadata=trajectory_metadata,
                 )
             else:
                 return EquivalenceTest(
@@ -2303,6 +2369,7 @@ class RecastValidator:
                             "error": float(errors[worst_idx]),
                         }
                     ],
+                    metadata=trajectory_metadata,
                 )
 
         except Exception as e:
@@ -2327,19 +2394,62 @@ class RecastValidator:
         y0_override=None,
     ):
         """
-        Simulate a model using libRoadRunner.
+        Simulate a model using the solver backend selected for its requirement.
         """
-        return self._simulate_with_roadrunner(
+        from .ode_backends import simulate_model
+
+        requirement = (
+            self.orig_solver_requirement
+            if model_name == "original"
+            else self.recast_solver_requirement
+        )
+        options: dict[str, Any] = {}
+        if model_name == "recast":
+            options["auxiliary_defs"] = dict(self.auxiliary_defs)
+
+        result = simulate_model(
             model_ir,
-            odes,
-            vars_ordered,
+            0.0,
             t_end,
             n_points,
-            param_values,
-            time_symbol,
-            model_name,
-            y0_override,
+            y0_override=y0_override,
+            options=options,
+            solver_requirement=requirement,
         )
+
+        if result["success"]:
+            state_names = result["state_names"]
+            y_reordered = np.zeros((len(result["t"]), len(vars_ordered)))
+
+            for i, var in enumerate(vars_ordered):
+                var_name = str(var)
+                if var_name in state_names:
+                    j = state_names.index(var_name)
+                    y_reordered[:, i] = result["y"][:, j]
+                else:
+                    y_reordered[:, i] = 0.0
+
+            return {
+                "success": True,
+                "t": result["t"],
+                "y": y_reordered,
+                "message": "",
+                "backend": result.get("backend", "unknown"),
+                "solver_requirement": result.get("solver_requirement", requirement.value),
+                "unsupported_solver_requirement": False,
+                "algebraic_residuals": result.get("algebraic_residuals", {}),
+            }
+
+        return {
+            "success": False,
+            "t": np.array([]),
+            "y": np.array([]),
+            "message": result.get("message", "Unknown simulation failure"),
+            "backend": result.get("backend", "unknown"),
+            "solver_requirement": result.get("solver_requirement", requirement.value),
+            "unsupported_solver_requirement": result.get("unsupported_solver_requirement", False),
+            "algebraic_residuals": result.get("algebraic_residuals", {}),
+        }
 
     def _simulate_with_roadrunner(
         self,
@@ -2559,6 +2669,233 @@ class RecastValidator:
 
         return X_reconstructed
 
+    def _algebraic_definitions_for_residuals(self) -> dict[str, sp.Expr]:
+        """Collect explicit algebraic definitions whose residuals should be monitored."""
+        definitions: dict[str, sp.Expr] = {}
+        for aux, defn in self.auxiliary_defs.items():
+            defn_c = self._canonical_expr(defn)
+            if self._is_clock_definition(defn_c):
+                continue
+            definitions[str(aux)] = defn_c
+
+        for rule_name, rule_expr in self.recast_ir.assignment_rules.items():
+            if rule_name in definitions:
+                continue
+            try:
+                definitions[rule_name] = self._parse_expr_with_canonical_symbols(rule_expr)
+            except Exception:
+                continue
+
+        return definitions
+
+    def _evaluate_expr_on_recast_trajectory(
+        self,
+        expr: sp.Expr,
+        Z_recast: np.ndarray,
+        recast_vars: list[sp.Symbol],
+        param_values: dict[str, float],
+        t_array: np.ndarray,
+    ) -> np.ndarray:
+        expr = self._canonical_expr(expr)
+        recast_var_names = [str(v) for v in recast_vars]
+        name_to_idx = {name: idx for idx, name in enumerate(recast_var_names)}
+        symbols = sorted(expr.free_symbols, key=lambda sym: sym.name)
+
+        args: list[np.ndarray | float] = []
+        for sym in symbols:
+            name = sym.name
+            if name in name_to_idx:
+                args.append(Z_recast[:, name_to_idx[name]])
+            elif name in param_values:
+                args.append(float(param_values[name]))
+            elif name.lower() == "time":
+                args.append(t_array)
+            elif name == "t" and name not in name_to_idx:
+                args.append(t_array)
+            else:
+                raise ValueError(f"missing value for symbol {name!r}")
+
+        if not symbols:
+            return np.full_like(t_array, float(expr), dtype=float)
+
+        func = lambdify(symbols, expr, modules="numpy")
+        values = np.asarray(func(*args), dtype=float)
+        if values.shape == ():
+            return np.full_like(t_array, float(values), dtype=float)
+        return values
+
+    def _compute_algebraic_residual_norms(
+        self,
+        Z_recast: np.ndarray,
+        recast_vars: list[sp.Symbol],
+        param_values: dict[str, float],
+        t_array: np.ndarray,
+    ) -> tuple[dict[str, dict[str, float | bool]], list[dict[str, Any]]]:
+        residuals: dict[str, dict[str, float | bool]] = {}
+        errors: list[dict[str, Any]] = []
+        recast_var_names = [str(v) for v in recast_vars]
+        name_to_idx = {name: idx for idx, name in enumerate(recast_var_names)}
+        assignment_rule_names = set(self.recast_ir.assignment_rules.keys())
+
+        for name, defn in self._algebraic_definitions_for_residuals().items():
+            if name not in name_to_idx:
+                residuals[name] = {
+                    "max_abs": 0.0,
+                    "mean_abs": 0.0,
+                    "enforced_by_assignment_rule": name in assignment_rule_names,
+                }
+                continue
+
+            try:
+                expected = self._evaluate_expr_on_recast_trajectory(
+                    defn, Z_recast, recast_vars, param_values, t_array
+                )
+                actual = Z_recast[:, name_to_idx[name]]
+                residual = np.asarray(actual - expected, dtype=float)
+                residuals[name] = {
+                    "max_abs": float(np.max(np.abs(residual))) if residual.size else 0.0,
+                    "mean_abs": float(np.mean(np.abs(residual))) if residual.size else 0.0,
+                    "enforced_by_assignment_rule": False,
+                }
+            except Exception as exc:
+                errors.append({"constraint": name, "error": str(exc)})
+
+        for idx, constraint in enumerate(getattr(self.recast_ir, "algebraic_constraints", []) or []):
+            name = f"algebraic_constraint:{idx + 1}"
+            try:
+                expr = self._parse_expr_with_canonical_symbols(constraint)
+                residual = self._evaluate_expr_on_recast_trajectory(
+                    expr, Z_recast, recast_vars, param_values, t_array
+                )
+                residuals[name] = {
+                    "max_abs": float(np.max(np.abs(residual))) if residual.size else 0.0,
+                    "mean_abs": float(np.mean(np.abs(residual))) if residual.size else 0.0,
+                    "enforced_by_assignment_rule": False,
+                }
+            except Exception as exc:
+                errors.append({"constraint": name, "error": str(exc)})
+
+        return residuals, errors
+
+    def check_algebraic_manifold_preservation(
+        self,
+        t_end: float = 1.0,
+        n_points: int = 100,
+        threshold: float = 1e-8,
+    ) -> EquivalenceTest | None:
+        """
+        Validate algebraic-manifold residuals over a recast trajectory.
+
+        The threshold is the maximum absolute residual allowed for each explicit
+        auxiliary definition or algebraic constraint. Assignment-rule-only
+        quantities that are not differential states are recorded as exactly
+        enforced and do not force DAE simulation.
+        """
+        if not self._algebraic_definitions_for_residuals() and not getattr(
+            self.recast_ir, "algebraic_constraints", []
+        ):
+            return None
+
+        t_end_use = self.orig_ir.sim_t_end if self.orig_ir.sim_t_end is not None else t_end
+        n_points_use = (
+            (self.orig_ir.sim_n_steps + 1) if self.orig_ir.sim_n_steps is not None else n_points
+        )
+        orig_vars_ordered = sorted(self.orig_odes.keys(), key=str)
+        recast_vars_ordered = self.recast_state_vars
+        param_values = dict(self.recast_ir.params)
+        recast_y0 = self._compute_recast_initial_conditions(
+            recast_vars_ordered, orig_vars_ordered, param_values
+        )
+
+        recast_result = self._simulate_model(
+            self.recast_ir,
+            self.recast_odes,
+            recast_vars_ordered,
+            t_end_use,
+            n_points_use,
+            param_values,
+            None,
+            "recast",
+            y0_override=recast_y0,
+        )
+
+        metadata = {
+            "threshold": threshold,
+            "solver_requirement": self.recast_solver_requirement.value,
+            "backend": recast_result.get("backend"),
+            "residual_norms": recast_result.get("algebraic_residuals", {}),
+        }
+
+        if not recast_result["success"]:
+            return EquivalenceTest(
+                name="algebraic_manifold_residuals",
+                result=(
+                    ValidationResult.UNSUPPORTED
+                    if recast_result.get("unsupported_solver_requirement")
+                    else ValidationResult.NOT_ATTEMPTED
+                ),
+                details=f"Recast simulation failed for residual check: {recast_result['message']}",
+                metadata=metadata,
+            )
+
+        residuals, errors = self._compute_algebraic_residual_norms(
+            recast_result["y"],
+            recast_vars_ordered,
+            dict(self.recast_ir.params),
+            recast_result["t"],
+        )
+        metadata["residual_norms"] = residuals
+        if errors:
+            metadata["errors"] = errors
+            return EquivalenceTest(
+                name="algebraic_manifold_residuals",
+                result=ValidationResult.INCONCLUSIVE,
+                details=f"Could not evaluate {len(errors)} algebraic residual(s)",
+                metadata=metadata,
+            )
+
+        max_residual = max((float(item["max_abs"]) for item in residuals.values()), default=0.0)
+        mean_residual = (
+            float(np.mean([float(item["mean_abs"]) for item in residuals.values()]))
+            if residuals
+            else 0.0
+        )
+
+        if max_residual <= threshold:
+            return EquivalenceTest(
+                name="algebraic_manifold_residuals",
+                result=ValidationResult.PASS,
+                max_error=max_residual,
+                mean_error=mean_residual,
+                details=(
+                    f"Algebraic manifold residuals within threshold {threshold:.1e}; "
+                    f"max residual {max_residual:.2e}"
+                ),
+                metadata=metadata,
+            )
+
+        worst_name, worst = max(
+            residuals.items(), key=lambda item: float(item[1]["max_abs"])
+        )
+        return EquivalenceTest(
+            name="algebraic_manifold_residuals",
+            result=ValidationResult.FAIL,
+            max_error=max_residual,
+            mean_error=mean_residual,
+            details=(
+                f"Algebraic manifold residual {max_residual:.2e} exceeds "
+                f"threshold {threshold:.1e} for {worst_name}"
+            ),
+            counterexamples=[
+                {
+                    "constraint": worst_name,
+                    "max_abs": float(worst["max_abs"]),
+                    "threshold": threshold,
+                }
+            ],
+            metadata=metadata,
+        )
+
     def validate(
         self,
         run_symbolic: bool = True,
@@ -2566,6 +2903,7 @@ class RecastValidator:
         run_trajectory: bool = True,
         use_jax: bool = False,
         run_auxiliaries: bool = True,
+        algebraic_residual_threshold: float = 1e-8,
     ) -> ValidationReport:
         """
         Run full validation suite.
@@ -2576,6 +2914,7 @@ class RecastValidator:
             run_trajectory: Run trajectory comparison test
             use_jax: Use JAX autodiff for numerical validation (faster, no symbolic)
             run_auxiliaries: Run auxiliary identity validation
+            algebraic_residual_threshold: Maximum absolute algebraic residual over trajectory
 
         Returns:
             ValidationReport with all test results
@@ -2587,6 +2926,8 @@ class RecastValidator:
             recast_class=self.recast_class,
             expected_class=self.expected_class,
             canonical_refusal_reason=self.canonical_refusal_reason,
+            original_solver_requirement=self.orig_solver_requirement,
+            recast_solver_requirement=self.recast_solver_requirement,
             generated_output_test=validate_generated_output_roundtrip(
                 self.recast_file, self.recast_text
             ),
@@ -2594,7 +2935,11 @@ class RecastValidator:
                 name="validator_parser",
                 result=ValidationResult.PASS,
                 details=f"Original and recast parsed with {self.parser} parser",
-                metadata={"parser": self.parser},
+                metadata={
+                    "parser": self.parser,
+                    "original_solver_requirement": self.orig_solver_requirement.value,
+                    "recast_solver_requirement": self.recast_solver_requirement.value,
+                },
             ),
             mapping_test=self.check_mapping_complete(),
         )
@@ -2611,6 +2956,9 @@ class RecastValidator:
 
         if run_trajectory:
             report.trajectory_test = self.check_trajectory_comparison()
+            report.algebraic_residual_test = self.check_algebraic_manifold_preservation(
+                threshold=algebraic_residual_threshold
+            )
 
         if run_auxiliaries:
             report.auxiliary_tests = self.check_auxiliary_identities()
@@ -2626,6 +2974,8 @@ class RecastValidator:
             required_tests.append(report.numerical_test)
         if run_trajectory:
             required_tests.append(report.trajectory_test)
+            if report.algebraic_residual_test is not None:
+                required_tests.append(report.algebraic_residual_test)
         if run_auxiliaries:
             required_tests.extend(report.auxiliary_tests)
 
@@ -2674,6 +3024,7 @@ def validate_recast_pair(
     run_trajectory: bool = True,
     use_jax: bool = False,
     run_auxiliaries: bool = True,
+    algebraic_residual_threshold: float = 1e-8,
 ) -> ValidationReport:
     """
     Convenience function to validate a recast.
@@ -2690,6 +3041,7 @@ def validate_recast_pair(
         run_trajectory: Run trajectory comparison test
         use_jax: Use JAX autodiff for numerical validation
         run_auxiliaries: Run auxiliary identity validation
+        algebraic_residual_threshold: Maximum absolute residual for algebraic manifolds
 
     Returns:
         ValidationReport
@@ -2703,6 +3055,7 @@ def validate_recast_pair(
             run_trajectory,
             use_jax,
             run_auxiliaries,
+            algebraic_residual_threshold,
         )
     except Exception as e:
         expected_class = None

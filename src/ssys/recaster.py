@@ -19,6 +19,15 @@ simple_numeric_literal_pat = re.compile(r"^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d
 EPS_INIT = 1e-6
 EPS_SLACK = 1.0  # Default slack for canonical mode
 
+
+class SolverRequirement(Enum):
+    """Numerical backend required to validate or simulate a generated model."""
+
+    ODE_ONLY = "ode_only"
+    ODE_WITH_ASSIGNMENT_RULES = "ode_with_assignment_rules"
+    DAE_REQUIRED = "dae_required"
+
+
 # Antimony reserved keywords that require sanitization
 #
 # MOTIVATION: Models in BioModels commonly use variable names (compartment, species,
@@ -465,6 +474,7 @@ class ModelIR:
     reactions: list[Reaction] = field(default_factory=list)
     explicit_rates: dict[str, str] = field(default_factory=dict)
     assignment_rules: dict[str, str] = field(default_factory=dict)
+    algebraic_constraints: list[str] = field(default_factory=list)
     raw_lines: list[str] = field(default_factory=list)
     param_exprs: dict[str, str] = field(
         default_factory=dict
@@ -486,6 +496,7 @@ class ModelIR:
     # Function templates: name -> (param_list, expression_body)
     # e.g., "M" -> (["x"], "1 + gam * h * x^(h-1) / (1 + x^h)^2")
     function_templates: dict[str, tuple[list[str], str]] = field(default_factory=dict)
+    solver_requirement: SolverRequirement = SolverRequirement.ODE_ONLY
 
 
 class SBMLParseError(ValueError):
@@ -547,6 +558,44 @@ def _sympy_to_antimony_syntax(expr_str: str) -> str:
     return result
 
 
+def normalize_solver_requirement(value: str | SolverRequirement | None) -> SolverRequirement | None:
+    """Normalize a solver requirement value from metadata, enum, or raw string."""
+    if value is None:
+        return None
+    if isinstance(value, SolverRequirement):
+        return value
+    normalized = str(value).strip().lower()
+    for requirement in SolverRequirement:
+        if normalized == requirement.value:
+            return requirement
+    return None
+
+
+def _extract_solver_requirement_metadata(text: str) -> SolverRequirement | None:
+    """
+    Extract solver requirement metadata from generated Antimony comments.
+
+    Preferred format:
+        // @SSYS SOLVER_REQUIREMENT=ode_with_assignment_rules
+
+    A human-readable fallback such as:
+        // Solver requirement: ode_with_assignment_rules
+
+    is accepted to keep reports robust across older generated files.
+    """
+    key_value_pattern = re.compile(r"SOLVER_REQUIREMENT\s*=\s*([A-Za-z_]+)", re.IGNORECASE)
+    label_pattern = re.compile(r"Solver requirement\s*:\s*([A-Za-z_]+)", re.IGNORECASE)
+
+    for line in text.splitlines():
+        if "//" not in line:
+            continue
+        comment = line.split("//", 1)[1]
+        match = key_value_pattern.search(comment) or label_pattern.search(comment)
+        if match:
+            return normalize_solver_requirement(match.group(1))
+    return None
+
+
 def _format_sim_metadata_lines(result: "RecastResult") -> list[str]:
     """
     Format @SIM metadata as Antimony comment lines.
@@ -581,6 +630,7 @@ def parse_antimony(text: str) -> ModelIR:
     ir = ModelIR()
     ir.antimony_text = text  # Cache original text for RoadRunner
     ir.raw_lines = [ln.rstrip() for ln in text.splitlines()]
+    ir.solver_requirement = _extract_solver_requirement_metadata(text) or SolverRequirement.ODE_ONLY
 
     # FIRST: Extract @SIM metadata from comments BEFORE any processing
     # This must happen before raw_lines is overwritten by joined_lines
@@ -704,6 +754,11 @@ def parse_antimony(text: str) -> ModelIR:
                 left, right = stmt.split("=", 1)
                 left = left.strip()
                 right = right.strip()
+
+                if left in {"0", "0.0"}:
+                    ir.algebraic_constraints.append(_antimony_to_sympy_syntax(right))
+                    ir.solver_requirement = SolverRequirement.DAE_REQUIRED
+                    continue
 
                 # Handle 'const' keyword (strip it - const is just documentation)
                 if left.startswith("const "):
@@ -871,6 +926,7 @@ def parse_antimony_via_sbml(
 
     # Extract @SIM metadata BEFORE conversion (comments are lost in SBML)
     t_start, t_end, n_steps, eps_init, eps_slack = _extract_sim_metadata(antimony_text)
+    solver_requirement_metadata = _extract_solver_requirement_metadata(antimony_text)
 
     # CRITICAL: Preprocess to join multi-line statements
     # libantimony requires complete statements on single lines
@@ -914,6 +970,12 @@ def parse_antimony_via_sbml(
     sym.sim_n_steps = n_steps
     sym.eps_init = eps_init
     sym.eps_slack = eps_slack
+    classified_requirement = classify_sym_system_solver_requirement(sym)
+    sym.solver_requirement = (
+        classified_requirement
+        if classified_requirement == SolverRequirement.DAE_REQUIRED
+        else solver_requirement_metadata or classified_requirement
+    )
 
     # Cache original Antimony text for RoadRunner simulation
     sym.antimony_text = antimony_text
@@ -1363,6 +1425,17 @@ def _parse_sbml_document(
             assignment_rules[var_id] = formula_str
 
     # ========================================================================
+    # STEP 6a.1: Handle algebraic rules (implicit constraints)
+    # ========================================================================
+    algebraic_constraints: list[str] = []
+    for i in range(model.getNumRules()):
+        rule = model.getRule(i)
+
+        if rule.getTypeCode() == libsbml.SBML_ALGEBRAIC_RULE:
+            formula_str = libsbml.formulaToString(rule.getMath())
+            algebraic_constraints.append(formula_str)
+
+    # ========================================================================
     # STEP 6b: Handle InitialAssignments (parameter expressions for ICs)
     # ========================================================================
     # In SBML, InitialAssignments allow ICs to be set via formulas like I = I_b
@@ -1447,7 +1520,17 @@ def _parse_sbml_document(
         odes=simplified_odes,
         initials=initials,
         assignment_rules=assignment_rules,
+        algebraic_constraints=algebraic_constraints,
         compartments=compartments,
+        solver_requirement=(
+            SolverRequirement.DAE_REQUIRED
+            if algebraic_constraints
+            else (
+                SolverRequirement.ODE_WITH_ASSIGNMENT_RULES
+                if assignment_rules
+                else SolverRequirement.ODE_ONLY
+            )
+        ),
     )
 
 
@@ -1511,6 +1594,7 @@ class SymSystem:
     assignment_rules: dict[str, str] = field(
         default_factory=dict
     )  # Assignment rules from original model
+    algebraic_constraints: list[str] = field(default_factory=list)
     compartments: dict[str, float] = field(default_factory=dict)  # compartment_name -> size
     # Optional metadata attributes (set by parse_antimony_via_sbml)
     sim_t_start: float | None = None  # Simulation start time from @SIM
@@ -1519,6 +1603,7 @@ class SymSystem:
     eps_init: float | None = None  # User-specified EPS_INIT for zero IC replacement
     eps_slack: float | None = None  # User-specified EPS_SLACK for canonical mode
     antimony_text: str = ""  # Cache original Antimony text for RoadRunner
+    solver_requirement: SolverRequirement = SolverRequirement.ODE_ONLY
 
 
 def build_sym_system(ir: ModelIR) -> SymSystem:
@@ -1603,6 +1688,12 @@ def build_sym_system(ir: ModelIR) -> SymSystem:
         elif name in param_syms:
             initial_exprs[param_syms[name]] = expr_str
 
+    solver_requirement = ir.solver_requirement
+    if ir.algebraic_constraints:
+        solver_requirement = SolverRequirement.DAE_REQUIRED
+    elif expanded_assignment_rules and solver_requirement == SolverRequirement.ODE_ONLY:
+        solver_requirement = SolverRequirement.ODE_WITH_ASSIGNMENT_RULES
+
     return SymSystem(
         vars=list(odes.keys()),
         params={k: float(v) for k, v in ir.params.items()},
@@ -1610,6 +1701,8 @@ def build_sym_system(ir: ModelIR) -> SymSystem:
         initials=initials,
         initial_exprs=initial_exprs,
         assignment_rules=expanded_assignment_rules,  # Pass through expanded legacy templates
+        algebraic_constraints=list(ir.algebraic_constraints),
+        solver_requirement=solver_requirement,
     )
 
 
@@ -1678,12 +1771,106 @@ class RecastResult:
     assignment_rules: dict[str, str] = field(
         default_factory=dict
     )  # Assignment rules from original model
+    algebraic_constraints: list[str] = field(default_factory=list)
+    solver_requirement: SolverRequirement = SolverRequirement.ODE_ONLY
     # Simulation metadata (propagated from input)
     sim_t_start: float | None = None
     sim_t_end: float | None = None
     sim_n_steps: int | None = None
     eps_init: float | None = None
     eps_slack: float | None = None  # User-specified EPS_SLACK for canonical mode
+
+
+def _is_clock_definition(defn: sp.Expr) -> bool:
+    return defn == sp.Symbol("time") or str(defn).lower() in {"time", "t"}
+
+
+def _constraint_mentions_state(constraint: str | sp.Expr, state_names: set[str]) -> bool:
+    """Return true if an algebraic constraint is coupled to differential states."""
+    if not state_names:
+        return False
+    try:
+        expr = sp.sympify(str(constraint).replace("^", "**"))
+    except Exception:
+        return True
+    return any(sym.name in state_names for sym in expr.free_symbols)
+
+
+def _has_non_identity_mapping(result: RecastResult) -> bool:
+    for orig, aux_list in result.factor_map.items():
+        if len(aux_list) != 1 or aux_list[0] != orig:
+            return True
+    return False
+
+
+def classify_solver_requirement(
+    result: RecastResult, *, lifted_mode: str = "ode"
+) -> SolverRequirement:
+    """
+    Classify the backend requirement for a generated recast output.
+
+    `ode_with_assignment_rules` means an ODE integrator that honors explicit
+    assignment rules is sufficient. `dae_required` is reserved for algebraic
+    constraints coupled to differential states, such as ODE-mode lifted
+    auxiliaries that must remain on a defining manifold.
+    """
+    state_names = {var.name for var in result.variables}
+    for eq in result.equations:
+        state_names.add(eq.var.name)
+    for eq in result.gma_equations:
+        state_names.add(eq.var.name)
+
+    if result.algebraic_constraints and any(
+        _constraint_mentions_state(constraint, state_names)
+        for constraint in result.algebraic_constraints
+    ):
+        return SolverRequirement.DAE_REQUIRED
+
+    if result.assignment_rules and any(name in state_names for name in result.assignment_rules):
+        return SolverRequirement.DAE_REQUIRED
+
+    lifted_aux_defs = {
+        aux.name: defn
+        for aux, defn in result.auxiliary_defs.items()
+        if aux.name != "dummy_const" and not _is_clock_definition(defn)
+    }
+    if lifted_aux_defs:
+        if lifted_mode == "assignment":
+            return SolverRequirement.ODE_WITH_ASSIGNMENT_RULES
+        for aux_name, defn in lifted_aux_defs.items():
+            if aux_name in state_names and any(sym.name in state_names for sym in defn.free_symbols):
+                return SolverRequirement.DAE_REQUIRED
+
+    if result.assignment_rules or _has_non_identity_mapping(result):
+        return SolverRequirement.ODE_WITH_ASSIGNMENT_RULES
+
+    return SolverRequirement.ODE_ONLY
+
+
+def classify_sym_system_solver_requirement(sym: SymSystem) -> SolverRequirement:
+    """Classify the solver requirement for an already parsed symbolic model."""
+    configured = normalize_solver_requirement(getattr(sym, "solver_requirement", None))
+    if configured == SolverRequirement.DAE_REQUIRED:
+        return configured
+
+    state_names = {var.name for var in sym.vars}
+    constraints = getattr(sym, "algebraic_constraints", [])
+    if constraints and any(_constraint_mentions_state(constraint, state_names) for constraint in constraints):
+        return SolverRequirement.DAE_REQUIRED
+
+    if sym.assignment_rules:
+        if any(name in state_names for name in sym.assignment_rules):
+            return SolverRequirement.DAE_REQUIRED
+        return SolverRequirement.ODE_WITH_ASSIGNMENT_RULES
+
+    return configured or SolverRequirement.ODE_ONLY
+
+
+def _format_solver_metadata_lines(requirement: SolverRequirement) -> list[str]:
+    return [
+        f"// @SSYS SOLVER_REQUIREMENT={requirement.value}",
+        f"// Solver requirement: {requirement.value}",
+    ]
 
 
 def classify_system(sym: SymSystem) -> SystemClass:
@@ -4497,6 +4684,8 @@ def recast_to_ssystem(sym: "SymSystem", mode: str = "simplified") -> "RecastResu
 
     # Pass assignment rules (time-only auxiliaries) to result
     result.assignment_rules = sym.assignment_rules
+    result.algebraic_constraints = list(sym.algebraic_constraints)
+    result.solver_requirement = classify_solver_requirement(result)
 
     # Propagate simulation metadata from input SymSystem
     result.sim_t_start = sym.sim_t_start
@@ -5137,9 +5326,11 @@ def gma_to_antimony(
             - "assignment": Output as assignment rules (algebraically exact)
     """
     name_map = _build_name_sanitization_map(_collect_antimony_names(result))
+    result.solver_requirement = classify_solver_requirement(result, lifted_mode=lifted_mode)
 
     lines: list[str] = []
     lines.append(f"model {model_name}()")
+    lines.extend(_format_solver_metadata_lines(result.solver_requirement))
     lines.append("")
 
     # --- Identify lifted auxiliaries based on mode ---
@@ -5353,6 +5544,8 @@ def ssystem_to_antimony(
     if result.status == RecastStatus.FAILED:
         return _failed_to_antimony(result, model_name)
 
+    result.solver_requirement = classify_solver_requirement(result, lifted_mode=lifted_mode)
+
     # Check if this is GMA format
     if result.status == RecastStatus.GMA:
         return gma_to_antimony(result, model_name, lifted_mode=lifted_mode)
@@ -5368,6 +5561,7 @@ def _failed_to_antimony(result: RecastResult, model_name: str) -> str:
     """Format a failed recast result with error message."""
     lines: list[str] = []
     lines.append(f"model {model_name}()")
+    lines.extend(_format_solver_metadata_lines(result.solver_requirement))
     lines.append("")
     lines.append("// ========================================================================")
     lines.append("// RECAST FAILED")
@@ -5708,6 +5902,7 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
     if not model_name.endswith("_SSystem") and not model_name.endswith("_SSystem_exact"):
         model_name = f"{model_name}_SSystem_exact"
     lines.append(f"model {model_name}()")
+    lines.extend(["  " + line for line in _format_solver_metadata_lines(result.solver_requirement)])
     lines.append("")
 
     # Identify auxiliary and original variables
