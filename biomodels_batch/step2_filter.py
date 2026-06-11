@@ -22,10 +22,13 @@ import shutil
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import pandas as pd
 from tqdm import tqdm
+
+if TYPE_CHECKING:
+    import libsbml
 
 # Add parent directory to path for ssys import
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -469,10 +472,10 @@ def generate_summary(df: pd.DataFrame) -> str:
     lines.append("FILTERING FUNNEL:")
     lines.append(f"  {total:4d}  Total models")
     lines.append(f"  -{excluded:4d}  Excluded (blockers)")
-    lines.append(f"  -----")
+    lines.append("  -----")
     lines.append(f"  {eligible:4d}  Eligible (no blockers)")
     lines.append(f"  -{excluded_by_size:4d}  Excluded (too large)")
-    lines.append(f"  -----")
+    lines.append("  -----")
     lines.append(f"  {candidates:4d}  CANDIDATES for transformation")
     lines.append("")
 
@@ -490,7 +493,7 @@ def generate_summary(df: pd.DataFrame) -> str:
         "unsupported_trig": "Unsupported trig (tan/tanh)",
     }
 
-    for blocker in ["no_dynamics", "events", "parse_error", "delays", 
+    for blocker in ["no_dynamics", "events", "parse_error", "delays",
                     "algebraic_rules", "sbml_l3_packages", "unsupported_trig"]:
         if blocker in blocker_counts:
             label = blocker_labels.get(blocker, blocker)

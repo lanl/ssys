@@ -10,11 +10,18 @@ __pycache__/
 dist/
 build/
 .coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.mypy_cache/
 .pytest_cache/
+.ruff_cache/
+.venv/
 
 # Output directories
 out/
 out_*/
+output/
 dev/
 
 # IDE

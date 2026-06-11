@@ -2,15 +2,166 @@
 Tests for ODE solver backends.
 """
 
+import sys
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
-from src.ssys.ode_backends import simulate_ode
-from src.ssys.ode_backends.ida_sundials_backend import IDASundialsUnavailable
-from src.ssys.ode_backends.interface import simulate_model
-from src.ssys.recaster import ModelIR, SolverRequirement, parse_antimony
+from ssys.ode_backends import simulate_ode
+from ssys.ode_backends.ida_sundials_backend import IDASundialsUnavailable
+from ssys.ode_backends.interface import simulate_model
+from ssys.ode_backends.roadrunner_backend import simulate_with_roadrunner
+from ssys.recaster import ModelIR, SolverRequirement, parse_antimony
+
+
+def test_roadrunner_backend_success_and_initial_condition_override(monkeypatch):
+    """RoadRunner backend parses, simulates, and applies state IC overrides."""
+    model_ir = ModelIR()
+    model_ir.species = {"X"}
+    model_ir.explicit_rates = {"X": "-k*X"}
+    model_ir.params = {"k": 0.5}
+    model_ir.antimony_text = """
+        model test()
+            species X;
+            X' = -k*X;
+            k = 0.5;
+            X = 1;
+        end
+    """
+    model_ir.initials = {"X": 1.0, "k": 0.5, ("compartment", "cell"): 1.0}
+
+    class FakeAntimony:
+        def clearPreviousLoads(self):
+            pass
+
+        def loadAntimonyString(self, text):
+            assert "model test()" in text
+            return 0
+
+        def getLastError(self):
+            return ""
+
+        def getMainModuleName(self):
+            return "test"
+
+        def getSBMLString(self, model_name):
+            assert model_name == "test"
+            return "<sbml/>"
+
+    class FakeSimulationResult:
+        colnames = ["time", "[X]"]
+
+        def __init__(self):
+            self.data = np.array([[0.0, 2.5], [1.0, 1.25]])
+
+        def __getitem__(self, key):
+            return self.data[key]
+
+    class FakeIntegrator:
+        def getNumSteps(self):
+            return 4
+
+        def getNumErrTestFails(self):
+            return 0
+
+    class FakeRoadRunner:
+        last_instance = None
+
+        def __init__(self, sbml):
+            assert sbml == "<sbml/>"
+            self.integrator = FakeIntegrator()
+            self.values = {}
+            FakeRoadRunner.last_instance = self
+
+        def setIntegrator(self, name):
+            self.integrator_name = name
+
+        def resetToOrigin(self):
+            self.values.clear()
+
+        def getFloatingSpeciesIds(self):
+            return ["X"]
+
+        def __setitem__(self, key, value):
+            self.values[key] = value
+
+        def simulate(self, t0, t_end, n_points):
+            assert (t0, t_end, n_points) == (0.0, 1.0, 2)
+            assert self.values == {"[X]": 2.5}
+            return FakeSimulationResult()
+
+    monkeypatch.setitem(sys.modules, "antimony", FakeAntimony())
+    monkeypatch.setitem(
+        sys.modules,
+        "roadrunner",
+        SimpleNamespace(RoadRunner=FakeRoadRunner),
+    )
+
+    result = simulate_with_roadrunner(
+        model_ir,
+        t0=0.0,
+        t_end=1.0,
+        n_points=2,
+        y0_override={"X": 2.5, "k": 99.0},
+    )
+
+    assert result["success"] is True
+    assert result["state_names"] == ["X"]
+    assert result["y"].tolist() == [[2.5], [1.25]]
+    assert result["integrator_stats"]["n_steps"] == 4
+    assert FakeRoadRunner.last_instance.integrator_name == "cvode"
+
+
+def test_roadrunner_backend_reports_antimony_parser_failure(monkeypatch):
+    """Antimony parser failures are returned as structured backend failures."""
+    model_ir = ModelIR()
+    model_ir.species = {"X"}
+    model_ir.explicit_rates = {"X": "-k*X"}
+    model_ir.antimony_text = "model bad("
+
+    class FakeAntimony:
+        def clearPreviousLoads(self):
+            pass
+
+        def loadAntimonyString(self, text):
+            assert text == "model bad("
+            return -1
+
+        def getLastError(self):
+            return "syntax error near '('"
+
+    class UnusedRoadRunner:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("RoadRunner should not be constructed after parse failure")
+
+    monkeypatch.setitem(sys.modules, "antimony", FakeAntimony())
+    monkeypatch.setitem(
+        sys.modules,
+        "roadrunner",
+        SimpleNamespace(RoadRunner=UnusedRoadRunner),
+    )
+
+    result = simulate_with_roadrunner(model_ir, t0=0.0, t_end=1.0, n_points=2)
+
+    assert result["success"] is False
+    assert "Antimony parse error" in result["message"]
+    assert "syntax error near" in result["message"]
+
+
+def test_simulate_ode_reports_missing_roadrunner_as_backend_failure(monkeypatch):
+    """Missing RoadRunner is reported as a failed ODE backend, not an exception."""
+    model_ir = ModelIR()
+    model_ir.species = {"X"}
+    model_ir.explicit_rates = {"X": "-X"}
+
+    monkeypatch.setitem(sys.modules, "roadrunner", None)
+
+    result = simulate_ode(model_ir, t0=0.0, t_end=1.0, n_points=2)
+
+    assert result["success"] is False
+    assert result["backend"] == "roadrunner_cvode"
+    assert "libRoadRunner not available" in result["message"]
 
 
 def test_simulate_model_selects_assignment_rule_backend(monkeypatch):
@@ -29,7 +180,7 @@ def test_simulate_model_selects_assignment_rule_backend(monkeypatch):
             "integrator_stats": {},
         }
 
-    monkeypatch.setattr("src.ssys.ode_backends.interface.simulate_ode", fake_simulate_ode)
+    monkeypatch.setattr("ssys.ode_backends.interface.simulate_ode", fake_simulate_ode)
 
     result = simulate_model(model_ir, t0=0.0, t_end=1.0, n_points=2)
 
@@ -48,7 +199,7 @@ def test_dae_required_without_ida_dependency_fails_unsupported(monkeypatch):
         raise IDASundialsUnavailable("scikit-SUNDAE is not installed. uv sync --extra dae")
 
     monkeypatch.setattr(
-        "src.ssys.ode_backends.ida_sundials_backend._load_ida_binding",
+        "ssys.ode_backends.ida_sundials_backend._load_ida_binding",
         missing_ida,
     )
 
@@ -110,7 +261,7 @@ def test_ida_backend_enforces_explicit_assignment_auxiliary(monkeypatch):
             return {"success": True, "t": t, "y": y, "yp": yp, "status": 0, "message": "ok"}
 
     monkeypatch.setattr(
-        "src.ssys.ode_backends.ida_sundials_backend._load_ida_binding",
+        "ssys.ode_backends.ida_sundials_backend._load_ida_binding",
         lambda: SimpleNamespace(
             package="fake-sundials",
             version="1.0",
@@ -156,7 +307,7 @@ def test_ida_backend_enforces_ode_mode_lifted_auxiliary(monkeypatch):
             return {"success": True, "t": t, "y": y, "yp": yp, "status": 0, "message": "ok"}
 
     monkeypatch.setattr(
-        "src.ssys.ode_backends.ida_sundials_backend._load_ida_binding",
+        "ssys.ode_backends.ida_sundials_backend._load_ida_binding",
         lambda: SimpleNamespace(
             package="fake-sundials",
             version="1.0",
@@ -205,7 +356,7 @@ def test_ida_backend_handles_implicit_algebraic_constraint(monkeypatch):
             return {"success": True, "t": t, "y": y, "yp": yp, "status": 0, "message": "ok"}
 
     monkeypatch.setattr(
-        "src.ssys.ode_backends.ida_sundials_backend._load_ida_binding",
+        "ssys.ode_backends.ida_sundials_backend._load_ida_binding",
         lambda: SimpleNamespace(
             package="fake-sundials",
             version="1.0",
@@ -237,7 +388,7 @@ def test_ida_backend_rejects_inconsistent_user_algebraic_ic(monkeypatch):
             raise AssertionError("solver should not run with inconsistent ICs")
 
     monkeypatch.setattr(
-        "src.ssys.ode_backends.ida_sundials_backend._load_ida_binding",
+        "ssys.ode_backends.ida_sundials_backend._load_ida_binding",
         lambda: SimpleNamespace(
             package="fake-sundials",
             version="1.0",
@@ -283,7 +434,7 @@ def test_ida_backend_repairs_user_algebraic_ic_when_requested(monkeypatch):
             return {"success": True, "t": t, "y": y, "yp": yp, "status": 0, "message": "ok"}
 
     monkeypatch.setattr(
-        "src.ssys.ode_backends.ida_sundials_backend._load_ida_binding",
+        "ssys.ode_backends.ida_sundials_backend._load_ida_binding",
         lambda: SimpleNamespace(
             package="fake-sundials",
             version="1.0",

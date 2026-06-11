@@ -45,13 +45,27 @@ source ../activate_dev_env.sh
 
 ```bash
 # Transform only (fast)
-python step3_recast.py --mode simplified --timeout 15 --no-validate
+uv run python step3_recast.py --mode simplified --timeout 15 --no-validate
 
 # Validate transformed models
-python step4_validate.py --numerical-only --timeout 60 --workers 8
+uv run python step4_validate.py --numerical-only --timeout 60 --workers 8
 
 # Generate reports
-python step6_report.py --figures
+uv run python step6_report.py --figures
+```
+
+## Generated Artifacts
+
+The checked-in SBML files under `data/sbml_downloads/` and `data/sbml_candidates/` are an intentional benchmark snapshot. New downloads, filtered candidates, validation results, figures, logs, coverage files, and cache directories are ignored so local benchmark runs do not add repository noise.
+
+To regenerate the batch outputs from the tracked scripts and snapshot, run:
+
+```bash
+uv run python step2_filter.py
+uv run python step3_recast.py --mode simplified --timeout 120
+uv run python step4_validate.py --numerical-only --timeout 30 --workers 4
+uv run python step5_collect.py
+uv run python step6_report.py
 ```
 
 ## Directory Structure

@@ -98,7 +98,7 @@ def classify_sym_system_solver_requirement(sym) -> SolverRequirement:
 
 
 def _assignment_rule_substitutions(sym) -> dict[sp.Symbol, sp.Expr]:
-    rule_subs = {}
+    rule_subs: dict[sp.Symbol, sp.Expr] = {}
     if not sym.assignment_rules:
         return rule_subs
 

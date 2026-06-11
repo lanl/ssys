@@ -129,7 +129,6 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py
 "src/ssys/validator.py" = ["F401"]  # pytest/jax imports for availability check
-"biomodels/*.py" = ["F401", "F821"]  # type hints for optional dependencies
 
 [tool.mypy]
 python_version = "3.10"
@@ -150,13 +149,9 @@ packages = ["ssys"]
 [[tool.mypy.overrides]]
 module = [
     "sympy",
-    "sympy.*",
     "roadrunner",
-    "roadrunner.*",
     "antimony",
-    "antimony.*",
     "libsbml",
-    "libsbml.*",
     "scipy.*",
     "jax",
     "jax.*",

@@ -150,7 +150,7 @@ def _identifier_names(text: str) -> set[str]:
 
 def _is_zero_expr(expr: str | sp.Expr) -> bool:
     try:
-        return sp.simplify(_sympify(expr)) == 0
+        return bool(sp.simplify(_sympify(expr)) == 0)
     except Exception:
         return False
 
@@ -217,7 +217,7 @@ def _model_variable_names(
     return names
 
 
-def _ode_expressions(model_ir: ModelIR) -> dict[str, str | sp.Expr]:
+def _ode_expressions(model_ir: Any) -> dict[str, str | sp.Expr]:
     odes = getattr(model_ir, "odes", None)
     if odes:
         return {
@@ -295,7 +295,7 @@ def _select_implicit_slots(
 
     if len(candidates) > len(constraints):
         param_names = set(params)
-        constrained_names = []
+        constrained_names: list[str] = []
         for constraint in constraints:
             ids = _identifier_names(_expression_text(constraint))
             constrained_names.extend(
@@ -623,7 +623,7 @@ def _trajectory_algebraic_residuals(
     y: np.ndarray,
     ydot: np.ndarray | None,
 ) -> dict[str, float]:
-    residuals = {
+    residuals: dict[str, list[float]] = {
         equation.name: []
         for equation in system.equations
         if equation.kind != "differential"
@@ -634,22 +634,22 @@ def _trajectory_algebraic_residuals(
     if ydot is None:
         ydot = np.zeros_like(y)
         for row_idx, row in enumerate(y):
-            values = _context_from_state(system.variable_names, system.params, t[row_idx], row)
+            context = _context_from_state(system.variable_names, system.params, t[row_idx], row)
             for equation in system.equations:
                 if equation.kind == "differential" and equation.variable_index is not None:
                     ydot[row_idx, equation.variable_index] = (
-                        0.0 if equation.expr is None else equation.expr.evaluate(values)
+                        0.0 if equation.expr is None else equation.expr.evaluate(context)
                     )
 
     for row_idx, row in enumerate(y):
-        values = _residual_values(system, float(t[row_idx]), row, ydot[row_idx])
+        residual_values = _residual_values(system, float(t[row_idx]), row, ydot[row_idx])
         for eq_idx, equation in enumerate(system.equations):
             if equation.kind != "differential":
-                residuals[equation.name].append(float(abs(values[eq_idx])))
+                residuals[equation.name].append(float(abs(residual_values[eq_idx])))
 
     return {
-        name: float(np.max(values)) if values else 0.0
-        for name, values in residuals.items()
+        name: float(np.max(samples)) if samples else 0.0
+        for name, samples in residuals.items()
     }
 
 
@@ -690,7 +690,7 @@ def simulate_with_ida_sundials(
     t_eval = np.linspace(float(t0), float(t_end), int(n_points))
 
     residual = _make_sksundae_residual(system)
-    solver_options = {
+    solver_options: dict[str, Any] = {
         "rtol": rtol,
         "atol": atol,
     }

@@ -496,6 +496,56 @@ class TestSolverAwareValidation:
         assert residuals["Y_1"]["max_abs"] == 0.0
         assert residuals["Y_1"]["enforced_by_assignment_rule"] is True
 
+    def test_trajectory_comparison_fails_on_divergent_recast(self, tmp_path, monkeypatch):
+        original, recast = self._write_identity_pair(tmp_path)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+
+        def fake_simulate_model(*args, **kwargs):
+            model_name = args[7]
+            y = np.array([[1.0], [0.5]]) if model_name == "original" else np.array([[1.0], [2.0]])
+            return {
+                "success": True,
+                "t": np.array([0.0, 1.0]),
+                "y": y,
+                "message": "",
+                "backend": f"{model_name}_backend",
+                "solver_requirement": SolverRequirement.ODE_ONLY.value,
+                "unsupported_solver_requirement": False,
+                "algebraic_residuals": {},
+            }
+
+        monkeypatch.setattr(validator, "_simulate_model", fake_simulate_model)
+
+        result = validator.check_trajectory_comparison(threshold=1.0e-6)
+
+        assert result.result == ValidationResult.FAIL
+        assert result.max_error > 0.0
+        assert result.counterexamples[0]["variable"] == "X"
+
+    def test_numerical_pointwise_fails_on_mismatched_rate(self, tmp_path):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            X' = -k*X
+            k = 0.5
+            X = 1.0
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species X;
+                X' = -2*k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+
+        validator = RecastValidator(str(original), str(recast))
+        result = validator.check_numerical_pointwise(n_samples=8, threshold=1.0e-9)
+
+        assert result.result == ValidationResult.FAIL
+        assert result.max_error > 1.0e-9
+        assert result.counterexamples
+
 
 class TestRecastValidator:
     """Tests for RecastValidator class."""

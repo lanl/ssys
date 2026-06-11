@@ -190,60 +190,60 @@ def save_validation_report(model_id: str, mode: str, report: dict):
 def categorize_error(error_msg: str) -> tuple[str, str]:
     """
     Categorize an error message and provide a human-readable explanation.
-    
+
     Returns:
         (category, explanation)
     """
     error_lower = error_msg.lower()
-    
+
     if "timeout" in error_lower:
-        return ("TIMEOUT", 
+        return ("TIMEOUT",
                 "Model took too long to recast. Try with --timeout 60 or higher. "
                 "Complex models with many species/reactions or deeply nested functions "
                 "may require longer processing time.")
-    
+
     if "piecewise" in error_lower or "event" in error_lower:
         return ("UNSUPPORTED_CONSTRUCT",
                 "Model contains piecewise functions or events, which are not supported "
                 "by algebraic recasting. These models have discontinuous dynamics that "
                 "cannot be represented in S-system/GMA form.")
-    
+
     if "delay" in error_lower:
         return ("UNSUPPORTED_CONSTRUCT",
                 "Model contains time delays (delay differential equations). "
                 "S-system recasting only supports ODEs, not DDEs.")
-    
+
     if "parse" in error_lower or "syntax" in error_lower:
         return ("PARSE_ERROR",
                 "Failed to parse the SBML/Antimony model. The model may have "
                 "syntax errors or use constructs not supported by the parser.")
-    
+
     if "sbml" in error_lower and ("load" in error_lower or "read" in error_lower):
         return ("SBML_ERROR",
                 "Failed to load SBML file. The file may be corrupted, "
                 "use an unsupported SBML level/version, or contain invalid XML.")
-    
+
     if "negative" in error_lower or "non-positive" in error_lower:
         return ("NEGATIVITY",
                 "Model has variables that can become negative, which violates "
                 "the positivity requirement for S-system power-law terms. "
                 "Consider preprocessing to ensure positive variables.")
-    
+
     if "symbol" in error_lower and "undefined" in error_lower:
         return ("UNDEFINED_SYMBOL",
                 "Model references an undefined symbol (species, parameter, or function). "
                 "This may indicate an incomplete model or missing dependencies.")
-    
+
     if "recursion" in error_lower or "maximum recursion" in error_lower:
         return ("COMPLEXITY",
                 "Model is too complex for symbolic processing. "
                 "Deep nesting or circular dependencies caused recursion limit.")
-    
+
     if "memory" in error_lower:
         return ("RESOURCE",
                 "Model exceeded memory limits during processing. "
                 "Very large models may require more system resources.")
-    
+
     # Generic fallback
     return ("OTHER",
             f"Recast failed with error: {error_msg[:200]}...")
@@ -253,7 +253,7 @@ def log_failure(model_id: str, mode: str, error_msg: str):
     """Log failure to file with categorization and explanation."""
     failure_path = Path(config.FAILURES_DIR) / f"{model_id}_{mode}.log"
     failure_path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     category, explanation = categorize_error(error_msg)
 
     with open(failure_path, "w") as f:
@@ -262,7 +262,7 @@ def log_failure(model_id: str, mode: str, error_msg: str):
         f.write(f"Timestamp: {datetime.now().isoformat()}\n")
         f.write(f"Category: {category}\n")
         f.write(f"Error: {error_msg}\n")
-        f.write(f"\n--- Explanation ---\n")
+        f.write("\n--- Explanation ---\n")
         f.write(f"{explanation}\n")
 
 
@@ -460,13 +460,13 @@ def main():
             if d.exists():
                 shutil.rmtree(d)
                 logger.info(f"  Deleted {d}")
-        
+
         # Also reset the results CSV
         results_csv = Path(config.RESULTS_DIR) / "batch_recast_results.csv"
         if results_csv.exists():
             results_csv.unlink()
             logger.info(f"  Deleted {results_csv}")
-        
+
         logger.info("Cleanup complete.")
 
     # Load candidates
@@ -524,27 +524,27 @@ def main():
     # Save detailed results - MERGE with existing CSV instead of overwriting
     results_csv = Path(config.RESULTS_DIR) / "batch_recast_results.csv"
     results_csv.parent.mkdir(parents=True, exist_ok=True)
-    
+
     new_results_df = pd.DataFrame(results)
-    
+
     if results_csv.exists() and not new_results_df.empty:
         # Load existing results and merge
         existing_df = pd.read_csv(results_csv)
-        
+
         # Create a key for merging (model_id + mode)
         new_results_df["_key"] = new_results_df["model_id"] + "_" + new_results_df["mode"]
         existing_df["_key"] = existing_df["model_id"] + "_" + existing_df["mode"]
-        
+
         # Remove existing entries that will be replaced by new results
         existing_df = existing_df[~existing_df["_key"].isin(new_results_df["_key"])]
-        
+
         # Combine old (non-overlapping) + new results
         merged_df = pd.concat([existing_df, new_results_df], ignore_index=True)
         merged_df = merged_df.drop(columns=["_key"])
-        
+
         # Sort by model_id for consistency
         merged_df = merged_df.sort_values("model_id").reset_index(drop=True)
-        
+
         merged_df.to_csv(results_csv, index=False)
         logger.info(f"Merged {len(new_results_df)} new results with {len(existing_df)} existing")
         logger.info(f"Total results in {results_csv}: {len(merged_df)}")

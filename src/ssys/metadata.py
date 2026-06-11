@@ -1,11 +1,12 @@
 """Metadata parsing and emission helpers for generated Antimony."""
 
 import re
+from typing import Any
 
 from ssys.types import SolverRequirement
 
 
-def format_antimony_number(value: object) -> str:
+def format_antimony_number(value: Any) -> str:
     """Format a numeric Antimony literal without losing float round-trip precision."""
     val = float(value)
     if val == 0.0:
@@ -16,7 +17,7 @@ def format_antimony_number(value: object) -> str:
     return text
 
 
-def _format_antimony_number(value: object) -> str:
+def _format_antimony_number(value: Any) -> str:
     """Backward-compatible alias for Antimony numeric formatting."""
     return format_antimony_number(value)
 
