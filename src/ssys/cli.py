@@ -11,7 +11,8 @@ from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
 import ssys
 from ssys import build_sym_system, parse_antimony, recast_to_ssystem, ssystem_to_antimony
-from ssys.recaster import _extract_sim_metadata, parse_antimony_via_sbml
+from ssys.metadata import _extract_sim_metadata
+from ssys.parsing import parse_antimony_via_sbml
 
 
 def read_manifest(path: str) -> list[str]:

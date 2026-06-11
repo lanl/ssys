@@ -8,13 +8,25 @@ import sympy as sp
 from IPython.display import Code, Markdown, display
 
 import ssys
-from ssys.recaster import (
+from ssys.classification import (
     classify_result,
     classify_system,
-    parse_antimony_via_sbml,
 )
+from ssys.math_utils import (
+    _expand_exps_through_factors,
+    _get_coefficient_sign,
+    _is_term_monomial,
+    product_expr,
+)
+from ssys.recaster import parse_antimony_via_sbml
+from ssys.types import SystemClass
 
 FILL_MISSING_PARAMS = False  # set True to auto-fill absent params with 1.0
+
+__all__ = [
+    "_expand_exps_through_factors",
+    "product_expr",
+]
 
 
 def build_rhs_from_sympy(vars_syms, rhs_exprs, param_vals, assignment_rules=None):
@@ -127,51 +139,6 @@ def build_rhs_from_sympy(vars_syms, rhs_exprs, param_vals, assignment_rules=None
         return np.array(vals, dtype=float)
 
     return f
-
-
-def _expand_exps_through_factors(exps, factor_map):
-    """Expand exponents through factor map. Handles both numeric and symbolic exponents."""
-    new: dict[str, sp.Expr] = {}
-    for s, e in exps.items():
-        if s in factor_map:
-            for v in factor_map[s]:
-                if v in new:
-                    new[v] = new[v] + e
-                else:
-                    new[v] = e
-        else:
-            if s in new:
-                new[s] = new[s] + e
-            else:
-                new[s] = e
-    return new
-
-
-def product_expr(coeff, exps):
-    """Build symbolic product expression from coefficient and exponents."""
-    if isinstance(coeff, sp.Expr):
-        expr = coeff
-    else:
-        if isinstance(coeff, int) or (isinstance(coeff, float) and coeff == int(coeff)):
-            expr = sp.Integer(int(coeff))
-        else:
-            expr = sp.Float(coeff)
-
-    for s, e in sorted(exps.items(), key=lambda kv: str(kv[0])):
-        if isinstance(e, (int, float)):
-            if abs(e) < 1e-14:
-                continue
-            if isinstance(e, int) or (isinstance(e, float) and e == int(e)):
-                exp_sym = sp.Integer(int(e))
-            else:
-                exp_sym = sp.Float(e)
-        else:
-            exp_sym = sp.simplify(e)
-            if exp_sym == 0:
-                continue
-        expr *= s**exp_sym
-
-    return sp.simplify(expr)
 
 
 def latex_odes_from_sym(sym):
@@ -457,94 +424,31 @@ def latex_ssys_from_antimony(antimony_text):
 
 
 def _is_already_ssystem(sym):
-    """Check if input is already in canonical S-system form."""
-    for _var, ode in sym.odes.items():
-        terms = []
-        expanded = sp.expand(ode)
-        if expanded.is_Add:
-            terms = list(expanded.args)
-        else:
-            terms = [expanded]
-
-        # Count positive and negative monomial terms
-        pos_count = 0
-        neg_count = 0
-        for term in terms:
-            if term == 0:
-                continue
-            # Check if it's a monomial (product of powers)
-            if not _is_monomial(term):
-                return False
-            # Check sign
-            if _get_term_sign(term) > 0:
-                pos_count += 1
-            else:
-                neg_count += 1
-
-        # S-system: exactly 1 positive and 1 negative monomial
-        if pos_count != 1 or neg_count != 1:
-            return False
-
-    return True
+    """Check if input is already in canonical or simplified S-system form."""
+    return classify_system(sym) in {
+        SystemClass.CANONICAL_SSYSTEM,
+        SystemClass.SSYSTEM,
+    }
 
 
 def _is_already_gma(sym):
     """Check if input is already in GMA form (all terms are monomials)."""
-    for _var, ode in sym.odes.items():
-        terms = []
-        expanded = sp.expand(ode)
-        if expanded.is_Add:
-            terms = list(expanded.args)
-        else:
-            terms = [expanded]
-
-        # Check if all terms are monomials
-        for term in terms:
-            if term == 0:
-                continue
-            if not _is_monomial(term):
-                return False
-
-    return True
+    return classify_system(sym) in {
+        SystemClass.CANONICAL_SSYSTEM,
+        SystemClass.SSYSTEM,
+        SystemClass.GMA,
+        SystemClass.GMA_TIME_VARYING,
+    }
 
 
 def _is_monomial(term):
-    """Check if a term is a monomial (product of powers with numeric coefficient)."""
-    if term.is_Number:
-        return True
-    if isinstance(term, sp.Symbol):
-        return True
-    if isinstance(term, sp.Pow):
-        base, exp = term.args
-        # Base must be a symbol, exponent must be numeric
-        return isinstance(base, sp.Symbol) and exp.is_number
-    if term.is_Mul:
-        # All factors must be numbers, symbols, or powers with numeric exponents
-        for factor in term.args:
-            if factor.is_Number or isinstance(factor, sp.Symbol):
-                continue
-            if isinstance(factor, sp.Pow):
-                base, exp = factor.args
-                if not (isinstance(base, sp.Symbol) and exp.is_number):
-                    return False
-            else:
-                return False
-        return True
-    return False
+    """Check if a term is a monomial using core package semantics."""
+    return _is_term_monomial(term)
 
 
 def _get_term_sign(term):
     """Get the sign of a term's coefficient."""
-    if term.is_Number:
-        return 1 if float(term) >= 0 else -1
-    if term.is_Mul:
-        # Extract numeric coefficient
-        coeff = 1.0
-        for factor in term.args:
-            if factor.is_Number:
-                coeff *= float(factor)
-        return 1 if coeff >= 0 else -1
-    return 1  # Assume positive if no numeric coefficient
+    return _get_coefficient_sign(term)
 
 
 def latex_factor_map(rec):

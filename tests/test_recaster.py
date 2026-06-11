@@ -393,6 +393,40 @@ class TestCompartmentPreservation:
 class TestEpsInitMetadata:
     """Tests for user-configurable EPS_INIT via @SIM metadata."""
 
+    def test_all_sim_metadata_preserved_in_legacy_and_sbml_parsers(self):
+        """Both parser modes should use shared @SIM metadata extraction."""
+        from ssys.recaster import build_sym_system, parse_antimony, parse_antimony_via_sbml
+
+        text = """
+        model sim_metadata_test()
+        X' = -k*X
+        k = 0.5
+        X = 1.0
+        end
+        // @SIM T_START=1 T_END=25 N_STEPS=123 EPS_INIT=1e-8 EPS_SLACK=1e-5
+        """
+
+        legacy_ir = parse_antimony(text)
+        legacy_sym = build_sym_system(legacy_ir)
+        sbml_sym = parse_antimony_via_sbml(text)
+
+        for parsed in (legacy_ir, legacy_sym, sbml_sym):
+            assert parsed.sim_t_start == 1.0
+            assert parsed.sim_t_end == 25.0
+            assert parsed.sim_n_steps == 123
+            assert parsed.eps_init == 1e-8
+            assert parsed.eps_slack == 1e-5
+
+    def test_cohesive_module_surfaces_preserve_backward_compatible_imports(self):
+        """New cohesive modules expose the same public objects as ssys.recaster."""
+        from ssys import formatting, lifting, parsing, recaster, recasting
+
+        assert parsing.parse_antimony is recaster.parse_antimony
+        assert parsing.parse_antimony_via_sbml is recaster.parse_antimony_via_sbml
+        assert lifting.lift_rational_functions is recaster.lift_rational_functions
+        assert recasting.recast_to_ssystem is recaster.recast_to_ssystem
+        assert formatting.ssystem_to_antimony is recaster.ssystem_to_antimony
+
     def test_extract_sim_metadata_eps_init(self):
         """Test parsing EPS_INIT from @SIM comment."""
         from ssys.recaster import _extract_sim_metadata

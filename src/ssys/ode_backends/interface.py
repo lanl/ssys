@@ -11,7 +11,8 @@ from typing import Any
 
 import numpy as np
 
-from ..recaster import ModelIR, SolverRequirement, normalize_solver_requirement
+from ssys.metadata import normalize_solver_requirement
+from ssys.types import ModelIR, SolverRequirement
 
 
 def _infer_solver_requirement(model_ir: ModelIR) -> SolverRequirement:

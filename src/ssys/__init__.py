@@ -13,22 +13,21 @@ Main components:
 - ssystem_to_antimony: Export recast S-system back to Antimony format
 """
 
-from ssys.recaster import (
+from ssys.classification import (
+    classify_result,
+    classify_solver_requirement,
+)
+from ssys.formatting import ssystem_to_antimony
+from ssys.parsing import build_sym_system, parse_antimony, parse_sbml
+from ssys.recasting import canonicalize_aux_names, recast_to_ssystem
+from ssys.types import (
     ModelIR,
     RecastResult,
     SBMLParseError,
+    SolverRequirement,
     SSysEquation,
     SymSystem,
-    SolverRequirement,
     SystemClass,
-    build_sym_system,
-    canonicalize_aux_names,
-    classify_result,
-    classify_solver_requirement,
-    parse_antimony,
-    parse_sbml,
-    recast_to_ssystem,
-    ssystem_to_antimony,
 )
 
 __version__ = "0.5.5"

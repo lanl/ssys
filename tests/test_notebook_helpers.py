@@ -3,6 +3,8 @@
 import pytest
 import sympy as sp
 
+from ssys import math_utils
+from ssys.classification import classify_system as core_classify_system
 from ssys.notebook_helpers import (
     _antimony_to_latex_direct,
     _beautify_latex,
@@ -21,6 +23,7 @@ from ssys.notebook_helpers import (
     was_nonautonomous,
 )
 from ssys.recaster import RecastResult, RecastStatus, SymSystem
+from ssys.types import SystemClass
 
 
 class TestBeautifyLatex:
@@ -146,6 +149,14 @@ class TestSimplifyExponentContent:
 class TestIsMonomial:
     """Tests for monomial detection."""
 
+    def test_notebook_monomial_detection_uses_core_semantics(self):
+        """Notebook monomial detection should match core symbolic-exponent semantics."""
+        x = sp.Symbol("x")
+        a = sp.Symbol("a")
+
+        assert _is_monomial(x**a) is True
+        assert _is_monomial(x**a) == math_utils._is_term_monomial(x**a)
+
     def test_number_is_monomial(self):
         """Test that a number is a monomial."""
         assert _is_monomial(sp.Float(5.0)) is True
@@ -211,6 +222,22 @@ class TestGetTermSign:
 
 class TestIsAlreadySSsystem:
     """Tests for S-system detection."""
+
+    def test_notebook_ssystem_detection_delegates_to_core_classifier(self):
+        """Notebook helper classification should match classify_system()."""
+        X = sp.Symbol("X", positive=True)
+        a = sp.Symbol("a", positive=True)
+        b = sp.Symbol("b", positive=True)
+
+        sym = SymSystem(
+            vars=[X],
+            params={"a": 1.0, "b": 0.1},
+            odes={X: a * X**2 - b * X},
+            initials={X: 1.0},
+        )
+
+        assert core_classify_system(sym) == SystemClass.CANONICAL_SSYSTEM
+        assert _is_already_ssystem(sym) is True
 
     def test_canonical_ssystem(self):
         """Test canonical S-system detection."""
@@ -382,6 +409,10 @@ class TestLatexFactorMap:
 class TestExpandExpsThroughFactors:
     """Tests for expanding exponents through factor map."""
 
+    def test_notebook_imports_core_exponent_expansion(self):
+        """Notebook helpers should import the core exponent expansion utility."""
+        assert _expand_exps_through_factors is math_utils._expand_exps_through_factors
+
     def test_simple_expansion(self):
         """Test simple expansion through factor map."""
         X = sp.Symbol("X")
@@ -428,6 +459,17 @@ class TestExpandExpsThroughFactors:
 
 class TestProductExpr:
     """Tests for building product expressions."""
+
+    def test_notebook_imports_core_product_expr(self):
+        """Notebook helpers should import the core product builder."""
+        assert product_expr is math_utils.product_expr
+
+    def test_symbolic_exponent_matches_core_output(self):
+        """Notebook rendering helpers and core output use the same symbolic powers."""
+        x = sp.Symbol("x", positive=True)
+        a = sp.Symbol("a")
+
+        assert product_expr(2, {x: a}) == math_utils.product_expr(2, {x: a})
 
     def test_simple_product(self):
         """Test simple product."""

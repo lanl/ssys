@@ -1,8 +1,79 @@
 import re
-from dataclasses import dataclass, field
-from enum import Enum
+from dataclasses import dataclass
 
 import sympy as sp
+
+from ssys.classification import (
+    classify_result,
+    classify_solver_requirement,
+    classify_sym_system_solver_requirement,
+    classify_system,
+)
+from ssys.math_utils import (
+    _expand_exps_through_factors,
+    _exponents_match,
+    _get_coefficient_sign,
+    _is_term_monomial,
+    expand_to_terms,
+    product_expr,
+)
+from ssys.metadata import (
+    _extract_sim_metadata,
+    _extract_solver_requirement_metadata,
+    _format_antimony_number,
+    _format_sim_metadata_lines,
+    _format_solver_metadata_lines,
+    normalize_solver_requirement,
+)
+from ssys.types import (
+    GMAEquation,
+    ModelIR,
+    Reaction,
+    RecastResult,
+    RecastStatus,
+    SBMLParseError,
+    SolverRequirement,
+    SSysEquation,
+    SymSystem,
+    SystemClass,
+)
+
+__all__ = [
+    "GMAEquation",
+    "ModelIR",
+    "Reaction",
+    "RecastResult",
+    "RecastStatus",
+    "SBMLParseError",
+    "SSysEquation",
+    "SolverRequirement",
+    "SymSystem",
+    "SystemClass",
+    "_expand_exps_through_factors",
+    "_exponents_match",
+    "_extract_sim_metadata",
+    "_extract_solver_requirement_metadata",
+    "_format_antimony_number",
+    "_format_sim_metadata_lines",
+    "_format_solver_metadata_lines",
+    "_get_coefficient_sign",
+    "_is_term_monomial",
+    "build_sym_system",
+    "canonicalize_aux_names",
+    "classify_result",
+    "classify_solver_requirement",
+    "classify_sym_system_solver_requirement",
+    "classify_system",
+    "expand_to_terms",
+    "normalize_solver_requirement",
+    "parse_antimony",
+    "parse_antimony_via_sbml",
+    "parse_sbml",
+    "parse_sbml_from_string",
+    "product_expr",
+    "recast_to_ssystem",
+    "ssystem_to_antimony",
+]
 
 arrow_pat = re.compile(r"<->|->")
 prime_rule_pat = re.compile(r"^\s*\$?([A-Za-z_]\w*)\s*'\s*=\s*(.+)$")
@@ -18,14 +89,6 @@ simple_numeric_literal_pat = re.compile(r"^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d
 
 EPS_INIT = 1e-6
 EPS_SLACK = 1.0  # Default slack for canonical mode
-
-
-class SolverRequirement(Enum):
-    """Numerical backend required to validate or simulate a generated model."""
-
-    ODE_ONLY = "ode_only"
-    ODE_WITH_ASSIGNMENT_RULES = "ode_with_assignment_rules"
-    DAE_REQUIRED = "dae_required"
 
 
 # Antimony reserved keywords that require sanitization
@@ -146,17 +209,6 @@ def _format_antimony_token(
     if name_map and name in name_map:
         return name_map[name]
     return name
-
-
-def _format_antimony_number(value: object) -> str:
-    """Format a numeric Antimony literal without losing float round-trip precision."""
-    val = float(value)
-    if val == 0.0:
-        return "0"
-    text = repr(val)
-    if text.endswith(".0") and val.is_integer():
-        return text[:-2]
-    return text
 
 
 def _collect_antimony_names(result: "RecastResult") -> set[str]:
@@ -446,19 +498,6 @@ def tokenize_species_side(side: str) -> list[tuple[int, str]]:
     return result
 
 
-def _expand_exps_through_factors(exps, factor_map):
-    """Return a new {sym: exp} dict where any original symbol present in factor_map
-    is replaced by its factor variables, each receiving the same exponent."""
-    new: dict[sp.Symbol, sp.Expr] = {}
-    for s, e in exps.items():
-        if s in factor_map:
-            for v in factor_map[s]:
-                new[v] = new.get(v, sp.sympify(0)) + e
-        else:
-            new[s] = new.get(s, sp.sympify(0)) + e
-    return new
-
-
 def _numeric_param_subs(expr: sp.Expr, params: dict[str, float]) -> sp.Expr:
     """Replace parameter symbols in expr with their numeric values from params."""
     if not params:
@@ -466,88 +505,6 @@ def _numeric_param_subs(expr: sp.Expr, params: dict[str, float]) -> sp.Expr:
     # Build a mapping only for symbols actually used in expr
     subs = {s: sp.Float(params[s.name]) for s in expr.free_symbols if s.name in params}
     return sp.simplify(expr.subs(subs)) if subs else expr
-
-
-@dataclass
-class Reaction:
-    name: str | None
-    lhs: list[tuple[int, str]]
-    rhs: list[tuple[int, str]]
-    rate_expr: str
-
-
-@dataclass
-class ModelIR:
-    species: set[str] = field(default_factory=set)
-    boundary: set[str] = field(default_factory=set)
-    params: dict[str, float] = field(default_factory=dict)
-    initial: dict[str, float] = field(default_factory=dict)
-    reactions: list[Reaction] = field(default_factory=list)
-    explicit_rates: dict[str, str] = field(default_factory=dict)
-    assignment_rules: dict[str, str] = field(default_factory=dict)
-    algebraic_constraints: list[str] = field(default_factory=list)
-    raw_lines: list[str] = field(default_factory=list)
-    param_exprs: dict[str, str] = field(
-        default_factory=dict
-    )  # Store parameter expressions before evaluation
-    initial_exprs: dict[str, str] = field(
-        default_factory=dict
-    )  # Store initial condition expressions
-    antimony_text: str = ""  # Cache original Antimony text for RoadRunner
-    # Compartment info: {compartment_name: size} and {species_name: compartment_name}
-    compartments: dict[str, float] = field(default_factory=dict)  # compartment_name -> size
-    species_compartment: dict[str, str] = field(
-        default_factory=dict
-    )  # species_name -> compartment_name
-    # Simulation metadata (from @SIM comments)
-    sim_t_start: float | None = None  # Simulation start time
-    sim_t_end: float | None = None  # Simulation end time
-    sim_n_steps: int | None = None  # Number of simulation steps
-    eps_init: float | None = None  # User-specified EPS_INIT for zero IC replacement
-    # Function templates: name -> (param_list, expression_body)
-    # e.g., "M" -> (["x"], "1 + gam * h * x^(h-1) / (1 + x^h)^2")
-    function_templates: dict[str, tuple[list[str], str]] = field(default_factory=dict)
-    solver_requirement: SolverRequirement = SolverRequirement.ODE_ONLY
-
-
-class SBMLParseError(ValueError):
-    """Structured SBML math parse/evaluation error."""
-
-    def __init__(
-        self,
-        kind: str,
-        formula: str | None,
-        message: str,
-        *,
-        source: str,
-        reaction_id: str | None = None,
-        reaction_name: str | None = None,
-        variable: str | None = None,
-    ) -> None:
-        self.kind = kind
-        self.formula = formula
-        self.message = message
-        self.source = source
-        self.reaction_id = reaction_id
-        self.reaction_name = reaction_name
-        self.variable = variable
-        super().__init__(self._format_message())
-
-    def _format_message(self) -> str:
-        if self.kind == "kinetic_law":
-            context = f"reaction {self.reaction_id or '<unnamed>'}"
-            if self.reaction_name:
-                context += f" ({self.reaction_name})"
-            target = f"kinetic law in {context}"
-        elif self.kind == "rate_rule":
-            target = f"rate rule for variable {self.variable or '<unknown>'}"
-        elif self.kind == "initial_assignment":
-            target = f"initial assignment for symbol {self.variable or '<unknown>'}"
-        else:
-            target = self.kind
-
-        formula = self.formula if self.formula not in (None, "") else "<none>"
-        return f"Failed to parse SBML {target} in {self.source}: formula {formula!r}: {self.message}"
 
 
 def _antimony_to_sympy_syntax(expr_str: str) -> str:
@@ -569,148 +526,23 @@ def _sympy_to_antimony_syntax(expr_str: str) -> str:
     return result
 
 
-def normalize_solver_requirement(value: str | SolverRequirement | None) -> SolverRequirement | None:
-    """Normalize a solver requirement value from metadata, enum, or raw string."""
-    if value is None:
-        return None
-    if isinstance(value, SolverRequirement):
-        return value
-    normalized = str(value).strip().lower()
-    for requirement in SolverRequirement:
-        if normalized == requirement.value:
-            return requirement
-    return None
-
-
-def _extract_solver_requirement_metadata(text: str) -> SolverRequirement | None:
-    """
-    Extract solver requirement metadata from generated Antimony comments.
-
-    Preferred format:
-        // @SSYS SOLVER_REQUIREMENT=ode_with_assignment_rules
-
-    A human-readable fallback such as:
-        // Solver requirement: ode_with_assignment_rules
-
-    is accepted to keep reports robust across older generated files.
-    """
-    key_value_pattern = re.compile(r"SOLVER_REQUIREMENT\s*=\s*([A-Za-z_]+)", re.IGNORECASE)
-    label_pattern = re.compile(r"Solver requirement\s*:\s*([A-Za-z_]+)", re.IGNORECASE)
-
-    for line in text.splitlines():
-        if "//" not in line:
-            continue
-        comment = line.split("//", 1)[1]
-        match = key_value_pattern.search(comment) or label_pattern.search(comment)
-        if match:
-            return normalize_solver_requirement(match.group(1))
-    return None
-
-
-def _format_sim_metadata_lines(result: "RecastResult") -> list[str]:
-    """
-    Format @SIM metadata as Antimony comment lines.
-
-    Returns list of lines to append before 'end' in output.
-    """
-    lines = []
-
-    # Build @SIM line with all available metadata
-    sim_parts = []
-    if result.sim_t_start is not None:
-        sim_parts.append(f"T_START={_format_antimony_number(result.sim_t_start)}")
-    if result.sim_t_end is not None:
-        sim_parts.append(f"T_END={_format_antimony_number(result.sim_t_end)}")
-    if result.sim_n_steps is not None:
-        sim_parts.append(f"N_STEPS={result.sim_n_steps}")
-    if result.eps_init is not None:
-        sim_parts.append(f"EPS_INIT={_format_antimony_number(result.eps_init)}")
-    if result.eps_slack is not None:
-        sim_parts.append(f"EPS_SLACK={_format_antimony_number(result.eps_slack)}")
-
-    if sim_parts:
-        lines.append(f"// @SIM {' '.join(sim_parts)}")
-        # Add note about zero IC replacement if eps_init was used
-        if result.eps_init is not None:
-            lines.append("// Note: Zero-valued initial conditions are replaced with EPS_INIT during recasting.")
-
-    return lines
-
-
 def parse_antimony(text: str) -> ModelIR:
     ir = ModelIR()
     ir.antimony_text = text  # Cache original text for RoadRunner
     ir.raw_lines = [ln.rstrip() for ln in text.splitlines()]
     ir.solver_requirement = _extract_solver_requirement_metadata(text) or SolverRequirement.ODE_ONLY
 
-    # FIRST: Extract @SIM metadata from comments BEFORE any processing
-    # This must happen before raw_lines is overwritten by joined_lines
-    # Format: // @SIM T_START=0 T_END=100 N_STEPS=500
-    import re
-
-    sim_marker_pattern = re.compile(r"@SIM\b")
-    key_value_pattern = re.compile(r"(\w+)\s*=\s*([0-9.eE+-]+)")
-
-    for raw in ir.raw_lines:
-        if "//" in raw:
-            comment_part = raw.split("//", 1)[1]
-            if sim_marker_pattern.search(comment_part):
-                for match in key_value_pattern.finditer(comment_part):
-                    key = match.group(1).upper()
-                    value = match.group(2)
-                    if key == "T_START":
-                        try:
-                            ir.sim_t_start = float(value)
-                        except ValueError:
-                            pass
-                    elif key == "T_END":
-                        try:
-                            ir.sim_t_end = float(value)
-                        except ValueError:
-                            pass
-                    elif key == "N_STEPS":
-                        try:
-                            ir.sim_n_steps = int(float(value))
-                        except ValueError:
-                            pass
+    (
+        ir.sim_t_start,
+        ir.sim_t_end,
+        ir.sim_n_steps,
+        ir.eps_init,
+        ir.eps_slack,
+    ) = _extract_sim_metadata(text)
 
     # NOTE: Line continuation is NOT used for our simple parser.
     # Each line is treated as a separate statement.
     # Complex models should use parse_antimony_via_sbml() instead.
-
-    # First pass: extract @SIM metadata from comments
-    # Format: // @SIM T_START=0 T_END=100 N_STEPS=500
-    import re
-
-    # Match @SIM marker
-    sim_marker_pattern = re.compile(r"@SIM\b")
-    # Match individual key=value pairs
-    key_value_pattern = re.compile(r"(\w+)\s*=\s*([0-9.eE+-]+)")
-
-    for raw in ir.raw_lines:
-        if "//" in raw:
-            comment_part = raw.split("//", 1)[1]
-            # Check if this line has @SIM or @SIMTIME
-            if sim_marker_pattern.search(comment_part):
-                # Extract all key=value pairs from this line
-                for match in key_value_pattern.finditer(comment_part):
-                    key = match.group(1).upper()
-                    value = match.group(2)
-                    if key == "T_START":
-                        try:
-                            ir.sim_t_start = float(value)
-                        except ValueError:
-                            pass
-                    elif key == "T_END":
-                        try:
-                            ir.sim_t_end = float(value)
-                        except ValueError:
-                            pass
-                    elif key == "N_STEPS":
-                        try:
-                            ir.sim_n_steps = int(float(value))
-                        except ValueError:
-                            pass
 
     for raw in ir.raw_lines:
         # strip inline comments
@@ -833,65 +665,6 @@ def parse_antimony(text: str) -> ModelIR:
     _resolve_parameter_dependencies(ir)
 
     return ir
-
-
-def _extract_sim_metadata(
-    text: str,
-) -> tuple[float | None, float | None, int | None, float | None, float | None]:
-    """
-    Extract @SIM metadata from Antimony comments.
-
-    Format: // @SIM T_START=0 T_END=100 N_STEPS=500 EPS_INIT=1e-6 EPS_SLACK=1e-10
-
-    Args:
-        text: Antimony text to scan for @SIM metadata
-
-    Returns:
-        Tuple of (t_start, t_end, n_steps, eps_init, eps_slack), any of which may be None if not found
-    """
-    t_start = None
-    t_end = None
-    n_steps = None
-    eps_init = None
-    eps_slack = None
-
-    sim_marker_pattern = re.compile(r"@SIM\b")
-    key_value_pattern = re.compile(r"(\w+)\s*=\s*([0-9.eE+-]+)")
-
-    for line in text.splitlines():
-        if "//" in line:
-            comment_part = line.split("//", 1)[1]
-            if sim_marker_pattern.search(comment_part):
-                for match in key_value_pattern.finditer(comment_part):
-                    key = match.group(1).upper()
-                    value = match.group(2)
-                    if key == "T_START":
-                        try:
-                            t_start = float(value)
-                        except ValueError:
-                            pass
-                    elif key == "T_END":
-                        try:
-                            t_end = float(value)
-                        except ValueError:
-                            pass
-                    elif key == "N_STEPS":
-                        try:
-                            n_steps = int(float(value))
-                        except ValueError:
-                            pass
-                    elif key == "EPS_INIT":
-                        try:
-                            eps_init = float(value)
-                        except ValueError:
-                            pass
-                    elif key == "EPS_SLACK":
-                        try:
-                            eps_slack = float(value)
-                        except ValueError:
-                            pass
-
-    return t_start, t_end, n_steps, eps_init, eps_slack
 
 
 def _preprocess_antimony_text(text: str) -> str:
@@ -1595,28 +1368,6 @@ def _resolve_parameter_dependencies(ir: ModelIR) -> None:
             break
 
 
-@dataclass
-class SymSystem:
-    vars: list[sp.Symbol]
-    params: dict[str, float]
-    odes: dict[sp.Symbol, sp.Expr]
-    initials: dict[sp.Symbol, float]
-    initial_exprs: dict[sp.Symbol, str] = field(default_factory=dict)  # Symbolic IC expressions
-    assignment_rules: dict[str, str] = field(
-        default_factory=dict
-    )  # Assignment rules from original model
-    algebraic_constraints: list[str] = field(default_factory=list)
-    compartments: dict[str, float] = field(default_factory=dict)  # compartment_name -> size
-    # Optional metadata attributes (set by parse_antimony_via_sbml)
-    sim_t_start: float | None = None  # Simulation start time from @SIM
-    sim_t_end: float | None = None  # Simulation end time from @SIM
-    sim_n_steps: int | None = None  # Number of simulation steps from @SIM
-    eps_init: float | None = None  # User-specified EPS_INIT for zero IC replacement
-    eps_slack: float | None = None  # User-specified EPS_SLACK for canonical mode
-    antimony_text: str = ""  # Cache original Antimony text for RoadRunner
-    solver_requirement: SolverRequirement = SolverRequirement.ODE_ONLY
-
-
 def build_sym_system(ir: ModelIR) -> SymSystem:
     var_syms: dict[str, sp.Symbol] = {
         nm: sp.symbols(nm, positive=True) for nm in sorted(ir.species)
@@ -1713,459 +1464,15 @@ def build_sym_system(ir: ModelIR) -> SymSystem:
         initial_exprs=initial_exprs,
         assignment_rules=expanded_assignment_rules,  # Pass through expanded legacy templates
         algebraic_constraints=list(ir.algebraic_constraints),
+        compartments=ir.compartments,
+        sim_t_start=ir.sim_t_start,
+        sim_t_end=ir.sim_t_end,
+        sim_n_steps=ir.sim_n_steps,
+        eps_init=ir.eps_init,
+        eps_slack=ir.eps_slack,
+        antimony_text=ir.antimony_text,
         solver_requirement=solver_requirement,
     )
-
-
-from dataclasses import dataclass
-
-
-def expand_to_terms(expr: sp.Expr) -> list[sp.Expr]:
-    expr = sp.expand(expr)
-    if expr.is_Add:
-        return list(expr.args)
-    else:
-        return [expr]
-
-
-@dataclass
-class SSysEquation:
-    var: sp.Symbol
-    growth: tuple[sp.Expr, dict[sp.Symbol, float]]  # coefficient (symbolic), {sym: exponent}
-    decay: tuple[sp.Expr, dict[sp.Symbol, float]]  # coefficient (symbolic), {sym: exponent}
-
-
-@dataclass
-class GMAEquation:
-    """Generalized Mass Action equation with multiple production/degradation terms"""
-
-    var: sp.Symbol
-    production: list[tuple[sp.Expr, dict[sp.Symbol, float]]]  # [(coeff, {sym: exp}), ...]
-    degradation: list[tuple[sp.Expr, dict[sp.Symbol, float]]]  # [(coeff, {sym: exp}), ...]
-
-
-class RecastStatus(Enum):
-    """Status of recasting operation"""
-
-    CANONICAL_SSYSTEM = "canonical_ssystem"
-    GMA = "gma"
-    FAILED = "failed"
-
-
-class SystemClass(Enum):
-    """Classification of system form"""
-
-    SSYSTEM = "S-system"  # 1-2 positive monomial terms per equation
-    CANONICAL_SSYSTEM = "Canonical S-system"  # Exactly 2 positive terms (1 growth + 1 decay)
-    GMA = "GMA"  # All monomials, constant coefficients
-    GMA_TIME_VARYING = (
-        "GMA with time-varying coefficients"  # Power-law structure, coefficients depend on clock T
-    )
-    GENERAL = "General"  # Contains non-monomial terms
-
-
-@dataclass
-class RecastResult:
-    status: RecastStatus
-    equations: list[SSysEquation]
-    initials: dict[sp.Symbol, float]
-    variables: list[sp.Symbol]
-    factor_map: dict[sp.Symbol, list[sp.Symbol]] = field(default_factory=dict)
-    gma_equations: list[GMAEquation] = field(default_factory=list)
-    params: dict[str, float] = field(default_factory=dict)
-    compartments: dict[str, float] = field(default_factory=dict)  # compartment_name -> size
-    error_message: str | None = None
-    blockers: dict[str, list[str]] = field(default_factory=dict)
-    auxiliary_defs: dict[sp.Symbol, sp.Expr] = field(default_factory=dict)  # Y_1 -> K_2 + X_1
-    canonical_refusal_reason: str | None = None  # Why canonical S-system was refused
-    initial_exprs: dict[sp.Symbol, str] = field(default_factory=dict)  # Symbolic IC expressions
-    assignment_rules: dict[str, str] = field(
-        default_factory=dict
-    )  # Assignment rules from original model
-    algebraic_constraints: list[str] = field(default_factory=list)
-    solver_requirement: SolverRequirement = SolverRequirement.ODE_ONLY
-    # Simulation metadata (propagated from input)
-    sim_t_start: float | None = None
-    sim_t_end: float | None = None
-    sim_n_steps: int | None = None
-    eps_init: float | None = None
-    eps_slack: float | None = None  # User-specified EPS_SLACK for canonical mode
-
-
-def _is_clock_definition(defn: sp.Expr) -> bool:
-    return defn == sp.Symbol("time") or str(defn).lower() in {"time", "t"}
-
-
-def _constraint_mentions_state(constraint: str | sp.Expr, state_names: set[str]) -> bool:
-    """Return true if an algebraic constraint is coupled to differential states."""
-    if not state_names:
-        return False
-    try:
-        expr = sp.sympify(str(constraint).replace("^", "**"))
-    except Exception:
-        return True
-    return any(sym.name in state_names for sym in expr.free_symbols)
-
-
-def _has_non_identity_mapping(result: RecastResult) -> bool:
-    for orig, aux_list in result.factor_map.items():
-        if len(aux_list) != 1 or aux_list[0] != orig:
-            return True
-    return False
-
-
-def classify_solver_requirement(
-    result: RecastResult, *, lifted_mode: str = "ode"
-) -> SolverRequirement:
-    """
-    Classify the backend requirement for a generated recast output.
-
-    `ode_with_assignment_rules` means an ODE integrator that honors explicit
-    assignment rules is sufficient. `dae_required` is reserved for algebraic
-    constraints coupled to differential states, such as ODE-mode lifted
-    auxiliaries that must remain on a defining manifold.
-    """
-    state_names = {var.name for var in result.variables}
-    for eq in result.equations:
-        state_names.add(eq.var.name)
-    for eq in result.gma_equations:
-        state_names.add(eq.var.name)
-
-    if result.algebraic_constraints and any(
-        _constraint_mentions_state(constraint, state_names)
-        for constraint in result.algebraic_constraints
-    ):
-        return SolverRequirement.DAE_REQUIRED
-
-    if result.assignment_rules and any(name in state_names for name in result.assignment_rules):
-        return SolverRequirement.DAE_REQUIRED
-
-    lifted_aux_defs = {
-        aux.name: defn
-        for aux, defn in result.auxiliary_defs.items()
-        if aux.name != "dummy_const" and not _is_clock_definition(defn)
-    }
-    if lifted_aux_defs:
-        if lifted_mode == "assignment":
-            return SolverRequirement.ODE_WITH_ASSIGNMENT_RULES
-        for aux_name, defn in lifted_aux_defs.items():
-            if aux_name in state_names and any(sym.name in state_names for sym in defn.free_symbols):
-                return SolverRequirement.DAE_REQUIRED
-
-    if result.assignment_rules or _has_non_identity_mapping(result):
-        return SolverRequirement.ODE_WITH_ASSIGNMENT_RULES
-
-    return SolverRequirement.ODE_ONLY
-
-
-def classify_sym_system_solver_requirement(sym: SymSystem) -> SolverRequirement:
-    """Classify the solver requirement for an already parsed symbolic model."""
-    configured = normalize_solver_requirement(getattr(sym, "solver_requirement", None))
-    if configured == SolverRequirement.DAE_REQUIRED:
-        return configured
-
-    state_names = {var.name for var in sym.vars}
-    constraints = getattr(sym, "algebraic_constraints", [])
-    if constraints and any(_constraint_mentions_state(constraint, state_names) for constraint in constraints):
-        return SolverRequirement.DAE_REQUIRED
-
-    if sym.assignment_rules:
-        if any(name in state_names for name in sym.assignment_rules):
-            return SolverRequirement.DAE_REQUIRED
-        return SolverRequirement.ODE_WITH_ASSIGNMENT_RULES
-
-    return configured or SolverRequirement.ODE_ONLY
-
-
-def _format_solver_metadata_lines(requirement: SolverRequirement) -> list[str]:
-    return [
-        f"// @SSYS SOLVER_REQUIREMENT={requirement.value}",
-        f"// Solver requirement: {requirement.value}",
-    ]
-
-
-def classify_system(sym: SymSystem) -> SystemClass:
-    """
-    Classify a SymSystem based on its structure.
-
-    IMPORTANT: Expands assignment rules before classification to ensure
-    hidden complexity (rational functions, time-dependence) is detected.
-
-    Returns:
-        SystemClass enum indicating the system type
-    """
-    # Build substitution map for assignment rules
-    # This reveals hidden complexity like rational functions or time-dependence
-    rule_subs = {}
-    if sym.assignment_rules:
-        # Build symbol map for parsing - include rule names as symbols
-        all_syms = {s.name: s for s in sym.vars}
-        for param_name in sym.params:
-            all_syms[param_name] = sp.Symbol(param_name, positive=True)
-        all_syms["time"] = sp.Symbol("time", positive=True)
-        # Pre-create symbols for all rule names
-        for rule_name in sym.assignment_rules:
-            if rule_name not in all_syms:
-                all_syms[rule_name] = sp.Symbol(rule_name, positive=True)
-
-        # Parse assignment rules into sympy expressions
-        for rule_name, rule_str in sym.assignment_rules.items():
-            try:
-                rule_expr = sp.sympify(rule_str, locals=all_syms)
-                rule_sym = all_syms[rule_name]  # Use consistent symbol
-                rule_subs[rule_sym] = rule_expr
-            except Exception:
-                pass
-
-        # Expand nested rules (A may reference B)
-        for _ in range(10):
-            changed = False
-            for rule_sym, rule_expr in list(rule_subs.items()):
-                new_expr = rule_expr.subs(rule_subs)
-                if new_expr != rule_expr:
-                    rule_subs[rule_sym] = new_expr
-                    changed = True
-            if not changed:
-                break
-
-        # CRITICAL: Also create a name-based lookup for substitution
-        # because ODEs may use different symbol objects with same name
-        name_to_expr = {sym.name: expr for sym, expr in rule_subs.items()}
-
-    is_canonical = True
-    is_ssystem = True
-    is_gma = True
-
-    for _var, ode in sym.odes.items():
-        # Expand assignment rules to reveal hidden structure
-        if rule_subs:
-            # First try direct substitution
-            ode = ode.subs(rule_subs)
-            # Also substitute by name (for symbol object mismatches)
-            for sym_in_ode in ode.free_symbols:
-                if sym_in_ode.name in name_to_expr:
-                    ode = ode.subs(sym_in_ode, name_to_expr[sym_in_ode.name])
-        terms = expand_to_terms(sp.expand(ode))
-
-        # Separate into positive and negative monomial terms
-        pos_monomials = []
-        neg_monomials = []
-
-        for term in terms:
-            if term == 0:
-                continue
-
-            # Check if term is a monomial
-            if not _is_term_monomial(term):
-                # Has non-monomial terms - must be GENERAL
-                return SystemClass.GENERAL
-
-            # Determine sign
-            sign = _get_coefficient_sign(term)
-            if sign > 0:
-                pos_monomials.append(term)
-            else:
-                neg_monomials.append(term)
-
-        # Check canonical S-system: exactly 1 positive + 1 negative
-        if len(pos_monomials) != 1 or len(neg_monomials) != 1:
-            is_canonical = False
-
-        # Check S-system: at most 1 positive AND at most 1 negative term
-        # S-system form: α·∏X^g - β·∏X^h (production minus degradation)
-        # Two terms with the SAME sign is GMA, not S-system
-        if len(pos_monomials) > 1 or len(neg_monomials) > 1:
-            is_ssystem = False
-
-        # Check GMA: may have multiple terms, but all must be monomials
-        # (already verified above)
-
-    # Return most specific classification
-    if is_canonical:
-        return SystemClass.CANONICAL_SSYSTEM
-    elif is_ssystem:
-        return SystemClass.SSYSTEM
-    elif is_gma:
-        return SystemClass.GMA
-    else:
-        return SystemClass.GENERAL
-
-
-def classify_result(result: RecastResult, mode: str = "simplified") -> SystemClass:
-    """
-    Classify a RecastResult based on its output structure.
-
-    Args:
-        result: The RecastResult to classify
-        mode: Output mode ('simplified' or 'canonical')
-              In canonical mode, epsilon slack is added to zero coefficients,
-              converting S-systems to Canonical S-systems
-
-    Returns:
-        SystemClass enum indicating the output type
-    """
-    # Check for time-varying coefficients (assignment rules that depend on clock T)
-    # If assignment rules exist and reference the clock state T, this is GMA_TIME_VARYING
-    has_time_varying_coeffs = False
-    if result.assignment_rules:
-        for _rule_name, rule_expr in result.assignment_rules.items():
-            # Check if rule contains 'T' (clock state) as a standalone identifier
-            # Use word boundary regex to match T but not words containing T (like "TIME")
-            if re.search(r"\bT\b", str(rule_expr)):
-                has_time_varying_coeffs = True
-                break
-
-    # If time-varying, return GMA_TIME_VARYING regardless of structure
-    if has_time_varying_coeffs:
-        return SystemClass.GMA_TIME_VARYING
-
-    if result.status == RecastStatus.GMA:
-        # GMA format - validate it's truly GMA, not just canonical
-        has_multi_term = False
-        for eq in result.gma_equations:
-            # Check if production or degradation has multiple incompatible terms
-            if len(eq.production) > 1:
-                # Multiple production terms - check if they have same exponents
-                if len(eq.production) > 1:
-                    first_exps = eq.production[0][1]
-                    for _, exps in eq.production[1:]:
-                        if not _exponents_match(first_exps, exps):
-                            has_multi_term = True
-                            break
-
-            if len(eq.degradation) > 1:
-                # Multiple degradation terms - check if they have same exponents
-                first_exps = eq.degradation[0][1]
-                for _, exps in eq.degradation[1:]:
-                    if not _exponents_match(first_exps, exps):
-                        has_multi_term = True
-                        break
-
-            if has_multi_term:
-                break
-
-        if has_multi_term:
-            return SystemClass.GMA
-
-        # All terms are compatible - could be canonical
-        # Check if each equation has exactly 1 production + 1 degradation
-        for gma_eq2 in result.gma_equations:
-            if len(gma_eq2.production) != 1 or len(gma_eq2.degradation) != 1:
-                return SystemClass.GMA
-        return SystemClass.CANONICAL_SSYSTEM
-
-    elif result.status == RecastStatus.CANONICAL_SSYSTEM:
-        # Count actual non-zero terms in each equation
-        # An equation is canonical if it has exactly 2 non-zero terms (1 growth + 1 decay)
-        # An equation is S-system if it has 1-2 non-zero terms
-        #
-        # IMPORTANT: In canonical mode, epsilon slack is added to zero coefficients,
-        # converting equations like X' = 0 - h*X into X' = epsilon*X - (epsilon+h)*X
-        # So we need to account for this transformation when classifying
-
-        is_canonical = True
-        is_ssystem = True
-
-        for ssys_eq in result.equations:
-            g_coeff = ssys_eq.growth[0]
-            d_coeff = ssys_eq.decay[0]
-
-            # Check if growth coefficient is non-zero
-            g_nonzero = False
-            if isinstance(g_coeff, (int, float)):
-                g_nonzero = g_coeff != 0
-            elif isinstance(g_coeff, sp.Expr):
-                g_nonzero = g_coeff != sp.Integer(0)
-
-            # Check if decay coefficient is non-zero
-            d_nonzero = False
-            if isinstance(d_coeff, (int, float)):
-                d_nonzero = d_coeff != 0
-            elif isinstance(d_coeff, sp.Expr):
-                d_nonzero = d_coeff != sp.Integer(0)
-
-            # In canonical mode, check if epsilon will be added
-            # If either coefficient is zero, epsilon makes it canonical
-            if mode == "canonical":
-                # If we have 1 or 2 terms and one is zero, epsilon will make it canonical
-                has_zero = (not g_nonzero) or (not d_nonzero)
-                has_nonzero = g_nonzero or d_nonzero
-
-                if has_zero and has_nonzero:
-                    # This will become canonical with epsilon: e.g., 0 - h*X becomes epsilon*X - (epsilon+h)*X
-                    # Count as 2 terms for canonical check
-                    nonzero_count = 2
-                else:
-                    # Both nonzero or both zero - count actual terms
-                    nonzero_count = (1 if g_nonzero else 0) + (1 if d_nonzero else 0)
-            else:
-                # Simplified mode: count actual non-zero terms
-                nonzero_count = (1 if g_nonzero else 0) + (1 if d_nonzero else 0)
-
-            # Check canonical: exactly 2 terms (actual or after epsilon)
-            if nonzero_count != 2:
-                is_canonical = False
-
-            # Check S-system: 1-2 terms
-            if nonzero_count < 1 or nonzero_count > 2:
-                is_ssystem = False
-
-        # Return most specific classification
-        if is_canonical:
-            return SystemClass.CANONICAL_SSYSTEM
-        elif is_ssystem:
-            return SystemClass.SSYSTEM
-        else:
-            return SystemClass.GMA
-
-    else:
-        return SystemClass.GENERAL
-
-
-def _is_term_monomial(term: sp.Expr) -> bool:
-    """
-    Check if a term is a monomial (product of powers).
-
-    A monomial is a product of:
-    - Numeric constants
-    - Symbols (can be parameters or state variables)
-    - Powers with symbol bases (exponents can be numeric or symbolic)
-
-    What makes it NON-monomial:
-    - Functions (exp, sin, log, etc.)
-    - Sums/differences in the base
-    - Division by non-constant expressions
-    """
-    if term.is_Number:
-        return True
-    if isinstance(term, sp.Symbol):
-        return True
-    if isinstance(term, sp.Pow):
-        base, exp = term.args
-        # Base must be a symbol (state var or parameter)
-        # Exponent can be numeric or symbolic (parameters are OK)
-        return isinstance(base, sp.Symbol)
-    if term.is_Mul:
-        # All factors must be monomials
-        for factor in term.args:
-            if not _is_term_monomial(factor):
-                return False
-        return True
-    return False
-
-
-def _get_coefficient_sign(term: sp.Expr) -> int:
-    """Get the sign of a term's coefficient. Returns 1 for positive, -1 for negative."""
-    if term.is_Number:
-        return 1 if float(term) >= 0 else -1
-    if term.is_Mul:
-        # Extract numeric coefficient
-        coeff = 1.0
-        for factor in term.args:
-            if factor.is_Number:
-                coeff *= float(factor)
-        return 1 if coeff >= 0 else -1
-    return 1  # Assume positive if no numeric coefficient
 
 
 # --- CANONICALIZE AUX NAMES: must be placed below the dataclasses ---
@@ -2370,35 +1677,6 @@ def term_to_coeff_exps(
 
     # If we can't decompose it, return as pure coefficient
     return term, exps
-
-
-def product_expr(coeff, exps: dict[sp.Symbol, float]) -> sp.Expr:
-    """
-    Build symbolic product expression from coefficient and exponents.
-    coeff can be either float or sp.Expr (symbolic).
-    """
-    # Handle coefficient (numeric or symbolic)
-    if isinstance(coeff, sp.Expr):
-        expr = coeff
-    else:
-        # Numeric coefficient - convert to appropriate sympy type
-        if isinstance(coeff, int) or (isinstance(coeff, float) and coeff == int(coeff)):
-            expr = sp.Integer(int(coeff))
-        else:
-            expr = sp.Float(coeff)
-
-    # Add power-law terms
-    for s, e in sorted(exps.items(), key=lambda kv: str(kv[0])):
-        if abs(e) < 1e-14:
-            continue
-        # Convert exponent to appropriate sympy type
-        if isinstance(e, int) or (isinstance(e, float) and e == int(e)):
-            exp_sym = sp.Integer(int(e))
-        else:
-            exp_sym = sp.Float(e)
-        expr *= s**exp_sym
-
-    return sp.simplify(expr)
 
 
 def find_rational_denominators(expr: sp.Expr) -> set[sp.Expr]:
@@ -4331,45 +3609,6 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
         ),
         aux_to_func_with_offset,  # Dictionary mapping Z_i -> f(X) + offset
     )
-
-
-def _exponents_match(exps1: dict[sp.Symbol, float], exps2: dict[sp.Symbol, float]) -> bool:
-    """Check if two exponent patterns match (within tolerance).
-
-    Handles both numeric and symbolic exponents.
-    """
-    all_vars = set(exps1.keys()) | set(exps2.keys())
-    for var in all_vars:
-        e1 = exps1.get(var, 0.0)
-        e2 = exps2.get(var, 0.0)
-
-        # Handle symbolic exponents
-        if isinstance(e1, sp.Expr) or isinstance(e2, sp.Expr):
-            # Convert to sympy if needed
-            e1_sym = sp.sympify(e1)
-            e2_sym = sp.sympify(e2)
-            diff = sp.simplify(e1_sym - e2_sym)
-
-            # Check if the difference is zero (either exactly or numerically)
-            if diff == 0:
-                continue
-            if diff.is_number:
-                try:
-                    if abs(float(diff)) > 1e-10:
-                        return False
-                except (TypeError, ValueError):
-                    return False  # Can't compare, assume different
-            else:
-                # Symbolic difference - not the same unless zero
-                return False
-        else:
-            # Both numeric
-            try:
-                if abs(float(e1) - float(e2)) > 1e-10:
-                    return False
-            except (TypeError, ValueError):
-                return False
-    return True
 
 
 def _analyze_ode_terms(
