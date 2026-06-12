@@ -41,28 +41,6 @@ def canonicalize_aux_names(res: "RecastResult", prefix: str = "Z") -> "RecastRes
             out[name_map.get(s, s)] = e
         return out
 
-    def remap_coeff(coeff: sp.Expr) -> sp.Expr:
-        """Apply name_map substitutions to coefficient expression.
-
-        This handles symbolic coefficients that contain original variable names
-        (e.g., sqrt(Z2^2 + 1) should become sqrt(Z_2^2 + 1)).
-
-        Note: We must match symbols by NAME, not by object identity, because
-        the coefficient may contain symbols created during parsing that are
-        different objects from those in name_map but have the same name.
-        """
-        if isinstance(coeff, sp.Expr) and not coeff.is_Number:
-            result = coeff
-            # Build name-to-new-symbol map
-            name_to_new = {old_sym.name: new_sym for old_sym, new_sym in name_map.items()}
-
-            # Find all symbols in the coefficient and substitute by name
-            for sym in result.free_symbols:
-                if sym.name in name_to_new:
-                    result = result.subs(sym, name_to_new[sym.name])
-            return result
-        return coeff
-
     # 3) Remap factor_map FIRST (needed for coefficient substitution)
     new_factor_map = {
         orig: [name_map.get(a, a) for a in aux_list] for orig, aux_list in res.factor_map.items()
@@ -214,7 +192,9 @@ def term_to_coeff_exps(
             if state_vars is None or base in state_vars:
                 if exp_val.is_number:
                     exps[base] = float(exp_val)
-                    return coeff, exps
+                else:
+                    exps[base] = exp_val
+                return coeff, exps
         # Not a state variable or complex - return as coefficient
         return term, exps
 
@@ -312,9 +292,10 @@ def _requires_gma(sym: SymSystem) -> bool:
     Check if system requires GMA format (cannot be exact canonical S-system).
     Returns True if any ODE has multiple terms with different exponent patterns.
     """
+    state_vars = set(sym.vars)
     for _var, ode in sym.odes.items():
         terms = expand_to_terms(sp.simplify(ode))
-        growth_terms, decay_terms = _analyze_ode_terms(terms)
+        growth_terms, decay_terms = _analyze_ode_terms(terms, state_vars)
 
         # Check if multiple growth terms have different exponent patterns
         if len(growth_terms) > 1:

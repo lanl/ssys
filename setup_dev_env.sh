@@ -100,7 +100,7 @@ source "$ENV_NAME/bin/activate"
 # Install package with dev extras
 # Note: libroadrunner, antimony, and python-libsbml are now REQUIRED
 # core dependencies (SBML-first architecture), not optional extras.
-# JAX is NOT included - it causes hangs/slowdowns (see DEVELOPMENT_NOTES.md)
+# Optional extras such as dae and jax are installed explicitly with uv sync.
 echo "Installing ssys with dev tools..."
 uv pip install -e ".[dev]"
 
@@ -128,8 +128,7 @@ else
     exit 1
 fi
 
-# JAX check removed - we don't use JAX anymore (causes hangs)
-# See DEVELOPMENT_NOTES.md for details
+# JAX is optional diagnostic acceleration and is not installed by this helper.
 
 # Register Jupyter kernel for this environment
 echo ""

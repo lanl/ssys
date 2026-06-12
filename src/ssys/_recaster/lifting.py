@@ -268,7 +268,7 @@ def lift_rational_functions(
                     new_ode = new_ode.replace(denom ** (-1), sp.Float(recip_val))
                     # Handle other negative powers if present
                     for n in range(2, 6):
-                        if denom ** (-n) in new_ode.atoms():
+                        if denom ** (-n) in new_ode.atoms(sp.Pow):
                             new_ode = new_ode.replace(denom ** (-n), sp.Float(recip_val**n))
                 except (TypeError, ValueError, ZeroDivisionError):
                     # If numeric evaluation fails, leave the denominator symbolic.

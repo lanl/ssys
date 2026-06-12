@@ -43,8 +43,8 @@ class TestEmptyAndTrivialSystems:
         )
 
         cls = classify_system(sym)
-        # A constant is a monomial (trivially) - should be some valid class
-        assert cls is not None
+        # A constant RHS is a valid one-term S-system equation.
+        assert cls == SystemClass.SSYSTEM
 
     def test_zero_ode(self):
         """Test ODE with zero RHS (equilibrium)."""
@@ -58,7 +58,7 @@ class TestEmptyAndTrivialSystems:
         )
 
         cls = classify_system(sym)
-        assert cls is not None  # Should handle gracefully
+        assert cls == SystemClass.SSYSTEM
 
 
 class TestCoefficientsAndExponents:
@@ -130,13 +130,10 @@ class TestCoefficientsAndExponents:
         n = sp.Symbol("n")
         expr = x**n
 
-        # Symbolic exponents may not be handled as expected
-        # Just verify function runs without error
         coeff, exps = term_to_coeff_exps(expr)
 
-        # Result depends on implementation - just check it returned something
-        assert coeff is not None
-        assert exps is not None
+        assert coeff == 1
+        assert exps == {x: n}
 
 
 class TestTermMonomial:
@@ -194,9 +191,8 @@ class TestFindRationalDenominators:
 
         denoms = find_rational_denominators(expr)
 
-        # 1/x = x^(-1) is a monomial, so may not be detected as rational
-        # Just ensure function runs without error
-        assert isinstance(denoms, set)
+        # 1/x is already a power-law monomial, so it does not need lifting.
+        assert denoms == set()
 
     def test_polynomial_denominator(self):
         """Test polynomial in denominator."""

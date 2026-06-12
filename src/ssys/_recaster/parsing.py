@@ -1,10 +1,26 @@
 """Antimony and SBML parsing plus symbolic-system construction."""
 
-import re
-
 import sympy as sp
 
 from ssys._recaster.common import arrow_pat, func_def_pat, prime_rule_pat
+from ssys._recaster.sbml_helpers import (
+    _apply_initial_assignments,
+    _checked_sbml_model,
+    _extract_sbml_function_templates,
+    _iter_kinetic_law_local_parameters,
+    _reaction_scope_name,
+    _replace_formula_identifiers,
+    _sanitize_sbml_identifier,
+    _sympify_sbml_formula,
+    _unique_identifier,
+    _validate_sbml_identifier,
+)
+from ssys._recaster.sbml_helpers import (
+    _evaluate_initial_assignment as _evaluate_initial_assignment,
+)
+from ssys._recaster.sbml_helpers import (
+    _warn_or_raise_initial_assignment_error as _warn_or_raise_initial_assignment_error,
+)
 from ssys._recaster.templates import _expand_function_calls
 from ssys.classification import classify_sym_system_solver_requirement
 from ssys.metadata import _extract_sim_metadata, _extract_solver_requirement_metadata
@@ -15,30 +31,6 @@ from ssys.types import (
     SolverRequirement,
     SymSystem,
 )
-
-_SYMPY_FUNCTION_NAMES = frozenset({
-    "Abs",
-    "Piecewise",
-    "acos",
-    "asin",
-    "atan",
-    "ceiling",
-    "cos",
-    "cosh",
-    "exp",
-    "floor",
-    "log",
-    "max",
-    "min",
-    "piecewise",
-    "pow",
-    "sin",
-    "sinh",
-    "sqrt",
-    "tan",
-    "tanh",
-})
-_SYMPY_CONSTANT_NAMES = frozenset({"E", "EulerGamma", "oo", "pi"})
 
 
 def tokenize_species_side(side: str) -> list[tuple[int, str]]:
@@ -413,175 +405,6 @@ def parse_sbml(sbml_path: str, *, warn_initial_assignment_failures: bool = False
     )
 
 
-def _sympify_sbml_formula(
-    formula_str: str | None,
-    all_syms: dict[str, sp.Symbol],
-    *,
-    source: str,
-    kind: str,
-    reaction_id: str | None = None,
-    reaction_name: str | None = None,
-    variable: str | None = None,
-) -> sp.Expr:
-    """Parse an SBML formula string as a numeric SymPy expression or raise with context."""
-    if formula_str in (None, ""):
-        raise SBMLParseError(
-            kind,
-            formula_str,
-            "missing math formula",
-            source=source,
-            reaction_id=reaction_id,
-            reaction_name=reaction_name,
-            variable=variable,
-        )
-    assert isinstance(formula_str, str)
-    formula_text = formula_str
-
-    identifiers = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", formula_text))
-    function_calls = set(re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(", formula_text))
-    unsupported_functions = sorted(function_calls - _SYMPY_FUNCTION_NAMES)
-    if unsupported_functions:
-        raise SBMLParseError(
-            kind,
-            formula_str,
-            f"unsupported function(s): {', '.join(unsupported_functions)}",
-            source=source,
-            reaction_id=reaction_id,
-            reaction_name=reaction_name,
-            variable=variable,
-        )
-
-    unknown_identifiers = sorted(
-        identifiers - set(all_syms) - _SYMPY_FUNCTION_NAMES - _SYMPY_CONSTANT_NAMES
-    )
-    if unknown_identifiers:
-        raise SBMLParseError(
-            kind,
-            formula_str,
-            f"unknown identifier(s): {', '.join(unknown_identifiers)}",
-            source=source,
-            reaction_id=reaction_id,
-            reaction_name=reaction_name,
-            variable=variable,
-        )
-
-    try:
-        expr = sp.sympify(formula_str, locals=all_syms)
-    except Exception as exc:
-        raise SBMLParseError(
-            kind,
-            formula_str,
-            str(exc),
-            source=source,
-            reaction_id=reaction_id,
-            reaction_name=reaction_name,
-            variable=variable,
-        )
-
-    if not isinstance(expr, sp.Expr):
-        raise SBMLParseError(
-            kind,
-            formula_str,
-            f"expected numeric expression, got {type(expr).__name__}",
-            source=source,
-            reaction_id=reaction_id,
-            reaction_name=reaction_name,
-            variable=variable,
-        )
-
-    return expr
-
-
-def _warn_or_raise_initial_assignment_error(
-    error: SBMLParseError, warn_initial_assignment_failures: bool
-) -> None:
-    if warn_initial_assignment_failures:
-        import warnings
-
-        warnings.warn(str(error), RuntimeWarning, stacklevel=2)
-        return
-    raise error
-
-
-def _reaction_scope_name(rxn, reaction_index: int) -> str:
-    raw = rxn.getId() or rxn.getName() or f"reaction_{reaction_index + 1}"
-    return _sanitize_sbml_identifier(raw, fallback=f"reaction_{reaction_index + 1}")
-
-
-def _sanitize_sbml_identifier(value: str, *, fallback: str = "id") -> str:
-    sanitized = re.sub(r"\W", "_", value.strip())
-    sanitized = re.sub(r"_+", "_", sanitized).strip("_")
-    if not sanitized:
-        sanitized = fallback
-    if not re.match(r"^[A-Za-z_]", sanitized):
-        sanitized = f"_{sanitized}"
-    return sanitized
-
-
-def _unique_identifier(base: str, used: set[str]) -> str:
-    if base not in used:
-        return base
-    idx = 2
-    while f"{base}_{idx}" in used:
-        idx += 1
-    return f"{base}_{idx}"
-
-
-def _iter_kinetic_law_local_parameters(kinetic_law) -> list:
-    if hasattr(kinetic_law, "getNumLocalParameters") and kinetic_law.getNumLocalParameters() > 0:
-        return [
-            kinetic_law.getLocalParameter(i)
-            for i in range(kinetic_law.getNumLocalParameters())
-        ]
-    return [kinetic_law.getParameter(i) for i in range(kinetic_law.getNumParameters())]
-
-
-def _replace_formula_identifiers(formula_str: str, replacements: dict[str, str]) -> str:
-    result = formula_str
-    for old_name, new_name in replacements.items():
-        if not old_name:
-            continue
-        pattern = r"(?<![A-Za-z_\d])" + re.escape(old_name) + r"(?![A-Za-z_\d])"
-        result = re.sub(pattern, new_name, result)
-    return result
-
-
-def _evaluate_initial_assignment(
-    formula_str: str | None,
-    all_syms: dict[str, sp.Symbol],
-    params: dict[str, float],
-    *,
-    source: str,
-    variable: str,
-    warn_initial_assignment_failures: bool,
-) -> float | None:
-    try:
-        init_expr = _sympify_sbml_formula(
-            formula_str,
-            all_syms,
-            source=source,
-            kind="initial_assignment",
-            variable=variable,
-        )
-        for param_name, param_val in params.items():
-            if param_name != variable and param_name in all_syms:
-                init_expr = init_expr.subs(all_syms[param_name], param_val)
-        return float(init_expr)
-    except SBMLParseError as exc:
-        _warn_or_raise_initial_assignment_error(exc, warn_initial_assignment_failures)
-    except Exception as exc:
-        error = SBMLParseError(
-            "initial_assignment",
-            formula_str,
-            str(exc),
-            source=source,
-            variable=variable,
-        )
-        _warn_or_raise_initial_assignment_error(error, warn_initial_assignment_failures)
-
-    return None
-
-
 def _parse_sbml_document(
     doc, source: str = "<unknown>", *, warn_initial_assignment_failures: bool = False
 ) -> "SymSystem":
@@ -599,19 +422,8 @@ def _parse_sbml_document(
     """
     import libsbml
 
-    # Check for errors
-    if doc.getNumErrors() > 0:
-        errors = []
-        for i in range(doc.getNumErrors()):
-            err = doc.getError(i)
-            if err.getSeverity() >= libsbml.LIBSBML_SEV_ERROR:
-                errors.append(err.getMessage())
-        if errors:
-            raise ValueError(f"SBML parsing errors in {source}: {'; '.join(errors)}")
-
-    model = doc.getModel()
-    if model is None:
-        raise ValueError(f"No model found in SBML source: {source}")
+    model = _checked_sbml_model(doc, libsbml, source=source)
+    function_templates = _extract_sbml_function_templates(model, libsbml, source=source)
 
     # ========================================================================
     # STEP 1: Extract species information
@@ -622,6 +434,7 @@ def _parse_sbml_document(
     for i in range(model.getNumSpecies()):
         sp_obj = model.getSpecies(i)
         sid = sp_obj.getId()
+        _validate_sbml_identifier(sid, kind="species", source=source)
         bc = sp_obj.getBoundaryCondition()
 
         # Get initial value (prefer amount over concentration)
@@ -645,6 +458,7 @@ def _parse_sbml_document(
     for i in range(model.getNumParameters()):
         p = model.getParameter(i)
         pid = p.getId()
+        _validate_sbml_identifier(pid, kind="parameter", source=source)
         if p.isSetValue():
             params[pid] = p.getValue()
         else:
@@ -683,6 +497,7 @@ def _parse_sbml_document(
     for i in range(model.getNumCompartments()):
         c = model.getCompartment(i)
         cid = c.getId()
+        _validate_sbml_identifier(cid, kind="compartment", source=source)
         if c.isSetSize():
             compartments[cid] = c.getSize()
         else:
@@ -735,6 +550,7 @@ def _parse_sbml_document(
         formula_str = _replace_formula_identifiers(
             formula_str, reaction_local_param_maps.get(i, {})
         )
+        formula_str = _expand_function_calls(formula_str, function_templates)
 
         # Parse rate expression
         rate_expr = _sympify_sbml_formula(
@@ -769,24 +585,44 @@ def _parse_sbml_document(
     # ========================================================================
     # STEP 6: Handle rate rules (explicit ODEs defined in SBML)
     # ========================================================================
+    rate_rule_variables: set[str] = set()
     for i in range(model.getNumRules()):
         rule = model.getRule(i)
 
         if rule.getTypeCode() == libsbml.SBML_RATE_RULE:
             var_id = rule.getVariable()
             formula_str = libsbml.formulaToString(rule.getMath())
+            formula_str = _expand_function_calls(formula_str, function_templates)
 
-            if var_id in all_syms:
-                rate_expr = _sympify_sbml_formula(
+            if var_id in rate_rule_variables:
+                raise SBMLParseError(
+                    "ambiguous_model",
                     formula_str,
-                    all_syms,
+                    f"multiple rate rules for variable {var_id}",
                     source=source,
-                    kind="rate_rule",
                     variable=var_id,
                 )
-                var_sym = all_syms[var_id]
-                # Rate rules replace the reaction-based ODE
-                odes[var_sym] = rate_expr
+            rate_rule_variables.add(var_id)
+
+            if var_id not in all_syms:
+                raise SBMLParseError(
+                    "rate_rule",
+                    formula_str,
+                    f"unknown rule variable: {var_id}",
+                    source=source,
+                    variable=var_id,
+                )
+
+            rate_expr = _sympify_sbml_formula(
+                formula_str,
+                all_syms,
+                source=source,
+                kind="rate_rule",
+                variable=var_id,
+            )
+            var_sym = all_syms[var_id]
+            # Rate rules replace the reaction-based ODE
+            odes[var_sym] = rate_expr
 
     # ========================================================================
     # STEP 6a: Handle assignment rules (V_1 := expression)
@@ -800,6 +636,7 @@ def _parse_sbml_document(
         if rule.getTypeCode() == libsbml.SBML_ASSIGNMENT_RULE:
             var_id = rule.getVariable()
             formula_str = libsbml.formulaToString(rule.getMath())
+            formula_str = _expand_function_calls(formula_str, function_templates)
             # Store as string for SymSystem (will be parsed later if needed)
             assignment_rules[var_id] = formula_str
 
@@ -812,59 +649,26 @@ def _parse_sbml_document(
 
         if rule.getTypeCode() == libsbml.SBML_ALGEBRAIC_RULE:
             formula_str = libsbml.formulaToString(rule.getMath())
+            formula_str = _expand_function_calls(formula_str, function_templates)
+            _sympify_sbml_formula(
+                formula_str,
+                all_syms,
+                source=source,
+                kind="algebraic_rule",
+            )
             algebraic_constraints.append(formula_str)
 
-    # ========================================================================
-    # STEP 6b: Handle InitialAssignments (parameter expressions for ICs)
-    # ========================================================================
-    # In SBML, InitialAssignments allow ICs to be set via formulas like I = I_b
-    # or parameter expressions like gamma_rate = 1/7
-    # We need to evaluate these formulas to get numeric initial conditions
-    #
-    # NOTE: When Antimony converts "gamma_rate = 1/7" to SBML, it creates:
-    #   1. A parameter element (value may be unset or 0)
-    #   2. An InitialAssignment that defines the actual value
-    # So we MUST process InitialAssignments for parameters, not just species
-    for i in range(model.getNumInitialAssignments()):
-        ia = model.getInitialAssignment(i)
-        var_id = ia.getSymbol()
-        formula_str = libsbml.formulaToString(ia.getMath())
-
-        if var_id in species_info:
-            init_value = _evaluate_initial_assignment(
-                formula_str,
-                all_syms,
-                params,
-                source=source,
-                variable=var_id,
-                warn_initial_assignment_failures=warn_initial_assignment_failures,
-            )
-            if init_value is not None:
-                species_info[var_id]["init"] = init_value
-
-        elif var_id in params:
-            # Handle parameter expressions like gamma_rate = 1/7
-            init_value = _evaluate_initial_assignment(
-                formula_str,
-                all_syms,
-                params,
-                source=source,
-                variable=var_id,
-                warn_initial_assignment_failures=warn_initial_assignment_failures,
-            )
-            if init_value is not None:
-                params[var_id] = init_value
-        elif var_id in compartments:
-            init_value = _evaluate_initial_assignment(
-                formula_str,
-                all_syms,
-                params,
-                source=source,
-                variable=var_id,
-                warn_initial_assignment_failures=warn_initial_assignment_failures,
-            )
-            if init_value is not None:
-                compartments[var_id] = init_value
+    _apply_initial_assignments(
+        model,
+        libsbml,
+        function_templates=function_templates,
+        species_info=species_info,
+        params=params,
+        compartments=compartments,
+        all_syms=all_syms,
+        source=source,
+        warn_initial_assignment_failures=warn_initial_assignment_failures,
+    )
 
     # ========================================================================
     # STEP 7: Build SymSystem

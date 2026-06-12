@@ -233,6 +233,38 @@ class TestProductToAntimony:
         assert "5*x" in result or result.startswith("5")
         assert "/1" not in result
 
+    def test_symbolic_coefficients_dummy_constants_and_fractional_exponents(self):
+        """Product formatting preserves symbolic and constant-term edge cases."""
+        x = sp.Symbol("x", positive=True)
+        a = sp.Symbol("a", positive=True)
+        b = sp.Symbol("b", positive=True)
+        dummy = sp.Symbol("dummy_const", positive=True)
+
+        assert product_to_antimony(sp.Integer(0), {x: 1.0}) == "0"
+        assert product_to_antimony(a + b, {x: 1.0}) == "(a + b)*x"
+        assert product_to_antimony(sp.Integer(1), {dummy: sp.Integer(0)}) == (
+            "1*dummy_const^0"
+        )
+        assert product_to_antimony(1.0, {x: 0.0}) == "1"
+        assert product_to_antimony(1.0, {x: sp.Float(0.5)}) == "x^0.500000000000000"
+
+    def test_private_factor_formatting_preserves_precedence(self):
+        """Coefficient factor formatting keeps powers, sums, and exact rationals parseable."""
+        from ssys._recaster.antimony_formatting import _format_factor, _format_symbolic_coeff
+
+        x = sp.Symbol("x", positive=True)
+        a = sp.Symbol("a", positive=True)
+        b = sp.Symbol("b", positive=True)
+        c = sp.Symbol("c", positive=True)
+
+        assert _format_factor(sp.Rational(2, 5)) == "(2/5)"
+        assert _format_factor(sp.Float(2.5)) == "2.5"
+        assert _format_factor(sp.Pow(x, sp.Float(1.0), evaluate=False)) == "x"
+        assert _format_factor(sp.Pow(sp.Integer(2), sp.Integer(3), evaluate=False)) == "2^3"
+        assert _format_factor((a + b) ** (-c - 1)) == "((a + b))^(-c - 1)"
+        assert _format_factor(sp.sin(x)) == "sin(x)"
+        assert _format_symbolic_coeff(2 * a * (b + c)) == ["2", "a", "(b + c)"]
+
 
 class TestSystemClassification:
     """Tests for system classification."""
@@ -584,6 +616,98 @@ class TestAntimonyExport:
         assert "model gma_test" in output
         assert "end" in output
         assert "GMA" in output  # Should have GMA comment
+
+    def test_gma_assignment_mode_outputs_lifted_rules_without_clock_or_dummy(self):
+        """Assignment-mode GMA keeps lifted manifolds exact and leaves clocks as states."""
+        X = sp.Symbol("X", positive=True)
+        T = sp.Symbol("T", positive=True)
+        Y = sp.Symbol("Y_1", positive=True)
+        dummy = sp.Symbol("dummy_const", positive=True)
+
+        result = RecastResult(
+            status=RecastStatus.GMA,
+            equations=[],
+            gma_equations=[
+                GMAEquation(
+                    var=X,
+                    production=[(sp.Integer(1), {X: 1.0})],
+                    degradation=[],
+                ),
+                GMAEquation(
+                    var=T,
+                    production=[(sp.Integer(1), {})],
+                    degradation=[],
+                ),
+                GMAEquation(
+                    var=Y,
+                    production=[(sp.Integer(1), {X: 1.0})],
+                    degradation=[],
+                ),
+            ],
+            variables=[X, T, Y],
+            initials={X: 1.0, T: 0.0, Y: 2.0, ("compartment", "cell"): 1.0},
+            auxiliary_defs={T: sp.Symbol("time"), Y: X + 1, dummy: sp.Integer(1)},
+            assignment_rules={"rate": "X + 1"},
+            params={"k": 0.5, "rate": 9.0},
+            factor_map={X: [X]},
+            canonical_refusal_reason="multiple incompatible terms",
+        )
+
+        output = gma_to_antimony(result, model_name="gma_assignment", lifted_mode="assignment")
+
+        assert "Y_1 := X + 1;" in output
+        assert "T := time;" not in output
+        assert "dummy_const" not in output
+        assert "rate = 9" not in output
+        assert "rate := X + 1;" in output
+        assert "Canonical S-system recast was not attempted" in output
+
+    def test_failed_recast_output_includes_unknown_reason_and_initials(self):
+        """Failed recasts produce an auditable Antimony stub."""
+        X = sp.Symbol("X", positive=True)
+        result = RecastResult(
+            status=RecastStatus.FAILED,
+            equations=[],
+            variables=[],
+            initials={X: 1.25},
+        )
+
+        output = ssystem_to_antimony(result, model_name="failed.model")
+
+        assert "model failed_model()" in output
+        assert "Recasting failed for unknown reason." in output
+        assert "// X = 1.25" in output
+        assert "// No recast equations generated." in output
+
+    def test_simplified_ssystem_formats_symbolic_constants_and_ic_fallbacks(self):
+        """Simplified output handles constant terms, symbolic ICs, and observables."""
+        A, B, C, D, Obs, Q, k = sp.symbols("A B C D Obs Q k", positive=True)
+        result = RecastResult(
+            status=RecastStatus.CANONICAL_SSYSTEM,
+            equations=[
+                SSysEquation(A, (k, {}), (sp.Integer(2), {A: 1.0})),
+                SSysEquation(B, (sp.Integer(3), {B: 1.0}), (k + 1, {})),
+                SSysEquation(C, (k + 2, {}), (sp.Rational(1, 2), {})),
+                SSysEquation(D, (sp.Integer(1), {D: 1.0}), (sp.Integer(0), {})),
+            ],
+            variables=[A, B, C, D],
+            initials={A: 0.0, B: 2.0, C: 3.0, ("compartment", "cell"): 1.0},
+            initial_exprs={A: "k + 1"},
+            params={"k": 0.5, "D": 4.0, "Obs": 99.0},
+            factor_map={Obs: [A, B], Q: [C], D: [D]},
+            assignment_rules={"obs": "A + k"},
+        )
+
+        output = ssystem_to_antimony(result, model_name="constant_terms", mode="simplified")
+
+        assert "A = k + 1;" in output
+        assert "D = 4;" in output
+        assert "Obs := A * B;" in output
+        assert "Q := C;" in output
+        assert "D := D;" not in output
+        assert "A' = k - 2*A;" in output
+        assert "B' = 3*B - k + 1;" in output
+        assert "C' = k + 2 - 0.5;" in output
 
 
 class TestAntimonyReservedNameRoundTrip:

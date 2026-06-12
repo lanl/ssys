@@ -29,8 +29,16 @@ from ssys.types import (
     SymSystem,
     SystemClass,
 )
+from ssys.validation_schema import (
+    VALIDATION_REPORT_SCHEMA_RESOURCE,
+    VALIDATION_REPORT_SCHEMA_VERSION,
+    load_validation_report_schema,
+)
+from ssys.validator import ValidationProfile, validation_profile_choices
 
 __version__ = "0.5.5"
+__release_date__ = "2025-12-31"
+__release_maturity__ = "alpha"
 
 __all__ = [
     "ModelIR",
@@ -40,6 +48,9 @@ __all__ = [
     "SSysEquation",
     "SolverRequirement",
     "SystemClass",
+    "ValidationProfile",
+    "VALIDATION_REPORT_SCHEMA_RESOURCE",
+    "VALIDATION_REPORT_SCHEMA_VERSION",
     "parse_antimony",
     "parse_sbml",
     "build_sym_system",
@@ -48,4 +59,6 @@ __all__ = [
     "canonicalize_aux_names",
     "classify_result",
     "classify_solver_requirement",
+    "load_validation_report_schema",
+    "validation_profile_choices",
 ]

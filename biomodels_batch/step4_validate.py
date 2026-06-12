@@ -240,6 +240,32 @@ def format_test_result(report: dict) -> str:
     return f"sym:{s} num:{n} traj:{t}"
 
 
+def _subprocess_validate_entry(
+    result_queue,
+    model_id: str,
+    sbml_path: str,
+    recast_path: str,
+    mode: str,
+    symbolic_only: bool,
+    numerical_only: bool,
+    use_jax: bool,
+) -> None:
+    """Process entry point for isolated validation."""
+    try:
+        report = validate_model(
+            model_id,
+            Path(sbml_path),
+            Path(recast_path),
+            mode,
+            symbolic_only,
+            numerical_only,
+            use_jax,
+        )
+        result_queue.put(("success", report))
+    except Exception as e:
+        result_queue.put(("error", str(e)))
+
+
 def _subprocess_validate(args_tuple):
     """
     Run validation in a subprocess (for reliable timeout of SymPy).
@@ -251,18 +277,19 @@ def _subprocess_validate(args_tuple):
      symbolic_only, numerical_only, use_jax, timeout) = args_tuple
 
     result_queue = mp.Queue()
-
-    def worker():
-        try:
-            report = validate_model(
-                model_id, sbml_path, recast_path, mode,
-                symbolic_only, numerical_only, use_jax
-            )
-            result_queue.put(("success", report))
-        except Exception as e:
-            result_queue.put(("error", str(e)))
-
-    p = mp.Process(target=worker)
+    p = mp.Process(
+        target=_subprocess_validate_entry,
+        args=(
+            result_queue,
+            model_id,
+            str(sbml_path),
+            str(recast_path),
+            mode,
+            symbolic_only,
+            numerical_only,
+            use_jax,
+        ),
+    )
     p.start()
     p.join(timeout=timeout)
 
@@ -491,8 +518,15 @@ def main():
             for model_id, sbml_path, recast_path in pairs
         ]
 
+        parallel_kwargs = {"n_jobs": n_workers, "verbose": 10}
+        if args.subprocess:
+            # Subprocess isolation already provides process-level execution and
+            # hard timeout behavior. Use threads here to avoid nesting loky
+            # process pools around multiprocessing.Process children.
+            parallel_kwargs["prefer"] = "threads"
+
         # Run in parallel with progress reporting
-        results = Parallel(n_jobs=n_workers, verbose=10)(
+        results = Parallel(**parallel_kwargs)(
             delayed(_parallel_validate_worker)(item) for item in work_items
         )
 

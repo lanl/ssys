@@ -10,11 +10,13 @@ import pytest
 import sympy as sp
 
 from ssys._validator.numerical import NumericalValidationMixin
+from ssys._validator.trajectory import TrajectoryValidationMixin
 from ssys.ode_backends.ida_sundials_backend import IDASundialsUnavailable
 from ssys.recaster import SolverRequirement, SystemClass
 from ssys.validator import (
     EquivalenceTest,
     RecastValidator,
+    ValidationProfile,
     ValidationReport,
     ValidationResult,
     validate_generated_output_roundtrip,
@@ -26,13 +28,15 @@ class TestValidationResult:
     """Tests for ValidationResult enum."""
 
     def test_validation_result_values(self):
-        """Test that all expected result values exist."""
-        assert ValidationResult.PASS is not None
-        assert ValidationResult.FAIL is not None
-        assert ValidationResult.TIMEOUT is not None
-        assert ValidationResult.NOT_ATTEMPTED is not None
-        assert ValidationResult.UNSUPPORTED is not None
-        assert ValidationResult.INCONCLUSIVE is not None
+        """Test the complete public result vocabulary."""
+        assert {result.value for result in ValidationResult} == {
+            "pass",
+            "failed",
+            "timeout",
+            "not_attempted",
+            "unsupported",
+            "inconclusive",
+        }
 
     def test_validation_result_names(self):
         """Test result name access."""
@@ -64,6 +68,7 @@ class TestEquivalenceTest:
         )
 
         assert test.result == ValidationResult.FAIL
+        assert test.reason == "failed"
         assert "max_error" in test.details
 
 
@@ -88,7 +93,7 @@ class TestValidationReport:
         )
 
         assert report.original_file == "/path/to/original.ant"
-        assert report.symbolic_test is not None
+        assert report.symbolic_test is test1
         assert report.overall_pass is True
 
     def test_validation_report_to_dict(self):
@@ -110,8 +115,39 @@ class TestValidationReport:
 
         d = report.to_dict()
 
+        assert d["schema_version"] == "1.0"
         assert d["original_file"] == "/path/to/original.ant"
         assert d["overall_pass"] is True
+        assert d["tests"]["symbolic"]["reason"] is None
+
+    def test_validation_report_serializes_profile_metadata_and_reasons(self):
+        test = EquivalenceTest(
+            name="symbolic_equivalence",
+            result=ValidationResult.TIMEOUT,
+            details="forced timeout",
+        )
+        report = ValidationReport(
+            original_file="/path/to/original.ant",
+            recast_file="/path/to/recast.ant",
+            original_class=SystemClass.GENERAL,
+            recast_class=SystemClass.CANONICAL_SSYSTEM,
+            symbolic_test=test,
+            validation_profile="symbolic",
+            validation_profile_description="symbolic proof profile",
+            required_tests=["generated_output", "parser", "mapping", "symbolic"],
+        )
+
+        data = report.to_dict()
+
+        assert data["validation_profile"]["name"] == "symbolic"
+        assert data["validation_profile"]["required_tests"] == [
+            "generated_output",
+            "parser",
+            "mapping",
+            "symbolic",
+        ]
+        assert data["tests"]["symbolic"]["result"] == "timeout"
+        assert data["tests"]["symbolic"]["reason"] == "timeout"
 
 
 class TestFailClosedValidation:
@@ -154,6 +190,156 @@ class TestFailClosedValidation:
         assert captured["parser"] == "sbml"
         assert report.overall_pass is True
 
+    def test_symbolic_profile_records_excluded_checks_without_requiring_them(self, tmp_path):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        report = validator.validate(profile=ValidationProfile.SYMBOLIC)
+        data = report.to_dict()
+
+        assert report.validation_profile == "symbolic"
+        assert report.overall_pass is True
+        assert report.numerical_test is not None
+        assert report.numerical_test.result == ValidationResult.NOT_ATTEMPTED
+        assert report.numerical_test.reason == "profile_excluded"
+        assert report.trajectory_test is not None
+        assert report.trajectory_test.reason == "profile_excluded"
+        assert "numerical" not in report.required_tests
+        assert data["tests"]["numerical"]["reason"] == "profile_excluded"
+
+    def test_validator_init_accepts_explicit_factor_map(self, tmp_path):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        X = sp.Symbol("X", positive=True)
+
+        validator = RecastValidator(str(original), str(recast), factor_map={X: X}, parser="sbml")
+
+        assert validator.factor_map[X] == X
+        assert validator.mapping[X] == X
+
+    def test_strict_profile_overrides_legacy_boolean_flags(self, tmp_path, monkeypatch):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+
+        def symbolic_pass(*args, **kwargs):
+            return EquivalenceTest("symbolic_equivalence", ValidationResult.PASS)
+
+        def numerical_pass(*args, **kwargs):
+            return EquivalenceTest("numerical_pointwise", ValidationResult.PASS)
+
+        def trajectory_pass(*args, **kwargs):
+            return EquivalenceTest("trajectory_comparison", ValidationResult.PASS)
+
+        monkeypatch.setattr(validator, "check_symbolic_equivalence", symbolic_pass)
+        monkeypatch.setattr(validator, "check_numerical_pointwise", numerical_pass)
+        monkeypatch.setattr(validator, "check_trajectory_comparison", trajectory_pass)
+
+        report = validator.validate(
+            run_symbolic=False,
+            run_numerical=False,
+            run_trajectory=False,
+            run_auxiliaries=False,
+            profile="strict",
+        )
+
+        assert report.validation_profile == "strict"
+        assert report.symbolic_test is not None
+        assert report.symbolic_test.result == ValidationResult.PASS
+        assert report.numerical_test is not None
+        assert report.numerical_test.result == ValidationResult.PASS
+        assert report.trajectory_test is not None
+        assert report.trajectory_test.result == ValidationResult.PASS
+        assert report.overall_pass is True
+
+    def test_timeout_required_check_fails_overall_with_timeout_result(self, tmp_path, monkeypatch):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+
+        def symbolic_timeout(*args, **kwargs):
+            return EquivalenceTest(
+                name="symbolic_equivalence",
+                result=ValidationResult.TIMEOUT,
+                details="forced timeout",
+            )
+
+        monkeypatch.setattr(validator, "check_symbolic_equivalence", symbolic_timeout)
+        report = validator.validate(
+            profile="symbolic",
+        )
+
+        assert report.overall_pass is False
+        assert report.overall_result == ValidationResult.TIMEOUT
+        assert "TIMEOUT" in report.summary
+        assert report.symbolic_test is not None
+        assert report.symbolic_test.reason == "timeout"
+
     def test_not_attempted_required_symbolic_test_fails_overall(self, tmp_path, monkeypatch):
         original = tmp_path / "original.ant"
         original.write_text("""
@@ -194,6 +380,134 @@ class TestFailClosedValidation:
         assert report.overall_pass is False
         assert report.overall_result == ValidationResult.NOT_ATTEMPTED
 
+    def test_core_helpers_cover_expected_classes_and_overall_results(self):
+        validator = RecastValidator.__new__(RecastValidator)
+
+        assert validator._expected_class_for_mode("canonical") == SystemClass.CANONICAL_SSYSTEM
+        assert validator._expected_class_for_mode("simplified") == SystemClass.SSYSTEM
+        assert validator._expected_class_for_mode("gma") == SystemClass.GMA
+        assert validator._expected_class_for_mode("unknown") is None
+
+        assert validator._overall_result([
+            EquivalenceTest("ok", ValidationResult.PASS),
+        ]) == ValidationResult.PASS
+        assert validator._overall_result([
+            EquivalenceTest("unsupported", ValidationResult.UNSUPPORTED),
+        ]) == ValidationResult.UNSUPPORTED
+        assert validator._overall_result([
+            EquivalenceTest("inconclusive", ValidationResult.INCONCLUSIVE),
+        ]) == ValidationResult.INCONCLUSIVE
+
+    def test_unsupported_required_check_sets_unsupported_summary(self, tmp_path, monkeypatch):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+
+        monkeypatch.setattr(
+            "ssys._validator.core.validate_generated_output_roundtrip",
+            lambda *args, **kwargs: EquivalenceTest(
+                "generated_output_roundtrip", ValidationResult.PASS
+            ),
+        )
+        monkeypatch.setattr(
+            validator,
+            "check_symbolic_equivalence",
+            lambda *args, **kwargs: EquivalenceTest(
+                "symbolic_equivalence",
+                ValidationResult.UNSUPPORTED,
+                details="symbolic engine unavailable",
+            ),
+        )
+
+        report = validator.validate(profile="symbolic")
+
+        assert report.overall_pass is False
+        assert report.overall_result == ValidationResult.UNSUPPORTED
+        assert report.summary == "Validation UNSUPPORTED: a required backend is unavailable"
+
+    def test_strict_profile_runs_jax_and_requires_present_algebraic_residual(
+        self, tmp_path, monkeypatch
+    ):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+
+        monkeypatch.setattr(
+            "ssys._validator.core.validate_generated_output_roundtrip",
+            lambda *args, **kwargs: EquivalenceTest(
+                "generated_output_roundtrip", ValidationResult.PASS
+            ),
+        )
+        monkeypatch.setattr(
+            validator,
+            "check_symbolic_equivalence",
+            lambda *args, **kwargs: EquivalenceTest("symbolic_equivalence", ValidationResult.PASS),
+        )
+        monkeypatch.setattr(
+            validator,
+            "check_numerical_pointwise_jax",
+            lambda *args, **kwargs: EquivalenceTest(
+                "numerical_pointwise_jax",
+                ValidationResult.PASS,
+                metadata={"engine": "jax"},
+            ),
+        )
+        monkeypatch.setattr(
+            validator,
+            "check_trajectory_comparison",
+            lambda *args, **kwargs: EquivalenceTest("trajectory_comparison", ValidationResult.PASS),
+        )
+        monkeypatch.setattr(
+            validator,
+            "check_algebraic_manifold_preservation",
+            lambda *args, **kwargs: EquivalenceTest(
+                "algebraic_manifold_residuals", ValidationResult.PASS
+            ),
+        )
+        monkeypatch.setattr(validator, "check_auxiliary_identities", lambda *args, **kwargs: [])
+
+        report = validator.validate(use_jax=True)
+
+        assert report.validation_profile == "strict"
+        assert report.numerical_test is not None
+        assert report.numerical_test.metadata == {"engine": "jax"}
+        assert report.algebraic_residual_test is not None
+        assert report.algebraic_residual_test.result == ValidationResult.PASS
+        assert report.overall_pass is True
+        assert report.summary == "Validation PASSED: recast roundtrips and required checks passed"
+
     def test_simulation_failure_fails_overall(self, tmp_path, monkeypatch):
         original = tmp_path / "original.ant"
         original.write_text("""
@@ -233,6 +547,38 @@ class TestFailClosedValidation:
 
         assert report.overall_pass is False
         assert report.overall_result == ValidationResult.INCONCLUSIVE
+
+    def test_auxiliary_solver_requirement_refinement_skips_non_manifold_cases(self):
+        X = sp.Symbol("X", positive=True)
+        Y = sp.Symbol("Y_1", positive=True)
+        Z = sp.Symbol("Z_1", positive=True)
+        T = sp.Symbol("T", positive=True)
+        W = sp.Symbol("W_1", positive=True)
+        k = sp.Symbol("k", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.recast_solver_requirement = SolverRequirement.ODE_ONLY
+        validator.recast_odes = {X: -X, Y: -Y, T: sp.Integer(1), W: -W}
+        validator.recast_ir = SimpleNamespace(assignment_rules={"Y_1": "X + 1"})
+        validator.recast_system = SimpleNamespace(solver_requirement=SolverRequirement.ODE_ONLY)
+        validator.auxiliary_defs = {
+            Y: X + 1,  # assignment rule owns this name
+            Z: X + 2,  # not a recast state
+            T: sp.Symbol("time"),  # generated clock definition
+            W: k + 1,  # state variable but not a state-dependent manifold
+        }
+
+        validator._refine_recast_solver_requirement_from_auxiliaries()
+
+        assert validator.recast_solver_requirement == SolverRequirement.ODE_ONLY
+        assert validator.recast_system.solver_requirement == SolverRequirement.ODE_ONLY
+
+        validator.auxiliary_defs = {Y: X + 1}
+        validator.recast_ir.assignment_rules = {}
+
+        validator._refine_recast_solver_requirement_from_auxiliaries()
+
+        assert validator.recast_solver_requirement == SolverRequirement.DAE_REQUIRED
+        assert validator.recast_system.solver_requirement == SolverRequirement.DAE_REQUIRED
 
     def test_missing_mapping_fails_overall(self, tmp_path):
         original = tmp_path / "original.ant"
@@ -306,11 +652,82 @@ class TestFailClosedValidation:
         data = json.loads(output_json.read_text())
         assert data["tests"]["generated_output"]["result"] == "failed"
         assert data["tests"]["parser"]["result"] == "failed"
+        assert data["tests"]["mapping"]["result"] == "not_attempted"
+        assert data["tests"]["mapping"]["reason"] == "parser_failed"
+        assert data["tests"]["symbolic"]["reason"] == "profile_excluded"
         assert data["overall_result"] == "failed"
+
+    def test_validate_recast_pair_parser_failure_defaults_to_strict_profile(self, tmp_path):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        recast = tmp_path / "bad_recast.ant"
+        recast.write_text("model bad_recast()\n    DNA := Z_1;\nend\n")
+
+        report = validate_recast_pair(str(original), str(recast), parser="sbml")
+
+        assert report.validation_profile == "strict"
+        assert report.required_tests == [
+            "generated_output",
+            "parser",
+            "mapping",
+            "symbolic",
+            "numerical",
+            "trajectory",
+            "algebraic_residuals",
+            "auxiliaries",
+        ]
+        assert report.symbolic_test is not None
+        assert report.symbolic_test.reason == "parser_failed"
+        assert report.numerical_test is not None
+        assert report.numerical_test.reason == "parser_failed"
+        assert report.trajectory_test is not None
+        assert report.trajectory_test.reason == "parser_failed"
+        assert report.auxiliary_tests[0].reason == "parser_failed"
+
+    def test_validate_recast_pair_parser_failure_preserves_named_profile(self, tmp_path):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        recast = tmp_path / "bad_recast.ant"
+        recast.write_text("model bad_recast()\n    DNA := Z_1;\nend\n")
+
+        report = validate_recast_pair(str(original), str(recast), parser="sbml", profile="symbolic")
+
+        assert report.validation_profile == "symbolic"
+        assert "symbolic" in report.required_tests
+        assert "numerical" not in report.required_tests
+        assert report.symbolic_test is not None
+        assert report.symbolic_test.reason == "parser_failed"
+        assert report.numerical_test is not None
+        assert report.numerical_test.reason == "profile_excluded"
+        assert report.trajectory_test is not None
+        assert report.trajectory_test.reason == "profile_excluded"
 
 
 class TestSolverAwareValidation:
     """Tests for solver requirement reporting and algebraic residual checks."""
+
+    def test_trajectory_docstring_matches_available_solver_backends(self):
+        doc = TrajectoryValidationMixin.check_trajectory_comparison.__doc__
+
+        assert doc is not None
+        assert "libRoadRunner/CVODE" in doc
+        assert "IDA/SUNDIALS" in doc
+        assert "RK4" not in doc
+        assert "LSODA" not in doc
 
     def _write_identity_pair(self, tmp_path):
         original = tmp_path / "original.ant"
@@ -366,6 +783,10 @@ class TestSolverAwareValidation:
                 "solver_requirement": SolverRequirement.ODE_ONLY.value,
                 "unsupported_solver_requirement": False,
                 "algebraic_residuals": {},
+                "step_diagnostics": {
+                    "requested_output_points": 100,
+                    "actual_output_points": 2,
+                },
             }
 
         monkeypatch.setattr(validator, "_simulate_model", fake_simulate_model)
@@ -375,6 +796,71 @@ class TestSolverAwareValidation:
         assert result.result == ValidationResult.PASS
         assert result.metadata["original_backend"] == "original_backend"
         assert result.metadata["recast_backend"] == "recast_backend"
+        assert result.metadata["threshold"] == 3.0e-2
+        assert result.metadata["scaling_method"] == "peak_scaled_absolute"
+        assert result.metadata["solver_tolerances"] == {
+            "relative_tolerance": 1.0e-10,
+            "absolute_tolerance": 1.0e-12,
+            "maximum_num_steps": 200000,
+        }
+        assert result.metadata["original_step_diagnostics"]["actual_output_points"] == 2
+        assert result.metadata["recast_step_diagnostics"]["actual_output_points"] == 2
+        assert result.metadata["error_metrics"]["max_absolute_error"] == 0.0
+        assert result.metadata["error_metrics"]["max_scaled_error"] == 0.0
+        assert result.metadata["worst_point"]["variable"] == "X"
+        assert result.metadata["worst_point"]["scaled_error"] == 0.0
+
+    def test_trajectory_uses_simulation_metadata_time_grid(
+        self, tmp_path, monkeypatch
+    ):
+        original, recast = self._write_identity_pair(tmp_path)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        validator.orig_ir.sim_t_start = 0.25
+        validator.orig_ir.sim_t_end = 2.5
+        validator.orig_ir.sim_n_steps = 4
+        calls = []
+
+        def fake_simulate_model(*args, **kwargs):
+            calls.append(
+                {
+                    "model_name": args[7],
+                    "t_end": args[3],
+                    "n_points": args[4],
+                    "t_start": kwargs["t_start"],
+                }
+            )
+            return {
+                "success": True,
+                "t": np.linspace(0.25, 2.5, 5),
+                "y": np.array([[1.0], [0.8], [0.6], [0.4], [0.2]]),
+                "message": "",
+                "backend": f"{args[7]}_backend",
+                "solver_requirement": SolverRequirement.ODE_ONLY.value,
+                "unsupported_solver_requirement": False,
+                "algebraic_residuals": {},
+                "step_diagnostics": {
+                    "requested_t_start": 0.25,
+                    "requested_t_end": 2.5,
+                    "requested_output_points": 5,
+                },
+            }
+
+        monkeypatch.setattr(validator, "_simulate_model", fake_simulate_model)
+
+        result = validator.check_trajectory_comparison()
+
+        assert result.result == ValidationResult.PASS
+        assert calls == [
+            {"model_name": "original", "t_end": 2.5, "n_points": 5, "t_start": 0.25},
+            {"model_name": "recast", "t_end": 2.5, "n_points": 5, "t_start": 0.25},
+        ]
+        assert result.metadata["time_grid"] == {
+            "t_start": 0.25,
+            "t_end": 2.5,
+            "n_output_points": 5,
+            "source": "simulation_metadata",
+            "recast_interpolated_to_original": False,
+        }
 
     def test_unsupported_recast_solver_requirement_is_unsupported(self, tmp_path, monkeypatch):
         original, recast = self._write_identity_pair(tmp_path)
@@ -411,6 +897,141 @@ class TestSolverAwareValidation:
         assert result.result == ValidationResult.UNSUPPORTED
         assert "unsupported dae_required" in result.details
         assert result.metadata["recast_backend"] == "dae_projection"
+
+    @pytest.mark.parametrize(
+        ("unsupported_solver_requirement", "expected_result"),
+        [
+            pytest.param(False, ValidationResult.NOT_ATTEMPTED, id="solver-failed"),
+            pytest.param(True, ValidationResult.UNSUPPORTED, id="unsupported-solver"),
+        ],
+    )
+    def test_original_simulation_failure_is_fail_closed(
+        self, tmp_path, monkeypatch, unsupported_solver_requirement, expected_result
+    ):
+        original, recast = self._write_identity_pair(tmp_path)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+
+        def failed_original(*args, **kwargs):
+            assert args[7] == "original"
+            return {
+                "success": False,
+                "t": np.array([]),
+                "y": np.array([]),
+                "message": "original solver failed",
+                "backend": "original_backend",
+                "solver_requirement": SolverRequirement.ODE_ONLY.value,
+                "unsupported_solver_requirement": unsupported_solver_requirement,
+                "algebraic_residuals": {},
+            }
+
+        monkeypatch.setattr(validator, "_simulate_model", failed_original)
+
+        result = validator.check_trajectory_comparison()
+
+        assert result.result == expected_result
+        assert "Original simulation failed: original solver failed" in result.details
+        assert result.metadata["original_backend"] == "original_backend"
+        assert result.metadata["recast_backend"] is None
+
+    def test_recast_simulation_failure_without_solver_gap_is_not_attempted(
+        self, tmp_path, monkeypatch
+    ):
+        original, recast = self._write_identity_pair(tmp_path)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+
+        def recast_fails(*args, **kwargs):
+            model_name = args[7]
+            if model_name == "original":
+                return {
+                    "success": True,
+                    "t": np.array([0.0, 1.0]),
+                    "y": np.array([[1.0], [0.5]]),
+                    "message": "",
+                    "backend": "original_backend",
+                    "solver_requirement": SolverRequirement.ODE_ONLY.value,
+                    "unsupported_solver_requirement": False,
+                    "algebraic_residuals": {},
+                }
+            return {
+                "success": False,
+                "t": np.array([]),
+                "y": np.array([]),
+                "message": "integration did not converge",
+                "backend": "recast_backend",
+                "solver_requirement": SolverRequirement.ODE_ONLY.value,
+                "unsupported_solver_requirement": False,
+                "algebraic_residuals": {"Y_1": {"max_abs": 2.0}},
+            }
+
+        monkeypatch.setattr(validator, "_simulate_model", recast_fails)
+
+        result = validator.check_trajectory_comparison()
+
+        assert result.result == ValidationResult.NOT_ATTEMPTED
+        assert "Recast simulation failed: integration did not converge" in result.details
+        assert result.metadata["recast_backend"] == "recast_backend"
+        assert result.metadata["algebraic_residuals"] == {"Y_1": {"max_abs": 2.0}}
+
+    def test_trajectory_passes_time_symbol_to_backend(self, tmp_path, monkeypatch):
+        original, recast = self._write_identity_pair(tmp_path)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        X = next(iter(validator.orig_odes))
+        t = sp.Symbol("t")
+        validator.orig_odes = {X: -t * X}
+        validator.recast_odes = {X: -t * X}
+        seen_time_symbols = []
+
+        def successful_simulation(*args, **kwargs):
+            seen_time_symbols.append(args[6])
+            return {
+                "success": True,
+                "t": np.array([0.0, 1.0]),
+                "y": np.array([[1.0], [0.5]]),
+                "message": "",
+                "backend": f"{args[7]}_backend",
+                "solver_requirement": SolverRequirement.ODE_ONLY.value,
+                "unsupported_solver_requirement": False,
+                "algebraic_residuals": {},
+            }
+
+        monkeypatch.setattr(validator, "_simulate_model", successful_simulation)
+
+        result = validator.check_trajectory_comparison()
+
+        assert result.result == ValidationResult.PASS
+        assert [str(sym) for sym in seen_time_symbols] == ["t", "t"]
+
+    def test_trajectory_exception_is_not_attempted(self, tmp_path, monkeypatch):
+        original, recast = self._write_identity_pair(tmp_path)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+
+        def successful_simulation(*args, **kwargs):
+            return {
+                "success": True,
+                "t": np.array([0.0, 1.0]),
+                "y": np.array([[1.0], [0.5]]),
+                "message": "",
+                "backend": f"{args[7]}_backend",
+                "solver_requirement": SolverRequirement.ODE_ONLY.value,
+                "unsupported_solver_requirement": False,
+                "algebraic_residuals": {},
+            }
+
+        def bad_initial_conditions(*args, **kwargs):
+            raise RuntimeError("bad auxiliary initial condition")
+
+        monkeypatch.setattr(validator, "_simulate_model", successful_simulation)
+        monkeypatch.setattr(
+            validator,
+            "_compute_recast_initial_conditions",
+            bad_initial_conditions,
+        )
+
+        result = validator.check_trajectory_comparison()
+
+        assert result.result == ValidationResult.NOT_ATTEMPTED
+        assert "bad auxiliary initial condition" in result.details
+        assert "Traceback" in result.details
 
     def test_dae_required_missing_ida_dependency_is_unsupported(self, tmp_path, monkeypatch):
         original = tmp_path / "original.ant"
@@ -562,6 +1183,10 @@ class TestSolverAwareValidation:
         assert result.result == ValidationResult.FAIL
         assert result.max_error > 0.0
         assert result.counterexamples[0]["variable"] == "X"
+        assert result.counterexamples[0]["absolute_error"] > 0.0
+        assert result.counterexamples[0]["relative_error"] > 0.0
+        assert result.counterexamples[0]["scaled_error"] > 0.0
+        assert result.metadata["worst_point"]["absolute_error"] > 0.0
 
     def test_trajectory_comparison_interpolates_recast_time_grid(self, tmp_path, monkeypatch):
         original, recast = self._write_identity_pair(tmp_path)
@@ -597,6 +1222,7 @@ class TestSolverAwareValidation:
 
         assert result.result == ValidationResult.PASS
         assert result.metadata["recast_backend"] == "recast_backend"
+        assert result.metadata["time_grid"]["recast_interpolated_to_original"] is True
 
     def test_simulate_model_reorders_backend_columns(self, tmp_path, monkeypatch):
         original, recast = self._write_identity_pair(tmp_path)
@@ -632,6 +1258,39 @@ class TestSolverAwareValidation:
         assert result["success"] is True
         np.testing.assert_allclose(result["y"], np.array([[10.0, 20.0], [30.0, 40.0]]))
         assert result["algebraic_residuals"] == {"Y": {"max_abs": 0.0}}
+
+    def test_simulate_model_fills_missing_backend_states_with_zero(self, tmp_path, monkeypatch):
+        original, recast = self._write_identity_pair(tmp_path)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        X = sp.Symbol("X", positive=True)
+        Y = sp.Symbol("Y", positive=True)
+
+        def backend_missing_y(*args, **kwargs):
+            return {
+                "success": True,
+                "t": np.array([0.0, 1.0]),
+                "y": np.array([[10.0], [30.0]]),
+                "state_names": ["X"],
+                "message": "",
+                "backend": "fake_backend",
+                "solver_requirement": SolverRequirement.ODE_ONLY.value,
+            }
+
+        monkeypatch.setattr("ssys.ode_backends.simulate_model", backend_missing_y)
+
+        result = validator._simulate_model(
+            validator.recast_ir,
+            validator.recast_odes,
+            [X, Y],
+            1.0,
+            2,
+            {},
+            None,
+            "recast",
+        )
+
+        assert result["success"] is True
+        np.testing.assert_allclose(result["y"], np.array([[10.0, 0.0], [30.0, 0.0]]))
 
     def test_simulate_model_failure_preserves_backend_metadata(self, tmp_path, monkeypatch):
         original, recast = self._write_identity_pair(tmp_path)
@@ -700,6 +1359,32 @@ class TestSolverAwareValidation:
         assert result["success"] is True
         np.testing.assert_allclose(result["y"], np.array([[1.0, 2.0]]))
 
+        def missing_state_backend(*args, **kwargs):
+            return {
+                "success": True,
+                "t": np.array([0.0]),
+                "y": np.array([[3.0]]),
+                "state_names": ["X"],
+            }
+
+        monkeypatch.setattr(
+            "ssys.ode_backends.roadrunner_backend.simulate_with_roadrunner",
+            missing_state_backend,
+        )
+        missing = validator._simulate_with_roadrunner(
+            validator.recast_ir,
+            validator.recast_odes,
+            [X, Y],
+            1.0,
+            1,
+            {},
+            None,
+            "recast",
+        )
+
+        assert missing["success"] is True
+        np.testing.assert_allclose(missing["y"], np.array([[3.0, 0.0]]))
+
         def failure_backend(*args, **kwargs):
             return {"success": False, "message": "bad antimony"}
 
@@ -721,6 +1406,27 @@ class TestSolverAwareValidation:
         assert failed["success"] is False
         assert "bad antimony" in failed["message"]
 
+        def raising_backend(*args, **kwargs):
+            raise RuntimeError("roadrunner import failed")
+
+        monkeypatch.setattr(
+            "ssys.ode_backends.roadrunner_backend.simulate_with_roadrunner",
+            raising_backend,
+        )
+        errored = validator._simulate_with_roadrunner(
+            validator.recast_ir,
+            validator.recast_odes,
+            [X],
+            1.0,
+            1,
+            {},
+            None,
+            "recast",
+        )
+
+        assert errored["success"] is False
+        assert "roadrunner import failed" in errored["message"]
+
     def test_recast_initial_conditions_cover_priority_and_fallbacks(self, tmp_path):
         original, recast = self._write_identity_pair(tmp_path)
         validator = RecastValidator(str(original), str(recast), parser="sbml")
@@ -728,14 +1434,16 @@ class TestSolverAwareValidation:
         Y = sp.Symbol("Y", positive=True)
         Z = sp.Symbol("Z", positive=True)
         W = sp.Symbol("W", positive=True)
+        Q = sp.Symbol("Q", positive=True)
+        k = sp.Symbol("k", positive=True)
 
-        validator.orig_ir.initial = {"X": 2.0}
+        validator.orig_ir.initial = {}
         validator.recast_ir.initial = {"Y": 7.0}
-        validator.auxiliary_defs = {Z: X + 3, W: sp.Symbol("missing")}
+        validator.auxiliary_defs = {Z: X + k, W: sp.Symbol("missing")}
 
-        y0 = validator._compute_recast_initial_conditions([X, Y, Z, W], [X], {})
+        y0 = validator._compute_recast_initial_conditions([X, Y, Z, W, Q], [X], {"k": 4.0})
 
-        assert y0 == {"X": 2.0, "Y": 7.0, "Z": 5.0, "W": 1.0}
+        assert y0 == {"X": 1.0, "Y": 7.0, "Z": 5.0, "W": 1.0, "Q": 1.0}
 
     def test_reconstruct_from_recast_covers_mapping_forms(self, tmp_path):
         original, recast = self._write_identity_pair(tmp_path)
@@ -763,6 +1471,135 @@ class TestSolverAwareValidation:
             [5.0, 7.0 * 11.0**2, 11.0, 3.0 * 7.0 + 1.0],
         ])
         np.testing.assert_allclose(reconstructed, expected)
+
+    def test_reconstruct_from_recast_covers_fallback_mapping_forms(self, tmp_path):
+        original, recast = self._write_identity_pair(tmp_path)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        A, B, C, D, E, F, G, H = sp.symbols("A B C D E F G H")
+        Z1, Z2, m = sp.symbols("Z1 Z2 m")
+        alt_z1 = sp.Symbol("Z1", real=True)
+        validator.mapping = {
+            A: A,
+            B: Z1 * m,
+            C: Z1 * m**2,
+            D: 2 * Z1 * Z2,
+            E: sp.sin(Z1) * Z2,
+            F: m,
+            G: alt_z1 + 1,
+            H: Z1 + 1,
+        }
+        z_values = np.array([[2.0, 3.0], [5.0, 7.0]])
+
+        reconstructed = validator._reconstruct_from_recast(
+            z_values,
+            [Z1, Z2],
+            [A, B, C, D, E, F, G, H],
+            {"m": 4.0},
+            np.array([0.0, 1.0]),
+            None,
+        )
+
+        expected = np.array([
+            [0.0, 8.0, 32.0, 12.0, np.sin(2.0) * 3.0, 4.0, 3.0, 3.0],
+            [0.0, 20.0, 80.0, 70.0, np.sin(5.0) * 7.0, 4.0, 6.0, 6.0],
+        ])
+        np.testing.assert_allclose(reconstructed, expected)
+
+    def test_evaluate_recast_expression_covers_time_broadcast_and_missing_symbol(
+        self, tmp_path
+    ):
+        original, recast = self._write_identity_pair(tmp_path)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        X = sp.Symbol("X", positive=True)
+        t_array = np.array([0.0, 1.0, 2.0])
+        z_values = np.array([[2.0], [3.0], [4.0]])
+
+        constant = validator._evaluate_expr_on_recast_trajectory(
+            sp.Integer(5),
+            z_values,
+            [X],
+            {},
+            t_array,
+        )
+        param_only = validator._evaluate_expr_on_recast_trajectory(
+            sp.Symbol("k"),
+            z_values,
+            [X],
+            {"k": 7.0},
+            t_array,
+        )
+        time_values = validator._evaluate_expr_on_recast_trajectory(
+            sp.Symbol("time") + X,
+            z_values,
+            [X],
+            {},
+            t_array,
+        )
+        t_values = validator._evaluate_expr_on_recast_trajectory(
+            sp.Symbol("t") + 1,
+            z_values,
+            [X],
+            {},
+            t_array,
+        )
+
+        np.testing.assert_allclose(constant, np.array([5.0, 5.0, 5.0]))
+        np.testing.assert_allclose(param_only, np.array([7.0, 7.0, 7.0]))
+        np.testing.assert_allclose(time_values, np.array([2.0, 4.0, 6.0]))
+        np.testing.assert_allclose(t_values, np.array([1.0, 2.0, 3.0]))
+
+        with pytest.raises(ValueError, match="missing value for symbol 'missing'"):
+            validator._evaluate_expr_on_recast_trajectory(
+                sp.Symbol("missing"),
+                z_values,
+                [X],
+                {},
+                t_array,
+            )
+
+    def test_algebraic_definition_collection_skips_clock_and_bad_assignment(
+        self, tmp_path
+    ):
+        original, recast = self._write_identity_pair(tmp_path)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        X = sp.Symbol("X", positive=True)
+        T = sp.Symbol("T", positive=True)
+        Y = sp.Symbol("Y_1", positive=True)
+        validator.auxiliary_defs = {T: sp.Symbol("time"), Y: X + 1}
+        validator.recast_ir.assignment_rules = {"bad_rule": object()}
+
+        definitions = validator._algebraic_definitions_for_residuals()
+
+        assert "T" not in definitions
+        assert definitions == {"Y_1": X + 1}
+
+    def test_algebraic_residuals_report_evaluation_and_constraint_errors(
+        self, tmp_path
+    ):
+        original, recast = self._write_identity_pair(tmp_path)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        X = sp.Symbol("X", positive=True)
+        Y = sp.Symbol("Y_1", positive=True)
+        validator.recast_ir.assignment_rules = {}
+        validator.recast_ir.algebraic_constraints = ["Y_1 - X - 1", object()]
+        validator.auxiliary_defs = {
+            Y: X + sp.Symbol("missing"),
+            sp.Symbol("AUX_ONLY", positive=True): X + 2,
+        }
+
+        residuals, errors = validator._compute_algebraic_residual_norms(
+            np.array([[1.0, 2.0], [2.0, 3.0]]),
+            [X, Y],
+            {},
+            np.array([0.0, 1.0]),
+        )
+
+        assert residuals["AUX_ONLY"]["max_abs"] == 0.0
+        assert residuals["algebraic_constraint:1"]["max_abs"] == 0.0
+        assert {error["constraint"] for error in errors} == {
+            "Y_1",
+            "algebraic_constraint:2",
+        }
 
     def test_algebraic_manifold_check_reports_pass_and_failure(self, tmp_path, monkeypatch):
         original, recast = self._write_identity_pair(tmp_path)
@@ -810,6 +1647,75 @@ class TestSolverAwareValidation:
         assert failed.result == ValidationResult.FAIL
         assert failed.counterexamples[0]["constraint"] == "Y_1"
 
+    @pytest.mark.parametrize(
+        ("unsupported_solver_requirement", "expected_result"),
+        [
+            pytest.param(False, ValidationResult.NOT_ATTEMPTED, id="solver-failed"),
+            pytest.param(True, ValidationResult.UNSUPPORTED, id="unsupported-solver"),
+        ],
+    )
+    def test_algebraic_manifold_simulation_failure_is_fail_closed(
+        self, tmp_path, monkeypatch, unsupported_solver_requirement, expected_result
+    ):
+        original, recast = self._write_identity_pair(tmp_path)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        X = sp.Symbol("X", positive=True)
+        Y = sp.Symbol("Y_1", positive=True)
+        validator.recast_state_vars = [X, Y]
+        validator.auxiliary_defs = {Y: X + 1}
+        validator.recast_ir.assignment_rules = {}
+
+        def failed_simulation(*args, **kwargs):
+            return {
+                "success": False,
+                "t": np.array([]),
+                "y": np.array([]),
+                "backend": "fake_backend",
+                "message": "residual solver failed",
+                "unsupported_solver_requirement": unsupported_solver_requirement,
+                "algebraic_residuals": {"Y_1": {"max_abs": 9.0}},
+            }
+
+        monkeypatch.setattr(validator, "_simulate_model", failed_simulation)
+
+        result = validator.check_algebraic_manifold_preservation()
+
+        assert result is not None
+        assert result.result == expected_result
+        assert "residual solver failed" in result.details
+        assert result.metadata["backend"] == "fake_backend"
+        assert result.metadata["residual_norms"] == {"Y_1": {"max_abs": 9.0}}
+
+    def test_algebraic_manifold_evaluation_errors_are_inconclusive(
+        self, tmp_path, monkeypatch
+    ):
+        original, recast = self._write_identity_pair(tmp_path)
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        X = sp.Symbol("X", positive=True)
+        Y = sp.Symbol("Y_1", positive=True)
+        validator.recast_state_vars = [X, Y]
+        validator.auxiliary_defs = {Y: X + sp.Symbol("missing")}
+        validator.recast_ir.assignment_rules = {}
+
+        def successful_simulation(*args, **kwargs):
+            return {
+                "success": True,
+                "t": np.array([0.0, 1.0]),
+                "y": np.array([[1.0, 2.0], [2.0, 3.0]]),
+                "backend": "fake_backend",
+                "message": "",
+                "unsupported_solver_requirement": False,
+                "algebraic_residuals": {},
+            }
+
+        monkeypatch.setattr(validator, "_simulate_model", successful_simulation)
+
+        result = validator.check_algebraic_manifold_preservation()
+
+        assert result is not None
+        assert result.result == ValidationResult.INCONCLUSIVE
+        assert result.metadata["errors"][0]["constraint"] == "Y_1"
+
     def test_numerical_pointwise_fails_on_mismatched_rate(self, tmp_path):
         original = tmp_path / "original.ant"
         original.write_text("""
@@ -851,9 +1757,165 @@ def _make_numerical_harness(*, recast_multiplier: float = 1.0, k_value: float = 
     harness.recast_odes_expanded = dict(harness.recast_odes)
     harness.recast_state_vars = [Z]
     harness.mapping = {X: Z}
-    harness.recast_ir = SimpleNamespace(params={"k": k_value})
+    harness.orig_ir = SimpleNamespace(
+        initial={"X": 1.0},
+        sim_t_start=None,
+        sim_t_end=None,
+    )
+    harness.recast_ir = SimpleNamespace(
+        params={"k": k_value},
+        initial={"Z": 1.0},
+        sim_t_start=None,
+        sim_t_end=None,
+    )
     harness.auxiliary_defs = {}
     harness.canonical_symbols = {"X": X, "Z": Z, "k": k}
+    return harness
+
+
+def _install_fake_jax(monkeypatch):
+    fake_jax = types.ModuleType("jax")
+    fake_jnp = types.ModuleType("jax.numpy")
+    for name in ("abs", "array", "concatenate", "max"):
+        setattr(fake_jnp, name, getattr(np, name))
+
+    def jacfwd(func):
+        def jacobian(z_values):
+            z_values = np.asarray(z_values, dtype=float)
+            base = np.asarray(func(z_values), dtype=float)
+            jac = np.zeros((base.size, z_values.size))
+            step = 1.0e-6
+            for idx in range(z_values.size):
+                delta = np.zeros_like(z_values)
+                delta[idx] = step
+                plus = np.asarray(func(z_values + delta), dtype=float)
+                minus = np.asarray(func(z_values - delta), dtype=float)
+                jac[:, idx] = (plus - minus) / (2 * step)
+            return jac
+
+        return jacobian
+
+    fake_jax.numpy = fake_jnp
+    fake_jax.jacfwd = jacfwd
+    monkeypatch.setitem(sys.modules, "jax", fake_jax)
+    monkeypatch.setitem(sys.modules, "jax.numpy", fake_jnp)
+
+
+def _make_time_clock_numerical_harness():
+    X = sp.Symbol("X", positive=True)
+    T = sp.Symbol("T", positive=True)
+    Y = sp.Symbol("Y_1", positive=True)
+    k = sp.Symbol("k", positive=True)
+    time = sp.Symbol("time", positive=True)
+
+    harness = _NumericalHarness()
+    harness.orig_odes = {X: -X / (time + k)}
+    harness.orig_odes_expanded = dict(harness.orig_odes)
+    harness.recast_odes = {X: -X / Y, T: sp.Integer(1), Y: sp.Integer(1)}
+    harness.recast_odes_expanded = dict(harness.recast_odes)
+    harness.recast_state_vars = [X, T, Y]
+    harness.mapping = {X: X}
+    harness.orig_ir = SimpleNamespace(
+        initial={"X": 1.0},
+        sim_t_start=None,
+        sim_t_end=None,
+    )
+    harness.recast_ir = SimpleNamespace(
+        params={"k": 1.0},
+        initial={"X": 1.0, "T": 1.0, "Y_1": 2.0},
+        sim_t_start=None,
+        sim_t_end=None,
+    )
+    harness.auxiliary_defs = {T: time, Y: T + k}
+    harness.canonical_symbols = {"X": X, "T": T, "Y_1": Y, "k": k}
+    return harness
+
+
+def _make_time_auxiliary_numerical_harness():
+    X = sp.Symbol("X", positive=True)
+    Y = sp.Symbol("Y_1", positive=True)
+    k = sp.Symbol("k", positive=True)
+    time = sp.Symbol("time", positive=True)
+
+    harness = _NumericalHarness()
+    harness.orig_odes = {X: -(time + k)}
+    harness.orig_odes_expanded = dict(harness.orig_odes)
+    harness.recast_odes = {X: -Y, Y: sp.Integer(0)}
+    harness.recast_odes_expanded = dict(harness.recast_odes)
+    harness.recast_state_vars = [X, Y]
+    harness.mapping = {X: X}
+    harness.orig_ir = SimpleNamespace(
+        initial={"X": 1.0},
+        sim_t_start=None,
+        sim_t_end=None,
+    )
+    harness.recast_ir = SimpleNamespace(
+        params={"k": 1.0},
+        initial={"X": 1.0, "Y_1": 2.0},
+        sim_t_start=None,
+        sim_t_end=None,
+    )
+    harness.auxiliary_defs = {Y: time + k}
+    harness.canonical_symbols = {"X": X, "Y_1": Y, "k": k}
+    return harness
+
+
+def _make_unresolved_auxiliary_numerical_harness():
+    X = sp.Symbol("X", positive=True)
+    Y = sp.Symbol("Y_1", positive=True)
+    u = sp.Symbol("u", positive=True)
+
+    harness = _NumericalHarness()
+    harness.orig_odes = {X: -X}
+    harness.orig_odes_expanded = dict(harness.orig_odes)
+    harness.recast_odes = {X: -X, Y: sp.Integer(0)}
+    harness.recast_odes_expanded = dict(harness.recast_odes)
+    harness.recast_state_vars = [X, Y]
+    harness.mapping = {X: X}
+    harness.orig_ir = SimpleNamespace(
+        initial={"X": 1.0},
+        sim_t_start=None,
+        sim_t_end=None,
+    )
+    harness.recast_ir = SimpleNamespace(
+        params={},
+        initial={"X": 1.0, "Y_1": 2.0},
+        sim_t_start=None,
+        sim_t_end=None,
+    )
+    harness.auxiliary_defs = {Y: X + u}
+    harness.canonical_symbols = {"X": X, "Y_1": Y, "u": u}
+    return harness
+
+
+def _make_jax_auxiliary_harness():
+    X = sp.Symbol("X", positive=True)
+    T = sp.Symbol("T", positive=True)
+    Y = sp.Symbol("Y_1", positive=True)
+    k = sp.Symbol("k", positive=True)
+    u = sp.Symbol("u", positive=True)
+    time = sp.Symbol("time", positive=True)
+
+    harness = _NumericalHarness()
+    harness.orig_odes = {X: -X}
+    harness.orig_odes_expanded = dict(harness.orig_odes)
+    harness.recast_odes = {X: -X, T: sp.Integer(1), Y: sp.Integer(0)}
+    harness.recast_odes_expanded = dict(harness.recast_odes)
+    harness.recast_state_vars = [X, T, Y]
+    harness.mapping = {X: X}
+    harness.orig_ir = SimpleNamespace(
+        initial={"X": 1.0},
+        sim_t_start=None,
+        sim_t_end=None,
+    )
+    harness.recast_ir = SimpleNamespace(
+        params={"k": 0.5},
+        initial={"X": 1.0, "T": 1.0, "Y_1": 2.0},
+        sim_t_start=None,
+        sim_t_end=None,
+    )
+    harness.auxiliary_defs = {T: time, Y: X + k + u}
+    harness.canonical_symbols = {"X": X, "T": T, "Y_1": Y, "k": k, "u": u}
     return harness
 
 
@@ -866,6 +1928,50 @@ class TestNumericalValidationMixinDirect:
         assert result.result == ValidationResult.PASS
         assert result.max_error == 0.0
         assert "6 samples" in result.details
+        assert result.metadata["sample_seed"] == 42
+        assert result.metadata["n_samples"] == 6
+        assert result.metadata["parameter_values"] == {"k": 0.5}
+        assert result.metadata["sampling"]["state_variables"]["Z"] == {
+            "min": 0.01,
+            "max": 10.0,
+            "source": "positive_initial",
+            "initial": 1.0,
+        }
+
+    def test_numerical_pointwise_expands_domain_from_model_initials(self):
+        harness = _make_numerical_harness()
+        harness.recast_ir.initial["Z"] = 100.0
+
+        result = harness.check_numerical_pointwise(n_samples=2, threshold=1.0e-10)
+
+        z_domain = result.metadata["sampling"]["state_variables"]["Z"]
+        assert result.result == ValidationResult.PASS
+        assert z_domain["source"] == "positive_initial"
+        assert z_domain["initial"] == 100.0
+        assert z_domain["max"] == 1000.0
+
+    def test_numerical_pointwise_records_simulation_time_domain(self):
+        harness = _make_time_auxiliary_numerical_harness()
+        harness.orig_ir.sim_t_start = 0.0
+        harness.orig_ir.sim_t_end = 2.0
+
+        result = harness.check_numerical_pointwise(n_samples=3, threshold=1.0e-10)
+
+        assert result.result == ValidationResult.PASS
+        assert result.metadata["sampling"]["time"] == {
+            "min": 1.0e-12,
+            "max": 2.0,
+            "source": "simulation_metadata",
+        }
+
+    def test_numerical_pointwise_invalid_domain_is_reported(self):
+        harness = _make_numerical_harness()
+
+        result = harness.check_numerical_pointwise(domain_min=0.0, domain_max=10.0)
+
+        assert result.result == ValidationResult.NOT_ATTEMPTED
+        assert result.reason == "invalid_sampling_domain"
+        assert "Invalid numerical sampling domain" in result.details
 
     def test_numerical_pointwise_failure_reports_counterexample(self):
         harness = _make_numerical_harness(recast_multiplier=2.0)
@@ -877,40 +1983,77 @@ class TestNumericalValidationMixinDirect:
         assert result.counterexamples
         assert {"Z", "lhs", "rhs", "diff"} <= set(result.counterexamples[0])
 
+    def test_numerical_pointwise_time_clock_substitution_passes(self):
+        harness = _make_time_clock_numerical_harness()
+
+        result = harness.check_numerical_pointwise(n_samples=3, threshold=1.0e-10)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error < 1.0e-10
+        assert "time" in harness.canonical_symbols
+
+    def test_numerical_pointwise_samples_time_for_auxiliary_definition(self):
+        harness = _make_time_auxiliary_numerical_harness()
+
+        result = harness.check_numerical_pointwise(n_samples=3, threshold=1.0e-10)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error < 1.0e-10
+
+    def test_numerical_pointwise_auxiliary_fallback_uses_default_for_unresolved_symbol(self):
+        harness = _make_unresolved_auxiliary_numerical_harness()
+
+        result = harness.check_numerical_pointwise(n_samples=2, threshold=1.0e-10)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error == 0.0
+
+    def test_numerical_pointwise_evaluates_symbolic_jacobian_result(self, monkeypatch):
+        import ssys._validator.numerical as numerical_module
+
+        real_lambdify = numerical_module.lambdify
+
+        def lambdify_symbolic_unit_jacobian(args, expr, modules):
+            if expr == 1:
+                return lambda *values: sp.Integer(1)
+            return real_lambdify(args, expr, modules)
+
+        monkeypatch.setattr(
+            numerical_module,
+            "lambdify",
+            lambdify_symbolic_unit_jacobian,
+        )
+        harness = _make_numerical_harness()
+
+        result = harness.check_numerical_pointwise(n_samples=2, threshold=1.0e-10)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error == 0.0
+
     def test_numerical_pointwise_nonfinite_values_are_diagnostic(self):
         harness = _make_numerical_harness(k_value=float("inf"))
 
         result = harness.check_numerical_pointwise(n_samples=1)
 
         assert result.result == ValidationResult.NOT_ATTEMPTED
+        assert result.reason == "nonfinite_sample"
+        assert "Non-finite value" in result.details
+
+    def test_numerical_pointwise_singular_surface_produces_nonfinite_diagnostic(self):
+        harness = _make_numerical_harness()
+        z = harness.recast_state_vars[0]
+        singular_rhs = sp.Pow(sp.Add(z, -z, evaluate=False), -1, evaluate=False)
+        harness.recast_odes[z] = singular_rhs
+        harness.recast_odes_expanded[z] = singular_rhs
+
+        result = harness.check_numerical_pointwise(n_samples=1)
+
+        assert result.result == ValidationResult.NOT_ATTEMPTED
+        assert result.reason == "nonfinite_sample"
         assert "Non-finite value" in result.details
 
     def test_numerical_pointwise_jax_passes_with_fake_backend(self, monkeypatch):
-        fake_jax = types.ModuleType("jax")
-        fake_jnp = types.ModuleType("jax.numpy")
-        for name in ("abs", "array", "concatenate", "max"):
-            setattr(fake_jnp, name, getattr(np, name))
-
-        def jacfwd(func):
-            def jacobian(z_values):
-                z_values = np.asarray(z_values, dtype=float)
-                base = np.asarray(func(z_values), dtype=float)
-                jac = np.zeros((base.size, z_values.size))
-                step = 1.0e-6
-                for idx in range(z_values.size):
-                    delta = np.zeros_like(z_values)
-                    delta[idx] = step
-                    plus = np.asarray(func(z_values + delta), dtype=float)
-                    minus = np.asarray(func(z_values - delta), dtype=float)
-                    jac[:, idx] = (plus - minus) / (2 * step)
-                return jac
-
-            return jacobian
-
-        fake_jax.numpy = fake_jnp
-        fake_jax.jacfwd = jacfwd
-        monkeypatch.setitem(sys.modules, "jax", fake_jax)
-        monkeypatch.setitem(sys.modules, "jax.numpy", fake_jnp)
+        _install_fake_jax(monkeypatch)
 
         harness = _make_numerical_harness()
         result = harness.check_numerical_pointwise_jax(n_samples=4, threshold=1.0e-9)
@@ -918,6 +2061,47 @@ class TestNumericalValidationMixinDirect:
         assert result.result == ValidationResult.PASS
         assert result.max_error < 1.0e-9
         assert "JAX autodiff" in result.details
+
+    def test_numerical_pointwise_jax_without_jax_is_not_attempted(self, monkeypatch):
+        monkeypatch.setitem(sys.modules, "jax", None)
+        monkeypatch.setitem(sys.modules, "jax.numpy", None)
+        harness = _make_numerical_harness()
+
+        result = harness.check_numerical_pointwise_jax()
+
+        assert result.result == ValidationResult.NOT_ATTEMPTED
+        assert "JAX not available" in result.details
+
+    def test_numerical_pointwise_jax_failure_reports_counterexample(self, monkeypatch):
+        _install_fake_jax(monkeypatch)
+        harness = _make_numerical_harness(recast_multiplier=2.0)
+
+        result = harness.check_numerical_pointwise_jax(n_samples=3, threshold=1.0e-12)
+
+        assert result.result == ValidationResult.FAIL
+        assert result.max_error > 1.0e-12
+        assert result.counterexamples
+        assert {"Z", "lhs", "rhs", "diff"} <= set(result.counterexamples[0])
+
+    def test_numerical_pointwise_jax_nonfinite_values_are_diagnostic(self, monkeypatch):
+        _install_fake_jax(monkeypatch)
+        harness = _make_numerical_harness(k_value=float("inf"))
+
+        result = harness.check_numerical_pointwise_jax(n_samples=1)
+
+        assert result.result == ValidationResult.NOT_ATTEMPTED
+        assert "Non-finite value" in result.details
+
+    def test_numerical_pointwise_jax_classifies_clock_and_auxiliary_variables(
+        self, monkeypatch
+    ):
+        _install_fake_jax(monkeypatch)
+        harness = _make_jax_auxiliary_harness()
+
+        result = harness.check_numerical_pointwise_jax(n_samples=2, threshold=1.0e-9)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error < 1.0e-9
 
 
 class TestRecastValidator:
@@ -935,13 +2119,16 @@ class TestRecastValidator:
 
         recast = tmp_path / "recast.ant"
         recast.write_text("""
-            // Original ODE for X: -k*X
-            // Auxiliary mapping: X -> [Z_1]
-            model recast
+            model recast()
+                // ========================================================================
+                // VARIABLE MAPPING
+                // ========================================================================
+                // X = Z_1
+                // ========================================================================
                 species Z_1;
-                Z_1' = -k * Z_1
-                k = 0.5
-                Z_1 = 1.0
+                Z_1' = -k * Z_1;
+                k = 0.5;
+                Z_1 = 1.0;
             end
         """)
 
@@ -953,9 +2140,10 @@ class TestRecastValidator:
 
         validator = RecastValidator(orig, recast, parser="legacy")
 
-        assert validator is not None
         assert validator.original_file == orig
         assert validator.recast_file == recast
+        mapping_by_name = {orig.name: mapped for orig, mapped in validator.factor_map.items()}
+        assert str(mapping_by_name["X"]) == "Z_1"
 
 
     def test_validator_symbolic_check(self, simple_model_paths):
@@ -965,10 +2153,9 @@ class TestRecastValidator:
         validator = RecastValidator(orig, recast, parser="legacy")
         result = validator.check_symbolic_equivalence(timeout=5.0)
 
-        assert result is not None
         assert result.name == "symbolic_equivalence"
-        # Result should be one of the enum values
-        assert result.result in list(ValidationResult)
+        assert result.result == ValidationResult.PASS
+        assert "exact equivalence" in result.details
 
 
 class TestRecastValidatorAuxiliaryExtraction:
@@ -998,8 +2185,10 @@ class TestRecastValidatorAuxiliaryExtraction:
 
         validator = RecastValidator(str(original), str(recast), parser="legacy")
 
-        # Should parse without error
-        assert validator is not None
+        assert validator.recast_ir.assignment_rules == {"Z_1": "X"}
+        assert validator.recast_odes[sp.Symbol("Z_1", positive=True)] == (
+            -sp.Symbol("Z_1", positive=True) * sp.Symbol("k", positive=True)
+        )
 
 
 class TestAuxiliaryIdentityValidation:
@@ -1222,17 +2411,16 @@ class TestRecastValidatorEdgeCases:
 
         recast = tmp_path / "recast.ant"
         recast.write_text("""
-            // RECASTER_REFUSAL: Unable to recast
-            // Reason: Model contains unsupported features
+            // NOTE: Canonical S-system recast was not attempted because:
+            //   Model contains unsupported features
             model refused
             end
         """)
 
         validator = RecastValidator(str(original), str(recast), parser="legacy")
 
-        # Should extract refusal reason
         reason = validator._extract_refusal_reason(recast.read_text())
-        assert reason is not None or validator is not None
+        assert reason == "Model contains unsupported features"
 
     def test_validator_missing_mapping(self, tmp_path):
         """Test validator when mapping comment is missing."""
@@ -1253,9 +2441,11 @@ class TestRecastValidatorEdgeCases:
             end
         """)
 
-        # Should still work, inferring mapping
         validator = RecastValidator(str(original), str(recast), parser="legacy")
-        assert validator is not None
+        result = validator.check_mapping_complete()
+
+        assert result.result == ValidationResult.FAIL
+        assert result.metadata["missing_variables"] == ["X"]
 
 
 class TestVariableICollisionWithSpI:
@@ -1415,6 +2605,346 @@ class TestTimeDependentValidation:
         assert result.name == "numerical_pointwise"
         assert result.result == ValidationResult.PASS, \
             f"Numerical test failed: {result.details}"
+
+
+class TestSymbolicValidationBranches:
+    """Focused tests for symbolic validation branch behavior."""
+
+    def test_symbolic_validation_handles_clock_without_time_and_aux_substitutions(self):
+        X = sp.Symbol("X", positive=True)
+        T = sp.Symbol("T", positive=True)
+        Y = sp.Symbol("Y_1", positive=True)
+        A = sp.Symbol("A_1", positive=True)
+        k = sp.Symbol("k", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.orig_odes = {X: -X}
+        validator.mapping = {X: X}
+        validator.recast_state_vars = [X, T, Y, A]
+        validator.recast_odes = {
+            X: -X,
+            T: sp.Integer(1),
+            Y: k * Y,
+            A: sp.Integer(0),
+        }
+        validator.recast_ir = SimpleNamespace(params={"k": 2.0})
+        validator.auxiliary_defs = {
+            X: X + 1,  # original variable, not a lifted auxiliary substitution
+            T: sp.Symbol("time"),  # clock definition is skipped after clock handling
+            Y: k + X,  # state and parameter symbols are canonicalized by name
+            A: sp.Integer(2),  # constant auxiliary has no symbol substitutions
+        }
+
+        result = validator.check_symbolic_equivalence()
+
+        assert result.result == ValidationResult.PASS
+        assert "exact equivalence" in result.details
+
+    def test_symbolic_validation_does_not_substitute_nonfinite_parameter_values(self):
+        X = sp.Symbol("X", positive=True)
+        k = sp.Symbol("k", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.orig_odes = {X: sp.Integer(0)}
+        validator.mapping = {X: X}
+        validator.recast_state_vars = [X]
+        validator.recast_odes = {X: 1 / k}
+        validator.recast_ir = SimpleNamespace(params={"k": 0.0})
+        validator.auxiliary_defs = {}
+
+        result = validator.check_symbolic_equivalence()
+
+        assert result.result == ValidationResult.FAIL
+        assert "Non-zero components" in result.details
+        assert "1/k" in result.details
+
+    def test_symbolic_validation_reports_simplification_errors_as_timeout(self, monkeypatch):
+        X = sp.Symbol("X", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.orig_odes = {X: sp.Integer(0)}
+        validator.mapping = {X: X}
+        validator.recast_state_vars = [X]
+        validator.recast_odes = {X: X}
+        validator.recast_ir = SimpleNamespace(params={})
+        validator.auxiliary_defs = {}
+
+        def fail_nsimplify(*args, **kwargs):
+            raise RuntimeError("forced simplification failure")
+
+        monkeypatch.setattr(sp, "nsimplify", fail_nsimplify)
+
+        result = validator.check_symbolic_equivalence()
+
+        assert result.result == ValidationResult.TIMEOUT
+        assert result.reason == "timeout"
+        assert "forced simplification failure" in result.details
+
+    def test_symbolic_validation_continues_when_factor_strategy_fails(self, monkeypatch):
+        import inspect
+
+        X = sp.Symbol("X", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.orig_odes = {X: sp.Integer(0)}
+        validator.mapping = {X: X}
+        validator.recast_state_vars = [X]
+        validator.recast_odes = {X: X + 1}
+        validator.recast_ir = SimpleNamespace(params={})
+        validator.auxiliary_defs = {}
+        real_factor = sp.factor
+
+        def factor_fails_only_in_symbolic_strategy(expr, *args, **kwargs):
+            for frame in inspect.stack():
+                if frame.filename.endswith("_validator/symbolic.py") and frame.lineno == 185:
+                    raise TypeError("factor strategy unavailable")
+            return real_factor(expr, *args, **kwargs)
+
+        monkeypatch.setattr(sp, "factor", factor_fails_only_in_symbolic_strategy)
+
+        result = validator.check_symbolic_equivalence()
+
+        assert result.result == ValidationResult.FAIL
+        assert "Non-zero components" in result.details
+        assert "X + 1" in result.details
+
+    def test_symbolic_validation_outer_exception_is_not_attempted(self):
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.orig_odes = {sp.Symbol("X", positive=True): sp.Integer(0)}
+        validator.mapping = {}
+
+        result = validator.check_symbolic_equivalence()
+
+        assert result.result == ValidationResult.NOT_ATTEMPTED
+        assert result.reason == "not_attempted"
+        assert "Exception during symbolic test" in result.details
+
+
+class TestMappingValidationBranches:
+    """Focused tests for mapping and auxiliary identity helper branches."""
+
+    def test_mapping_comment_parser_supports_old_format_and_bad_expression_fallback(self):
+        validator = RecastValidator.__new__(RecastValidator)
+        mapping = validator._extract_mapping_from_comments("""
+            // Mapping from original variables
+            // this line is descriptive, not a mapping
+            // X = Z_1*Z_2
+            // Bad = X +
+            // --- end mapping ---
+            // Y = should_not_be_seen
+        """)
+
+        assert mapping[sp.Symbol("X")] == sp.Symbol("Z_1") * sp.Symbol("Z_2")
+        assert mapping[sp.Symbol("Bad")] == sp.Symbol("X +")
+        assert sp.Symbol("Y") not in mapping
+
+    def test_refusal_reason_requires_following_comment_line(self):
+        validator = RecastValidator.__new__(RecastValidator)
+
+        assert validator._extract_refusal_reason(
+            "// NOTE: Canonical S-system recast was not attempted because:"
+        ) is None
+        assert validator._extract_refusal_reason(
+            """
+            // NOTE: Canonical S-system recast was not attempted because:
+            not a comment
+            """
+        ) is None
+
+    def test_assignment_rule_auxiliary_merge_skips_owned_state_and_bad_rules(self):
+        X = sp.Symbol("X", positive=True)
+        existing = sp.Symbol("Y_1", positive=True)
+        added = sp.Symbol("Z_1", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.orig_ir = SimpleNamespace(assignment_rules={"obs": "X + 1"})
+        validator.recast_ir = SimpleNamespace(
+            assignment_rules={
+                "obs": "X + 1",  # original rule, not a lifted auxiliary
+                "X": "X + 2",  # state variable, not an auxiliary
+                "Y_1": "X + 3",  # already present
+                "Z_1": "X + k",  # lifted auxiliary to merge
+                "W_1": "X +",  # malformed rule is skipped
+            },
+            params={"k": 2.0},
+        )
+        validator.recast_odes = {X: -X}
+        validator.auxiliary_defs = {existing: X + 3}
+
+        validator._merge_assignment_rules_as_auxiliaries()
+
+        assert validator.auxiliary_defs[existing] == X + 3
+        assert sp.simplify(validator.auxiliary_defs[added] - (X + sp.Symbol("k", positive=True))) == 0
+        assert sp.Symbol("W_1", positive=True) not in validator.auxiliary_defs
+
+    def test_auxiliary_definition_parser_handles_old_end_and_malformed_lines(self):
+        validator = RecastValidator.__new__(RecastValidator)
+        definitions = validator._extract_auxiliary_definitions("""
+            // Auxiliary variable definitions
+            // ========================================================================
+            // Z_1 := X + 1
+            // Bad := X +
+            // --- end auxiliary definitions ---
+            // Z_2 := should_not_be_seen
+        """)
+
+        assert definitions[sp.Symbol("Z_1")] == sp.Symbol("X") + 1
+        assert sp.Symbol("Bad") not in definitions
+        assert sp.Symbol("Z_2") not in definitions
+
+    def test_infer_auxiliary_definitions_uses_denominator_matching(self):
+        X = sp.Symbol("X", positive=True)
+        Y = sp.Symbol("Y_1", positive=True)
+        M = sp.Symbol("M_1", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.factor_map = {M: X + 1}
+        validator.orig_odes = {X: 1 / (X + 2)}
+        validator.recast_odes = {
+            X: sp.Integer(1),
+            Y: sp.Integer(1),
+            M: sp.Integer(0),
+        }
+
+        validator._infer_auxiliary_definitions()
+
+        assert validator.factor_map[Y] == X + 2
+        assert validator.factor_map[M] == X + 1
+
+    def test_denominator_helpers_classify_negative_nontrivial_powers(self):
+        X = sp.Symbol("X", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+
+        assert validator._has_negative_exponent(1 / X, X) is True
+        assert validator._has_negative_exponent(X**2, X) is False
+        assert validator._find_denominators((X + 1) ** -1 + X**-1 + X**2) == [X + 1]
+
+    def test_mapping_builder_handles_products_substitutions_and_auxiliary_identities(self):
+        X = sp.Symbol("X", positive=True)
+        Y = sp.Symbol("Y", positive=True)
+        Q = sp.Symbol("Q", positive=True)
+        Z_1 = sp.Symbol("Z_1", positive=True)
+        Z_2 = sp.Symbol("Z_2", positive=True)
+        A_1 = sp.Symbol("A_1", positive=True)
+        stale_z = sp.Symbol("Z_1")
+        validator = RecastValidator.__new__(RecastValidator)
+        validator._infer_auxiliary_definitions = lambda: None
+        validator.orig_odes = {X: -X, Y: -Y, Q: -Q}
+        validator.recast_odes = {Z_1: -Z_1, Z_2: -Z_2, A_1: -A_1}
+        validator.factor_map = {
+            X: [Z_1, Z_2],
+            Y: stale_z + 1,
+            A_1: stale_z + 2,
+        }
+
+        validator._build_mapping()
+
+        assert validator.mapping[X] == Z_1 * Z_2
+        assert validator.mapping[Y] == Z_1 + 1
+        assert validator.mapping[Q] == Q
+        assert validator.mapping[A_1] == Z_1 + 2
+        assert validator.recast_state_vars == [Z_1, Z_2, A_1]
+
+    def test_assignment_rule_expansion_handles_empty_nested_and_malformed_rules(self):
+        X = sp.Symbol("X", positive=True)
+        J_1 = sp.Symbol("J_1", positive=True)
+        empty_validator = RecastValidator.__new__(RecastValidator)
+        odes = {X: -J_1}
+
+        assert empty_validator._expand_assignment_rules_in_odes(
+            odes,
+            SimpleNamespace(assignment_rules={}, params={}),
+        ) is odes
+
+        validator = RecastValidator.__new__(RecastValidator)
+        expanded = validator._expand_assignment_rules_in_odes(
+            odes,
+            SimpleNamespace(
+                assignment_rules={
+                    "A": "X + K",
+                    "J_1": "A + 1",
+                    "Bad": "X +",
+                },
+                params={"K": 2.0},
+            ),
+        )
+
+        K = sp.Symbol("K", positive=True)
+        assert sp.simplify(expanded[X] - (-(X + K + 1))) == 0
+
+    def test_mapping_completeness_allows_assignment_rule_identity(self):
+        X = sp.Symbol("X", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.orig_odes = {X: -X}
+        validator.mapping = {X: X}
+        validator.recast_state_vars = []
+        validator.recast_ir = SimpleNamespace(assignment_rules={"X": "Z_1 + Z_2"})
+
+        result = validator.check_mapping_complete()
+
+        assert result.result == ValidationResult.PASS
+
+
+class TestNumericalValidationBranches:
+    """Focused tests for numerical validation branch behavior."""
+
+    def test_jax_numerical_validation_reports_missing_jax(self, monkeypatch):
+        import builtins
+
+        real_import = builtins.__import__
+
+        def missing_jax(name, *args, **kwargs):
+            if name == "jax" or name == "jax.numpy":
+                raise ImportError("jax missing")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", missing_jax)
+        validator = RecastValidator.__new__(RecastValidator)
+
+        result = validator.check_numerical_pointwise_jax()
+
+        assert result.result == ValidationResult.NOT_ATTEMPTED
+        assert result.reason == "not_attempted"
+        assert "JAX not available" in result.details
+
+    def test_numerical_validation_passes_time_dependent_clock_auxiliary(self):
+        X = sp.Symbol("X", positive=True)
+        T = sp.Symbol("T", positive=True)
+        Y = sp.Symbol("Y_1", positive=True)
+        time = sp.Symbol("time")
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.orig_odes = {X: -X / (time + 1)}
+        validator.orig_odes_expanded = dict(validator.orig_odes)
+        validator.mapping = {X: X}
+        validator.recast_state_vars = [X, T, Y]
+        validator.recast_odes_expanded = {
+            X: -X / Y,
+            T: sp.Integer(1),
+            Y: sp.Integer(1),
+        }
+        validator.recast_ir = SimpleNamespace(params={})
+        validator.auxiliary_defs = {T: time, Y: T + 1}
+        validator.canonical_symbols = {"X": X, "T": T, "Y_1": Y, "time": time}
+
+        result = validator.check_numerical_pointwise(n_samples=3)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error is not None
+        assert result.max_error < 1.0e-12
+
+    def test_numerical_validation_lambdifies_partially_unresolved_auxiliary(self):
+        X = sp.Symbol("X", positive=True)
+        Y = sp.Symbol("Y_1", positive=True)
+        U = sp.Symbol("U", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.orig_odes = {X: -X}
+        validator.orig_odes_expanded = dict(validator.orig_odes)
+        validator.mapping = {X: X}
+        validator.recast_state_vars = [X, Y]
+        validator.recast_odes_expanded = {X: -X, Y: sp.Integer(0)}
+        validator.recast_ir = SimpleNamespace(params={})
+        validator.auxiliary_defs = {Y: X + U}
+        validator.canonical_symbols = {"X": X, "Y_1": Y, "U": U}
+
+        result = validator.check_numerical_pointwise(n_samples=3)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error is not None
+        assert result.max_error < 1.0e-12
 
 
 if __name__ == "__main__":

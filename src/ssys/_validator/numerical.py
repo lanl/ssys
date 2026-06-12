@@ -9,8 +9,148 @@ from sympy import Matrix, lambdify
 from ssys._validator.report import EquivalenceTest, ValidationResult
 from ssys._validator.state import ValidatorState
 
+NUMERICAL_SAMPLE_SEED = 42
+DEFAULT_TIME_DOMAIN = (0.1, 100.0)
+
+
+def _finite_float(value: object) -> float | None:
+    try:
+        number = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(number):
+        return None
+    return number
+
+
+def _metadata_value(value: object) -> float | str | None:
+    number = _finite_float(value)
+    if number is not None:
+        return number
+    if value is None:
+        return None
+    return str(value)
+
+
+def _exception_reason(message: str) -> str | None:
+    lowered = message.lower()
+    if "invalid numerical sampling domain" in lowered:
+        return "invalid_sampling_domain"
+    if "non-finite value" in lowered:
+        return "nonfinite_sample"
+    if "division by zero" in lowered or "cannot be raised to a negative power" in lowered:
+        return "singular_sample"
+    return None
+
 
 class NumericalValidationMixin(ValidatorState):
+    def _initial_values_by_name(self) -> dict[str, float]:
+        values: dict[str, float] = {}
+        for model in (getattr(self, "orig_ir", None), getattr(self, "recast_ir", None)):
+            if model is None:
+                continue
+            for attr in ("initial", "initials"):
+                raw = getattr(model, attr, None)
+                if not isinstance(raw, dict):
+                    continue
+                for name, value in raw.items():
+                    number = _finite_float(value)
+                    if number is not None:
+                        values[str(name)] = number
+        return values
+
+    def _simulation_time_range(self) -> dict[str, float | str]:
+        for model in (getattr(self, "orig_ir", None), getattr(self, "recast_ir", None)):
+            if model is None:
+                continue
+            start = _finite_float(getattr(model, "sim_t_start", None))
+            end = _finite_float(getattr(model, "sim_t_end", None))
+            if end is None:
+                continue
+            lower = max(start if start is not None and start > 0 else 1.0e-12, 1.0e-12)
+            upper = end
+            if upper > lower:
+                return {"min": lower, "max": upper, "source": "simulation_metadata"}
+        return {
+            "min": DEFAULT_TIME_DOMAIN[0],
+            "max": DEFAULT_TIME_DOMAIN[1],
+            "source": "default_time",
+        }
+
+    def _numerical_sampling_metadata(
+        self,
+        recast_vars: list[sp.Symbol],
+        param_values: dict[str, Any],
+        *,
+        n_samples: int,
+        domain_min: float,
+        domain_max: float,
+        threshold: float,
+        include_time: bool,
+    ) -> dict[str, Any]:
+        domain_min_float = _finite_float(domain_min)
+        domain_max_float = _finite_float(domain_max)
+        if (
+            domain_min_float is None
+            or domain_max_float is None
+            or domain_min_float <= 0
+            or domain_max_float <= domain_min_float
+        ):
+            raise ValueError(
+                "Invalid numerical sampling domain: expected finite "
+                "0 < domain_min < domain_max"
+            )
+
+        initials = self._initial_values_by_name()
+        variable_ranges: dict[str, dict[str, float | str]] = {}
+        for var in recast_vars:
+            var_name = str(var)
+            initial = initials.get(var_name)
+            if initial is not None and initial > 0:
+                lower: float = max(
+                    min(domain_min_float, initial / 10.0),
+                    float(np.finfo(float).tiny),
+                )
+                upper: float = max(domain_max_float, initial * 10.0)
+                source = "positive_initial"
+            else:
+                lower = domain_min_float
+                upper = domain_max_float
+                source = "default_positive"
+            if upper <= lower:
+                raise ValueError(
+                    f"Invalid numerical sampling domain for {var_name}: "
+                    f"min {lower} must be less than max {upper}"
+                )
+            variable_ranges[var_name] = {"min": lower, "max": upper, "source": source}
+            if initial is not None:
+                variable_ranges[var_name]["initial"] = initial
+
+        metadata: dict[str, Any] = {
+            "sample_seed": NUMERICAL_SAMPLE_SEED,
+            "n_samples": n_samples,
+            "threshold": threshold,
+            "domain_defaults": {"min": domain_min_float, "max": domain_max_float},
+            "sampling": {"state_variables": variable_ranges},
+            "parameter_values": {
+                str(name): _metadata_value(value) for name, value in param_values.items()
+            },
+        }
+        if include_time:
+            metadata["sampling"]["time"] = self._simulation_time_range()
+        return metadata
+
+    def _sample_log_uniform(
+        self,
+        rng: np.random.Generator,
+        sampling_metadata: dict[str, Any],
+        variable: sp.Symbol,
+    ) -> float:
+        variable_range = sampling_metadata["sampling"]["state_variables"][str(variable)]
+        return float(
+            np.exp(rng.uniform(np.log(variable_range["min"]), np.log(variable_range["max"])))
+        )
+
     def check_numerical_pointwise_jax(
         self,
         n_samples: int = 1000,
@@ -43,6 +183,7 @@ class NumericalValidationMixin(ValidatorState):
                 details="JAX not available. Install with: pip install jax jaxlib",
             )
 
+        sampling_metadata: dict[str, Any] = {}
         try:
             # Get ordered variables
             orig_vars_ordered = sorted(self.orig_odes.keys(), key=str)
@@ -55,6 +196,15 @@ class NumericalValidationMixin(ValidatorState):
             recast_var_names = {str(v) for v in recast_vars_ordered}
             param_names = sorted([p for p in param_values.keys() if p not in recast_var_names])
             param_vals_array = jnp.array([param_values[name] for name in param_names])
+            sampling_metadata = self._numerical_sampling_metadata(
+                recast_vars_ordered,
+                param_values,
+                n_samples=n_samples,
+                domain_min=domain_min,
+                domain_max=domain_max,
+                threshold=threshold,
+                include_time=False,
+            )
 
             # Build mapping functions Φ(Z) using lambdify for JAX
             # Φ maps recast variables to original variables
@@ -115,10 +265,8 @@ class NumericalValidationMixin(ValidatorState):
             errors: list[float] = []
             counterexamples: list[dict[str, Any]] = []
 
-            # Sample points in log-uniform distribution
-            np.random.seed(42)
-            log_min = np.log(domain_min)
-            log_max = np.log(domain_max)
+            # Sample points in log-uniform distribution.
+            rng = np.random.default_rng(NUMERICAL_SAMPLE_SEED)
 
             # Identify which recast variables are auxiliaries vs. original/independent
             orig_var_names = {str(v) for v in orig_vars_ordered}
@@ -159,7 +307,9 @@ class NumericalValidationMixin(ValidatorState):
 
                 # Sample independent variables (originals + pool auxiliaries)
                 for idx, var in independent_vars:
-                    Z_sample[idx] = np.exp(np.random.uniform(log_min, log_max))
+                    Z_sample[idx] = self._sample_log_uniform(
+                        rng, sampling_metadata, var
+                    )
 
                 # Compute auxiliary variables from their definitions
                 for idx, var in auxiliary_vars:
@@ -253,6 +403,7 @@ class NumericalValidationMixin(ValidatorState):
                     max_error=float(max_error),
                     mean_error=float(mean_error),
                     details=f"JAX autodiff: Passed with {n_samples} samples. Max error: {max_error:.2e}",
+                    metadata=sampling_metadata,
                 )
             else:
                 return EquivalenceTest(
@@ -262,13 +413,17 @@ class NumericalValidationMixin(ValidatorState):
                     mean_error=float(mean_error),
                     details=f"JAX autodiff: Failed - max error {max_error:.2e} > threshold {threshold:.2e}",
                     counterexamples=counterexamples,
+                    metadata=sampling_metadata,
                 )
 
         except Exception as e:
+            message = str(e)
             return EquivalenceTest(
                 name="numerical_pointwise_jax",
                 result=ValidationResult.NOT_ATTEMPTED,
-                details=f"Exception during JAX numerical test: {str(e)}",
+                details=f"Exception during JAX numerical test: {message}",
+                metadata=sampling_metadata,
+                reason=_exception_reason(message),
             )
 
     def check_numerical_pointwise(
@@ -293,6 +448,7 @@ class NumericalValidationMixin(ValidatorState):
         Returns:
             EquivalenceTest with numerical validation results
         """
+        sampling_metadata: dict[str, Any] = {}
         try:
             # Build symbolic Jacobian and lambdify it for speed
             orig_vars_ordered = sorted(self.orig_odes.keys(), key=str)
@@ -329,6 +485,16 @@ class NumericalValidationMixin(ValidatorState):
             # If time symbol found, ensure it's in canonical symbols
             if time_symbol is not None and str(time_symbol) not in self.canonical_symbols:
                 self.canonical_symbols[str(time_symbol)] = time_symbol
+
+            sampling_metadata = self._numerical_sampling_metadata(
+                recast_vars_ordered,
+                param_values,
+                n_samples=n_samples,
+                domain_min=domain_min,
+                domain_max=domain_max,
+                threshold=threshold,
+                include_time=time_symbol is not None,
+            )
 
             # Build Φ as a vector
             Phi_vector = Matrix([self.mapping[v] for v in orig_vars_ordered])
@@ -400,10 +566,8 @@ class NumericalValidationMixin(ValidatorState):
             errors: list[float] = []
             counterexamples: list[dict[str, Any]] = []
 
-            # Sample points in log-uniform distribution (positive orthant)
-            np.random.seed(42)  # Reproducibility
-            log_min = np.log(domain_min)
-            log_max = np.log(domain_max)
+            # Sample points in log-uniform distribution (positive orthant).
+            rng = np.random.default_rng(NUMERICAL_SAMPLE_SEED)
 
             # Identify which recast variables are auxiliaries vs. original/independent
             orig_var_names = {str(v) for v in orig_vars_ordered}
@@ -445,12 +609,18 @@ class NumericalValidationMixin(ValidatorState):
                 # Sample time FIRST if time-dependent (needed for auxiliary evaluation)
                 t_sample = None
                 if time_symbol is not None:
-                    # Sample time in [0.1, 100] range (log-uniform)
-                    t_sample = np.exp(np.random.uniform(np.log(0.1), np.log(100.0)))
+                    time_range = sampling_metadata["sampling"]["time"]
+                    t_sample = float(
+                        np.exp(
+                            rng.uniform(np.log(time_range["min"]), np.log(time_range["max"]))
+                        )
+                    )
 
                 # Sample independent variables (originals + pool auxiliaries)
                 for idx, var in independent_vars:
-                    Z_sample[idx] = np.exp(np.random.uniform(log_min, log_max))
+                    Z_sample[idx] = self._sample_log_uniform(
+                        rng, sampling_metadata, var
+                    )
 
                 # Compute auxiliary variables from their definitions
                 for idx, var in auxiliary_vars:
@@ -570,6 +740,7 @@ class NumericalValidationMixin(ValidatorState):
                     max_error=float(max_error),
                     mean_error=float(mean_error),
                     details=f"Passed with {n_samples} samples. Max error: {max_error:.2e}",
+                    metadata=sampling_metadata,
                 )
             else:
                 return EquivalenceTest(
@@ -579,11 +750,15 @@ class NumericalValidationMixin(ValidatorState):
                     mean_error=float(mean_error),
                     details=f"Failed: max error {max_error:.2e} > threshold {threshold:.2e}",
                     counterexamples=counterexamples,
+                    metadata=sampling_metadata,
                 )
 
         except Exception as e:
+            message = str(e)
             return EquivalenceTest(
                 name="numerical_pointwise",
                 result=ValidationResult.NOT_ATTEMPTED,
-                details=f"Exception during numerical test: {str(e)}",
+                details=f"Exception during numerical test: {message}",
+                metadata=sampling_metadata,
+                reason=_exception_reason(message),
             )

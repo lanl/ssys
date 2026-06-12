@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import sys
+import warnings
 
 import nbformat
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
@@ -13,6 +14,91 @@ import ssys
 from ssys import build_sym_system, parse_antimony, recast_to_ssystem, ssystem_to_antimony
 from ssys.metadata import _extract_sim_metadata
 from ssys.parsing import parse_antimony_via_sbml
+from ssys.validator import (
+    EquivalenceTest,
+    ValidationReport,
+    ValidationResult,
+    validation_profile_choices,
+)
+
+CaseRecord = tuple[str, str, str, str | None]
+FailureRecord = tuple[str, str]
+
+LEGACY_PARSER_DEPRECATION = (
+    "The legacy Antimony parser mode is compatibility-only and may be removed "
+    "after a future stable parser-mode policy is published; use parser='sbml'."
+)
+TROUBLESHOOTING_HINT = "See README.md#troubleshooting for local failure guidance."
+
+
+def _print_troubleshooting_hint() -> None:
+    print(TROUBLESHOOTING_HINT, file=sys.stderr)
+
+
+def _build_validation_crash_report(
+    ant_path: str,
+    out_path: str,
+    validation_error: str,
+    validation_profile: str,
+) -> ValidationReport:
+    from ssys._validator.core import _required_test_names_for_profile
+    from ssys._validator.report import resolve_validation_profile
+
+    profile_spec = resolve_validation_profile(validation_profile)
+    assert profile_spec is not None
+
+    def blocked_test(name: str, *, required: bool) -> EquivalenceTest:
+        if required:
+            return EquivalenceTest(
+                name=name,
+                result=ValidationResult.NOT_ATTEMPTED,
+                reason="validation_crashed",
+                details=f"Check could not run because validation crashed: {validation_error}",
+                metadata={
+                    "validation_profile": profile_spec.name,
+                    "blocked_by": "validation_crash",
+                    "required": True,
+                },
+            )
+        return EquivalenceTest(
+            name=name,
+            result=ValidationResult.NOT_ATTEMPTED,
+            reason="profile_excluded",
+            details=f"Check is not part of validation profile {profile_spec.name!r}",
+            metadata={"validation_profile": profile_spec.name, "required": False},
+        )
+
+    return ValidationReport(
+        original_file=ant_path,
+        recast_file=out_path,
+        original_class=None,
+        recast_class=None,
+        validation_profile=profile_spec.name,
+        validation_profile_description=profile_spec.description,
+        required_tests=_required_test_names_for_profile(profile_spec),
+        generated_output_test=blocked_test("generated_output_roundtrip", required=True),
+        parser_test=EquivalenceTest(
+            name="validator_crash",
+            result=ValidationResult.FAIL,
+            details=validation_error,
+            metadata={"validation_profile": profile_spec.name},
+        ),
+        mapping_test=blocked_test("mapping_completeness", required=True),
+        symbolic_test=blocked_test("symbolic_equivalence", required=profile_spec.run_symbolic),
+        numerical_test=blocked_test("numerical_pointwise", required=profile_spec.run_numerical),
+        trajectory_test=blocked_test(
+            "trajectory_comparison", required=profile_spec.run_trajectory
+        ),
+        algebraic_residual_test=blocked_test(
+            "algebraic_manifold_residuals", required=profile_spec.run_trajectory
+        ),
+        auxiliary_tests=[
+            blocked_test("auxiliary_identities", required=profile_spec.run_auxiliaries)
+        ],
+        overall_pass=False,
+        overall_result=ValidationResult.FAIL,
+        summary=f"Validation crashed: {validation_error}",
+    )
 
 
 def read_manifest(path: str) -> list[str]:
@@ -42,6 +128,7 @@ def recast_file(
     mode: str = "simplified",
     validate: bool = False,
     parser: str = "sbml",
+    validation_profile: str = "strict",
 ) -> tuple[str, str, str, str | None]:
     """
     Recast a single Antimony file to S-system form.
@@ -54,12 +141,16 @@ def recast_file(
         parser: Parser to use ('sbml' or 'legacy')
             - 'sbml': RoadRunner → SBML → libSBML (reference Antimony parser)
             - 'legacy': Hand-rolled regex parser retained for explicit compatibility use
+        validation_profile: Named validation profile to use when validate=True
 
     Returns:
         Tuple of (model_name, input_path, output_path, validation_json_path)
         validation_json_path is None if validate=False
     """
     name = os.path.splitext(os.path.basename(ant_path))[0]
+    if parser == "legacy":
+        warnings.warn(LEGACY_PARSER_DEPRECATION, DeprecationWarning, stacklevel=2)
+
     txt = open(ant_path).read()
 
     # Extract @SIM metadata FIRST (before any parsing)
@@ -106,33 +197,21 @@ def recast_file(
                 mode=mode,
                 output_json=validation_json_path,
                 parser=parser,
+                profile=validation_profile,
             )
             if not report.overall_pass:
                 print(f"Validation failed for {name}: {report.summary}", file=sys.stderr)
         except Exception as e:
-            failure_report = {
-                "original_file": ant_path,
-                "recast_file": out_path,
-                "classification": {
-                    "original": None,
-                    "recast": None,
-                    "expected": None,
-                    "canonical_refusal_reason": None,
-                },
-                "tests": {
-                    "validation": {
-                        "name": "validation",
-                        "result": "failed",
-                        "details": str(e),
-                    }
-                },
-                "overall_pass": False,
-                "overall_result": "failed",
-                "summary": f"Validation crashed: {e}",
-            }
+            validation_error = str(e)
+            failure_report = _build_validation_crash_report(
+                ant_path,
+                out_path,
+                validation_error,
+                validation_profile,
+            )
             try:
                 with open(validation_json_path, "w") as f:
-                    json.dump(failure_report, f, indent=2)
+                    json.dump(failure_report.to_dict(), f, indent=2)
             except OSError as write_error:
                 print(
                     f"Validation crashed for {name}, and writing the failure report failed: "
@@ -146,7 +225,7 @@ def recast_file(
 
 
 def build_notebook(
-    cases: list[tuple[str, str, str, str | None]],
+    cases: list[CaseRecord],
     out_dir: str,
     mode: str = "simplified",
 ) -> str:
@@ -207,6 +286,103 @@ N_STEPS = 100     # Number of time steps (default: 100)
     return out_nb
 
 
+def _load_manifest_or_exit(manifest: str) -> list[str]:
+    try:
+        ant_files = read_manifest(manifest)
+    except OSError as e:
+        print(f"Error: Could not read manifest {manifest!r}: {e}", file=sys.stderr)
+        _print_troubleshooting_hint()
+        sys.exit(1)
+
+    if not ant_files:
+        print("Error: Manifest contained no .ant files.", file=sys.stderr)
+        _print_troubleshooting_hint()
+        sys.exit(1)
+    return ant_files
+
+
+def _recast_manifest_models(args: argparse.Namespace, ant_files: list[str]) -> list[CaseRecord]:
+    print(f"Processing {len(ant_files)} model(s)...")
+    cases: list[CaseRecord] = []
+    processing_failures: list[FailureRecord] = []
+    for ant in ant_files:
+        try:
+            cases.append(
+                recast_file(
+                    ant,
+                    args.outdir,
+                    mode=args.mode,
+                    validate=args.validate,
+                    parser=args.parser,
+                    validation_profile=args.validation_profile,
+                )
+            )
+        except Exception as e:
+            processing_failures.append((ant, str(e)))
+            print(f"Recast failed for {ant}: {e}", file=sys.stderr)
+
+    if not cases:
+        print("Error: No models were successfully recast.", file=sys.stderr)
+        _print_troubleshooting_hint()
+        sys.exit(1)
+
+    if processing_failures:
+        print("Recast failures:", file=sys.stderr)
+        for name, summary in processing_failures:
+            print(f"  {name}: {summary}", file=sys.stderr)
+        _print_troubleshooting_hint()
+        sys.exit(1)
+    return cases
+
+
+def _validation_summary(cases: list[CaseRecord]) -> tuple[int, list[FailureRecord]]:
+    validated = 0
+    validation_failures: list[FailureRecord] = []
+    for name, _, _, vpath in cases:
+        if not vpath or not os.path.exists(vpath):
+            validation_failures.append((name, "validation report missing"))
+            continue
+        try:
+            with open(vpath) as f:
+                report = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            validation_failures.append((name, f"validation report unreadable: {e}"))
+            continue
+        if report.get("overall_pass"):
+            validated += 1
+        else:
+            summary = report.get("summary", "validation did not pass")
+            validation_failures.append((name, summary))
+    return validated, validation_failures
+
+
+def _report_validation_summary(
+    cases: list[CaseRecord],
+    validation_profile: str,
+) -> list[FailureRecord]:
+    validated, validation_failures = _validation_summary(cases)
+    if validation_profile == "strict":
+        print(f"✓ Validated {validated}/{len(cases)} models")
+    else:
+        print(f"✓ Validation profile '{validation_profile}' passed {validated}/{len(cases)} models")
+    return validation_failures
+
+
+def _exit_on_validation_failures(
+    validation_failures: list[FailureRecord],
+    *,
+    allow_validation_failures: bool,
+) -> None:
+    if not validation_failures:
+        return
+    print("Validation failures:", file=sys.stderr)
+    for name, summary in validation_failures:
+        print(f"  {name}: {summary}", file=sys.stderr)
+    _print_troubleshooting_hint()
+    if not allow_validation_failures:
+        sys.exit(1)
+
+
 def main():
     """Main CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -240,6 +416,15 @@ def main():
         help="Run validation on each recast (symbolic and numerical tests)",
     )
     parser.add_argument(
+        "--validation-profile",
+        choices=validation_profile_choices(),
+        default="strict",
+        help=(
+            "Validation profile to run with --validate. 'strict' is required for "
+            "release-grade validated claims; partial profiles are diagnostic."
+        ),
+    )
+    parser.add_argument(
         "--allow-validation-failures",
         action="store_true",
         help=(
@@ -262,52 +447,24 @@ def main():
 
     os.makedirs(args.outdir, exist_ok=True)
 
-    ant_files = read_manifest(args.manifest)
-    if not ant_files:
-        print("Error: Manifest contained no .ant files.", file=sys.stderr)
+    ant_files = _load_manifest_or_exit(args.manifest)
+    cases = _recast_manifest_models(args, ant_files)
+
+    try:
+        nb_path = build_notebook(cases, args.outdir, mode=args.mode)
+    except Exception as e:
+        print(f"Notebook generation failed: {e}", file=sys.stderr)
+        _print_troubleshooting_hint()
         sys.exit(1)
 
-    print(f"Processing {len(ant_files)} model(s)...")
-    cases = [
-        recast_file(
-            ant,
-            args.outdir,
-            mode=args.mode,
-            validate=args.validate,
-            parser=args.parser,
-        )
-        for ant in ant_files
-    ]
-
-    validation_failures = []
-    if args.validate:
-        # Count validation results - check if validation PASSED, not just file exists
-        validated = 0
-        for name, _, _, vpath in cases:
-            if vpath and os.path.exists(vpath):
-                try:
-                    with open(vpath) as f:
-                        report = json.load(f)
-                        if report.get("overall_pass"):
-                            validated += 1
-                        else:
-                            summary = report.get("summary", "validation did not pass")
-                            validation_failures.append((name, summary))
-                except (OSError, json.JSONDecodeError) as e:
-                    validation_failures.append((name, f"validation report unreadable: {e}"))
-            else:
-                validation_failures.append((name, "validation report missing"))
-        print(f"✓ Validated {validated}/{len(cases)} models")
-
-    nb_path = build_notebook(cases, args.outdir, mode=args.mode)
     print(f"✓ Recast complete. Notebook written: {nb_path}")
 
-    if args.validate and validation_failures:
-        print("Validation failures:", file=sys.stderr)
-        for name, summary in validation_failures:
-            print(f"  {name}: {summary}", file=sys.stderr)
-        if not args.allow_validation_failures:
-            sys.exit(1)
+    if args.validate:
+        validation_failures = _report_validation_summary(cases, args.validation_profile)
+        _exit_on_validation_failures(
+            validation_failures,
+            allow_validation_failures=args.allow_validation_failures,
+        )
 
 
 if __name__ == "__main__":

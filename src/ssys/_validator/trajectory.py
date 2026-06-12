@@ -10,6 +10,16 @@ from ssys._validator.report import EquivalenceTest, ValidationResult
 from ssys._validator.state import ValidatorState
 from ssys.types import SolverRequirement
 
+TRAJECTORY_RELATIVE_TOLERANCE = 1.0e-10
+TRAJECTORY_ABSOLUTE_TOLERANCE = 1.0e-12
+TRAJECTORY_MAX_STEPS = 200000
+TRAJECTORY_SCALING_METHOD = "peak_scaled_absolute"
+TRAJECTORY_THRESHOLD_RATIONALE = (
+    "The default 3% peak-scaled trajectory threshold is a support threshold for "
+    "solver-backed behavior, not a mathematical proof; exact claims require the "
+    "symbolic validation profile."
+)
+
 
 class TrajectoryValidationMixin(ValidatorState):
     def check_trajectory_comparison(
@@ -27,7 +37,10 @@ class TrajectoryValidationMixin(ValidatorState):
         Error metric: |X_orig - X_recast| / (1 + max(|X_orig|, |X_recast|))
         This is bounded in [0, 1] and scale-invariant.
 
-        Solver priority: roadrunner → scipy LSODA → rk4
+        Backend selection is based on the parsed solver requirement:
+        ODE-only and assignment-rule models use libRoadRunner/CVODE; DAE-required
+        models use the optional IDA/SUNDIALS backend by default, with projection
+        available only when explicitly requested as a diagnostic backend.
 
         Uses @SIM metadata from original Antimony file when available:
         - T_START: simulation start time (default 0.0)
@@ -37,19 +50,48 @@ class TrajectoryValidationMixin(ValidatorState):
         Args:
             t_end: Default end time for simulation if @SIM not present
             n_points: Default number of time points if @SIM not present
-            threshold: Error threshold for pass/fail (default 5%)
+            threshold: Peak-scaled error threshold for pass/fail (default 3%).
 
         Returns:
             EquivalenceTest with trajectory validation results
         """
+        trajectory_metadata: dict[str, Any] = {}
         try:
             # Use @SIM metadata from original model if available
+            t_start_use = (
+                self.orig_ir.sim_t_start if self.orig_ir.sim_t_start is not None else 0.0
+            )
             t_end_use = self.orig_ir.sim_t_end if self.orig_ir.sim_t_end is not None else t_end
             # N_STEPS is the number of time intervals (steps), so we need N_STEPS+1 output points
             # This matches notebook_helpers.py: np.linspace(t0, t1, n_steps+1)
             n_points_use = (
                 (self.orig_ir.sim_n_steps + 1) if self.orig_ir.sim_n_steps is not None else n_points
             )
+            trajectory_metadata = {
+                "threshold": threshold,
+                "threshold_rationale": TRAJECTORY_THRESHOLD_RATIONALE,
+                "scaling_method": TRAJECTORY_SCALING_METHOD,
+                "time_grid": {
+                    "t_start": float(t_start_use),
+                    "t_end": float(t_end_use),
+                    "n_output_points": int(n_points_use),
+                    "source": (
+                        "simulation_metadata"
+                        if (
+                            self.orig_ir.sim_t_start is not None
+                            or self.orig_ir.sim_t_end is not None
+                            or self.orig_ir.sim_n_steps is not None
+                        )
+                        else "defaults"
+                    ),
+                    "recast_interpolated_to_original": False,
+                },
+                "solver_tolerances": {
+                    "relative_tolerance": TRAJECTORY_RELATIVE_TOLERANCE,
+                    "absolute_tolerance": TRAJECTORY_ABSOLUTE_TOLERANCE,
+                    "maximum_num_steps": TRAJECTORY_MAX_STEPS,
+                },
+            }
 
             # Get initial conditions from models
             orig_vars_ordered = sorted(self.orig_odes.keys(), key=str)
@@ -85,13 +127,18 @@ class TrajectoryValidationMixin(ValidatorState):
                 param_values,
                 time_symbol,
                 "original",
+                t_start=t_start_use,
             )
-            trajectory_metadata = {
-                "original_solver_requirement": self.orig_solver_requirement.value,
-                "recast_solver_requirement": self.recast_solver_requirement.value,
-                "original_backend": orig_result.get("backend"),
-                "recast_backend": None,
-            }
+            trajectory_metadata.update(
+                {
+                    "original_solver_requirement": self.orig_solver_requirement.value,
+                    "recast_solver_requirement": self.recast_solver_requirement.value,
+                    "original_backend": orig_result.get("backend"),
+                    "recast_backend": None,
+                    "original_step_diagnostics": orig_result.get("step_diagnostics", {}),
+                    "recast_step_diagnostics": None,
+                }
+            )
 
             if not orig_result["success"]:
                 return EquivalenceTest(
@@ -121,8 +168,12 @@ class TrajectoryValidationMixin(ValidatorState):
                 time_symbol,
                 "recast",
                 y0_override=recast_y0,
+                t_start=t_start_use,
             )
             trajectory_metadata["recast_backend"] = recast_result.get("backend")
+            trajectory_metadata["recast_step_diagnostics"] = recast_result.get(
+                "step_diagnostics", {}
+            )
             trajectory_metadata["algebraic_residuals"] = recast_result.get(
                 "algebraic_residuals", {}
             )
@@ -152,6 +203,7 @@ class TrajectoryValidationMixin(ValidatorState):
                 from scipy.interpolate import interp1d
 
                 t_common = t_orig
+                trajectory_metadata["time_grid"]["recast_interpolated_to_original"] = True
                 Z_interp = np.zeros((len(t_common), len(recast_vars_ordered)))
                 for j, _var in enumerate(recast_vars_ordered):
                     f = interp1d(t_recast, Z_recast[:, j], kind="linear", fill_value="extrapolate")
@@ -174,19 +226,47 @@ class TrajectoryValidationMixin(ValidatorState):
             # Normalize by characteristic scale (peak value over trajectory)
             # This matches notebook_helpers.py for consistent error reporting
             # error(t) = |X_orig - X_recast| / scale, where scale = max(peak_orig, peak_recast)
+            abs_errors = np.abs(X_orig - X_reconstructed)
             scale = np.maximum(
                 np.max(np.abs(X_orig), axis=0), np.max(np.abs(X_reconstructed), axis=0)
             )
             scale = np.maximum(scale, 1e-10)  # Floor to avoid division by zero
-            errors = np.abs(X_orig - X_reconstructed) / scale[np.newaxis, :]
+            errors = abs_errors / scale[np.newaxis, :]
+            relative_errors = abs_errors / np.maximum(np.abs(X_orig), 1.0e-10)
 
             max_error = float(np.max(errors))
             mean_error = float(np.mean(errors))
+            max_abs_error = float(np.max(abs_errors))
+            mean_abs_error = float(np.mean(abs_errors))
+            max_relative_error = float(np.max(relative_errors))
+            mean_relative_error = float(np.mean(relative_errors))
 
             # Find worst time point and variable
             worst_idx = np.unravel_index(np.argmax(errors), errors.shape)
             worst_t = t_common[worst_idx[0]]
             worst_var = str(orig_vars_ordered[worst_idx[1]])
+            worst_var_index = worst_idx[1]
+            trajectory_metadata["error_metrics"] = {
+                "max_scaled_error": max_error,
+                "mean_scaled_error": mean_error,
+                "max_absolute_error": max_abs_error,
+                "mean_absolute_error": mean_abs_error,
+                "max_relative_error": max_relative_error,
+                "mean_relative_error": mean_relative_error,
+                "variable_scales": {
+                    str(var): float(scale[idx]) for idx, var in enumerate(orig_vars_ordered)
+                },
+            }
+            trajectory_metadata["worst_point"] = {
+                "t": float(worst_t),
+                "variable": worst_var,
+                "original": float(X_orig[worst_idx]),
+                "reconstructed": float(X_reconstructed[worst_idx]),
+                "absolute_error": float(abs_errors[worst_idx]),
+                "relative_error": float(relative_errors[worst_idx]),
+                "scaled_error": float(errors[worst_idx]),
+                "scale": float(scale[worst_var_index]),
+            }
 
             if max_error < threshold:
                 return EquivalenceTest(
@@ -210,7 +290,11 @@ class TrajectoryValidationMixin(ValidatorState):
                             "variable": worst_var,
                             "X_orig": float(X_orig[worst_idx]),
                             "X_recast": float(X_reconstructed[worst_idx]),
+                            "absolute_error": float(abs_errors[worst_idx]),
+                            "relative_error": float(relative_errors[worst_idx]),
+                            "scaled_error": float(errors[worst_idx]),
                             "error": float(errors[worst_idx]),
+                            "threshold": threshold,
                         }
                     ],
                     metadata=trajectory_metadata,
@@ -223,6 +307,7 @@ class TrajectoryValidationMixin(ValidatorState):
                 name="trajectory_comparison",
                 result=ValidationResult.NOT_ATTEMPTED,
                 details=f"Exception during trajectory test: {str(e)}\n{traceback.format_exc()}",
+                metadata=trajectory_metadata,
             )
 
     def _simulate_model(
@@ -236,6 +321,7 @@ class TrajectoryValidationMixin(ValidatorState):
         time_symbol,
         model_name,
         y0_override=None,
+        t_start=0.0,
     ):
         """
         Simulate a model using the solver backend selected for its requirement.
@@ -248,10 +334,10 @@ class TrajectoryValidationMixin(ValidatorState):
             else self.recast_solver_requirement
         )
         options: dict[str, Any] = {
-            "relative_tolerance": 1e-10,
-            "absolute_tolerance": 1e-12,
-            "maximum_num_steps": 200000,
-            "max_num_steps": 200000,
+            "relative_tolerance": TRAJECTORY_RELATIVE_TOLERANCE,
+            "absolute_tolerance": TRAJECTORY_ABSOLUTE_TOLERANCE,
+            "maximum_num_steps": TRAJECTORY_MAX_STEPS,
+            "max_num_steps": TRAJECTORY_MAX_STEPS,
         }
         if model_name == "recast":
             options["auxiliary_defs"] = dict(self.auxiliary_defs)
@@ -260,7 +346,7 @@ class TrajectoryValidationMixin(ValidatorState):
 
         result = simulate_model(
             model_ir,
-            0.0,
+            t_start,
             t_end,
             n_points,
             y0_override=y0_override,
@@ -289,6 +375,10 @@ class TrajectoryValidationMixin(ValidatorState):
                 "solver_requirement": result.get("solver_requirement", requirement.value),
                 "unsupported_solver_requirement": False,
                 "algebraic_residuals": result.get("algebraic_residuals", {}),
+                "step_diagnostics": self._trajectory_step_diagnostics(
+                    result["t"], t_start, t_end, n_points
+                ),
+                "solver_options": dict(options),
             }
 
         return {
@@ -300,7 +390,44 @@ class TrajectoryValidationMixin(ValidatorState):
             "solver_requirement": result.get("solver_requirement", requirement.value),
             "unsupported_solver_requirement": result.get("unsupported_solver_requirement", False),
             "algebraic_residuals": result.get("algebraic_residuals", {}),
+            "step_diagnostics": self._trajectory_step_diagnostics(
+                result.get("t", np.array([])), t_start, t_end, n_points
+            ),
+            "solver_options": dict(options),
         }
+
+    def _trajectory_step_diagnostics(
+        self,
+        t_values: np.ndarray,
+        requested_start: float,
+        requested_end: float,
+        requested_points: int,
+    ) -> dict[str, Any]:
+        t_values = np.asarray(t_values, dtype=float)
+        diagnostics: dict[str, Any] = {
+            "requested_t_start": float(requested_start),
+            "requested_t_end": float(requested_end),
+            "requested_output_points": int(requested_points),
+            "actual_output_points": int(t_values.size),
+        }
+        if t_values.size:
+            diagnostics.update(
+                {
+                    "actual_t_start": float(t_values[0]),
+                    "actual_t_end": float(t_values[-1]),
+                    "actual_intervals": max(int(t_values.size) - 1, 0),
+                }
+            )
+            if t_values.size > 1:
+                steps = np.diff(t_values)
+                diagnostics.update(
+                    {
+                        "min_output_step": float(np.min(steps)),
+                        "max_output_step": float(np.max(steps)),
+                        "mean_output_step": float(np.mean(steps)),
+                    }
+                )
+        return diagnostics
 
     def _simulate_with_roadrunner(
         self,

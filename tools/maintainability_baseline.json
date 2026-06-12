@@ -1,0 +1,71 @@
+{
+  "description": "Local maintainability baseline for critical modules. Values are ceilings; lower numbers are allowed and should be committed after refactors.",
+  "paths": {
+    "src/ssys/_recaster/algorithms.py": {
+      "max_cyclomatic_complexity": 46,
+      "max_function_lines": 191,
+      "module_lines": 893
+    },
+    "src/ssys/_recaster/antimony_formatting.py": {
+      "max_cyclomatic_complexity": 57,
+      "max_function_lines": 290,
+      "module_lines": 1037
+    },
+    "src/ssys/_recaster/lifting.py": {
+      "max_cyclomatic_complexity": 93,
+      "max_function_lines": 593,
+      "module_lines": 1943
+    },
+    "src/ssys/_recaster/parsing.py": {
+      "max_cyclomatic_complexity": 61,
+      "max_function_lines": 386,
+      "module_lines": 1151
+    },
+    "src/ssys/_validator/core.py": {
+      "max_cyclomatic_complexity": 18,
+      "max_function_lines": 151,
+      "module_lines": 603
+    },
+    "src/ssys/_validator/mapping.py": {
+      "max_cyclomatic_complexity": 20,
+      "max_function_lines": 92,
+      "module_lines": 842
+    },
+    "src/ssys/_validator/numerical.py": {
+      "max_cyclomatic_complexity": 59,
+      "max_function_lines": 336,
+      "module_lines": 764
+    },
+    "src/ssys/_validator/serialization.py": {
+      "max_cyclomatic_complexity": 16,
+      "max_function_lines": 119,
+      "module_lines": 126
+    },
+    "src/ssys/_validator/symbolic.py": {
+      "max_cyclomatic_complexity": 50,
+      "max_function_lines": 266,
+      "module_lines": 276
+    },
+    "src/ssys/_validator/trajectory.py": {
+      "max_cyclomatic_complexity": 22,
+      "max_function_lines": 287,
+      "module_lines": 917
+    },
+    "src/ssys/cli.py": {
+      "max_cyclomatic_complexity": 7,
+      "max_function_lines": 100,
+      "module_lines": 471
+    },
+    "src/ssys/ode_backends/ida_sundials_backend.py": {
+      "max_cyclomatic_complexity": 37,
+      "max_function_lines": 175,
+      "module_lines": 763
+    },
+    "src/ssys/ode_backends/roadrunner_backend.py": {
+      "max_cyclomatic_complexity": 17,
+      "max_function_lines": 134,
+      "module_lines": 489
+    }
+  },
+  "version": 1
+}

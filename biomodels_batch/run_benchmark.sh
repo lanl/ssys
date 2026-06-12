@@ -197,7 +197,7 @@ stage_recast() {
     
     # Pass 1: Quick timeout
     log_info "Pass 1: Quick recast (${TIMEOUT_QUICK}s timeout)..."
-    python step3_recast.py --mode simplified --timeout "$TIMEOUT_QUICK" --no-validate
+    python step3_recast.py --mode simplified --timeout "$TIMEOUT_QUICK" --workers "$WORKERS_ALL" --no-validate
     
     local pass1_count
     pass1_count=$(count_files "$RECASTS_DIR" "*.ant")
@@ -205,7 +205,7 @@ stage_recast() {
     
     # Pass 2: Retry timeouts only
     log_info "Pass 2: Retry timeouts (${TIMEOUT_LONG}s timeout)..."
-    python step3_recast.py --mode simplified --timeout "$TIMEOUT_LONG" --retry-timeouts --no-validate
+    python step3_recast.py --mode simplified --timeout "$TIMEOUT_LONG" --workers "$WORKERS_ALL" --retry-timeouts --no-validate
     
     local final_count
     final_count=$(count_files "$RECASTS_DIR" "*.ant")
@@ -216,7 +216,7 @@ stage_validate_numerical() {
     log_stage "STAGE 4: Validate (numerical, non-JAX)"
     
     log_info "Running numerical validation on all recasts..."
-    python step4_validate.py --numerical-only --timeout "$TIMEOUT_VALIDATION" --workers "$WORKERS_ALL"
+    python step4_validate.py --numerical-only --subprocess --timeout "$TIMEOUT_VALIDATION" --workers "$WORKERS_ALL"
     
     local count
     count=$(count_files "$VALIDATION_DIR" "*_validation.json")

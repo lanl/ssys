@@ -3,10 +3,12 @@ Tests for ODE solver backends.
 """
 
 import sys
+import types
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import sympy as sp
 
 from ssys.ode_backends import simulate_ode
 from ssys.ode_backends.dae_backend import (
@@ -15,7 +17,12 @@ from ssys.ode_backends.dae_backend import (
     simulate_with_dae_projection,
 )
 from ssys.ode_backends.ida_sundials_backend import IDASundialsUnavailable
-from ssys.ode_backends.interface import simulate_model
+from ssys.ode_backends.interface import (
+    _infer_solver_requirement,
+    simulate_dae,
+    simulate_dae_projection,
+    simulate_model,
+)
 from ssys.ode_backends.roadrunner_backend import (
     _evaluate_complete_gamma_argument,
     _get_antimony_text,
@@ -122,6 +129,88 @@ def test_roadrunner_backend_success_and_initial_condition_override(monkeypatch):
     assert result["y"].tolist() == [[2.5], [1.25]]
     assert result["integrator_stats"]["n_steps"] == 4
     assert FakeRoadRunner.last_instance.integrator_name == "cvode"
+
+
+def test_roadrunner_backend_non_cvode_records_initial_condition_warnings(monkeypatch, capsys):
+    """Non-CVODE runs skip CVODE stats and still surface IC assignment warnings."""
+    model_ir = ModelIR()
+    model_ir.species = {"X"}
+    model_ir.explicit_rates = {"X": "-X"}
+    model_ir.antimony_text = """
+        model test()
+            species X;
+            X' = -X;
+            X = 1;
+        end
+    """
+    model_ir.initials = {"X": 1.0}
+
+    class FakeAntimony:
+        def clearPreviousLoads(self):
+            pass
+
+        def loadAntimonyString(self, text):
+            return 0
+
+        def getLastError(self):
+            return ""
+
+        def getMainModuleName(self):
+            return "test"
+
+        def getSBMLString(self, model_name):
+            return "<sbml/>"
+
+    class FakeSimulationResult:
+        colnames = ["time", "X"]
+
+        def __init__(self):
+            self.data = np.array([[0.0, 1.0], [1.0, 0.5]])
+
+        def __getitem__(self, key):
+            return self.data[key]
+
+    class FakeRoadRunner:
+        def __init__(self, sbml):
+            self.integrator = SimpleNamespace()
+
+        def setIntegrator(self, name):
+            self.integrator_name = name
+
+        def resetToOrigin(self):
+            pass
+
+        def getFloatingSpeciesIds(self):
+            return ["X"]
+
+        def __setitem__(self, key, value):
+            raise RuntimeError(f"{key} is read-only")
+
+        def simulate(self, t0, t_end, n_points):
+            return FakeSimulationResult()
+
+    monkeypatch.setitem(sys.modules, "antimony", FakeAntimony())
+    monkeypatch.setitem(sys.modules, "roadrunner", SimpleNamespace(RoadRunner=FakeRoadRunner))
+
+    result = simulate_with_roadrunner(
+        model_ir,
+        t0=0.0,
+        t_end=1.0,
+        n_points=2,
+        options={"integrator": "gillespie", "log_solver_details": True},
+    )
+
+    assert result["success"] is True
+    assert result["state_names"] == ["X"]
+    assert "n_steps" not in result["integrator_stats"]
+    assert result["integrator_stats"]["initial_condition_warnings"] == [
+        {
+            "stage": "model_initial",
+            "species": "X",
+            "message": "[X] is read-only",
+        }
+    ]
+    assert "Integrator: gillespie" in capsys.readouterr().out
 
 
 def test_roadrunner_backend_reports_antimony_parser_failure(monkeypatch):
@@ -319,6 +408,124 @@ def test_simulate_ode_reports_missing_roadrunner_as_backend_failure(monkeypatch)
     assert "libRoadRunner not available" in result["message"]
 
 
+def test_solver_requirement_inference_uses_metadata_then_model_structure():
+    """Backend selection inference follows metadata, DAE, assignment, then ODE-only order."""
+    configured = ModelIR()
+    configured.solver_requirement = SolverRequirement.DAE_REQUIRED.value
+    algebraic = ModelIR()
+    algebraic.solver_requirement = None
+    algebraic.algebraic_constraints = ["X - 1"]
+    assigned = ModelIR()
+    assigned.solver_requirement = None
+    assigned.assignment_rules = {"Y": "X + 1"}
+    ode_only = ModelIR()
+    ode_only.solver_requirement = None
+
+    assert _infer_solver_requirement(configured) == SolverRequirement.DAE_REQUIRED
+    assert _infer_solver_requirement(algebraic) == SolverRequirement.DAE_REQUIRED
+    assert _infer_solver_requirement(assigned) == SolverRequirement.ODE_WITH_ASSIGNMENT_RULES
+    assert _infer_solver_requirement(ode_only) == SolverRequirement.ODE_ONLY
+
+
+def test_simulate_ode_passes_default_options_to_roadrunner(monkeypatch):
+    """simulate_ode normalizes missing options and annotates successful ODE results."""
+    model_ir = ModelIR()
+    captured = {}
+
+    def fake_roadrunner(model, t0, t_end, n_points, y0_override, options):
+        captured.update({
+            "model": model,
+            "t0": t0,
+            "t_end": t_end,
+            "n_points": n_points,
+            "y0_override": y0_override,
+            "options": options,
+        })
+        return {
+            "success": True,
+            "t": np.array([0.0]),
+            "y": np.array([[1.0]]),
+            "state_names": ["X"],
+            "message": "",
+        }
+
+    monkeypatch.setattr("ssys.ode_backends.roadrunner_backend.simulate_with_roadrunner", fake_roadrunner)
+
+    result = simulate_ode(model_ir, t0=0.0, t_end=2.0, n_points=3)
+
+    assert captured == {
+        "model": model_ir,
+        "t0": 0.0,
+        "t_end": 2.0,
+        "n_points": 3,
+        "y0_override": None,
+        "options": {},
+    }
+    assert result["success"] is True
+    assert result["backend"] == "roadrunner_cvode"
+    assert result["solver_requirement"] == SolverRequirement.ODE_ONLY.value
+    assert result["unsupported_solver_requirement"] is False
+
+
+def test_simulate_dae_rejects_unknown_backend():
+    """Unknown DAE backend names are structured unsupported results."""
+    result = simulate_dae(
+        ModelIR(),
+        t0=0.0,
+        t_end=1.0,
+        n_points=2,
+        options={"backend": "not-a-backend"},
+    )
+
+    assert result["success"] is False
+    assert result["unsupported_solver_requirement"] is True
+    assert result["backend"] == "not-a-backend"
+    assert "Unsupported DAE backend" in result["message"]
+
+
+def test_simulate_dae_projection_reports_import_failure(monkeypatch):
+    """Projection backend import failures are unsupported solver results."""
+    monkeypatch.setitem(sys.modules, "ssys.ode_backends.dae_backend", None)
+
+    result = simulate_dae_projection(ModelIR(), t0=0.0, t_end=1.0, n_points=2)
+
+    assert result["success"] is False
+    assert result["unsupported_solver_requirement"] is True
+    assert result["backend"] == "dae_projection"
+    assert "DAE projection backend unavailable" in result["message"]
+
+
+def test_simulate_model_explicit_ode_only_override_ignores_dae_metadata(monkeypatch):
+    """An explicit ODE-only request overrides model-level DAE metadata."""
+    model_ir = ModelIR()
+    model_ir.algebraic_constraints = ["X - 1"]
+
+    def fake_simulate_ode(*args, **kwargs):
+        return {
+            "success": True,
+            "t": np.array([0.0]),
+            "y": np.array([[1.0]]),
+            "state_names": ["X"],
+            "message": "",
+            "backend": "roadrunner_cvode",
+            "solver_requirement": SolverRequirement.ODE_ONLY.value,
+        }
+
+    monkeypatch.setattr("ssys.ode_backends.interface.simulate_ode", fake_simulate_ode)
+
+    result = simulate_model(
+        model_ir,
+        t0=0.0,
+        t_end=1.0,
+        n_points=2,
+        solver_requirement=SolverRequirement.ODE_ONLY,
+    )
+
+    assert result["success"] is True
+    assert result["backend"] == "roadrunner_cvode"
+    assert result["solver_requirement"] == SolverRequirement.ODE_ONLY.value
+
+
 def test_simulate_model_selects_assignment_rule_backend(monkeypatch):
     """ODE-with-assignment models use the ODE backend with explicit metadata."""
     model_ir = ModelIR()
@@ -403,6 +610,51 @@ def test_dae_projection_evaluates_state_params_and_time():
     np.testing.assert_allclose(result, [2.0, 5.0, 8.0])
 
 
+def test_dae_projection_evaluates_constants_symbols_and_scalar_broadcasts():
+    """Projection expression evaluation broadcasts constants and parameter-only values."""
+    t = np.array([0.0, 1.0, 2.0])
+    y = np.array([[1.0], [2.0], [3.0]])
+    X = sp.Symbol("X")
+
+    constant = _evaluate_expr_over_trajectory(
+        "2.5",
+        t=t,
+        y=y,
+        state_names=["X"],
+        params={},
+    )
+    symbolic = _evaluate_expr_over_trajectory(
+        X + 1,
+        t=t,
+        y=y,
+        state_names=["X"],
+        params={},
+    )
+    param_only = _evaluate_expr_over_trajectory(
+        "K + 1",
+        t=t,
+        y=y,
+        state_names=["X"],
+        params={"K": 2.0},
+    )
+
+    np.testing.assert_allclose(constant, [2.5, 2.5, 2.5])
+    np.testing.assert_allclose(symbolic, [2.0, 3.0, 4.0])
+    np.testing.assert_allclose(param_only, [3.0, 3.0, 3.0])
+
+
+def test_dae_projection_reports_missing_expression_symbol():
+    """Unknown algebraic symbols fail with the missing symbol name."""
+    with pytest.raises(ValueError, match="missing symbol 'Y'"):
+        _evaluate_expr_over_trajectory(
+            "X + Y",
+            t=np.array([0.0]),
+            y=np.array([[1.0]]),
+            state_names=["X"],
+            params={},
+        )
+
+
 def test_dae_projection_projects_existing_and_new_variables():
     """Projection updates existing variables and appends missing algebraic variables."""
     t = np.array([0.0, 1.0])
@@ -431,6 +683,40 @@ def test_dae_projection_projects_existing_and_new_variables():
     assert residual == pytest.approx(97.0)
     assert new_residual == pytest.approx(0.0)
     assert state_names == ["X", "Y", "Z"]
+
+
+def test_dae_projection_skips_auxiliary_already_covered_by_assignment_rule(monkeypatch):
+    """Assignment rules own duplicate auxiliary names during projection."""
+    model_ir = ModelIR()
+    model_ir.params = {}
+    model_ir.assignment_rules = {"Y": "X + 1"}
+    model_ir.solver_requirement = SolverRequirement.DAE_REQUIRED
+
+    def fake_roadrunner(*args, **kwargs):
+        return {
+            "success": True,
+            "t": np.array([0.0, 1.0]),
+            "y": np.array([[1.0], [2.0]]),
+            "state_names": ["X"],
+            "message": "",
+            "backend": "roadrunner_cvode",
+            "integrator_stats": {},
+        }
+
+    monkeypatch.setattr("ssys.ode_backends.dae_backend.simulate_with_roadrunner", fake_roadrunner)
+
+    result = simulate_with_dae_projection(
+        model_ir,
+        t0=0.0,
+        t_end=1.0,
+        n_points=2,
+        options={"auxiliary_defs": {"Y": "X + 99"}},
+    )
+
+    assert result["success"] is True
+    assert result["state_names"] == ["X", "Y"]
+    np.testing.assert_allclose(result["y"][:, 1], [2.0, 3.0])
+    assert result["algebraic_residuals"] == {"Y": 0.0}
 
 
 def test_dae_projection_applies_assignment_rules_and_auxiliary_defs(monkeypatch):
@@ -713,6 +999,253 @@ def test_ida_backend_repairs_user_algebraic_ic_when_requested(monkeypatch):
 
     assert result["success"] is True
     assert FakeIDA.y0.tolist() == [1.0, 2.0]
+
+
+def test_ida_private_helpers_cover_error_and_name_branches(monkeypatch):
+    import ssys.ode_backends.ida_sundials_backend as ida
+
+    compiled = ida._compile_expr("X + k", {"X", "k"})
+    with pytest.raises(ValueError, match="missing value for symbol 'k'"):
+        compiled.evaluate({"X": 1.0})
+
+    assert ida._as_float(object(), default=2.5) == 2.5
+    assert ida._is_zero_expr(object()) is False
+    assert ida._sympify(sp.Symbol("X")) == sp.Symbol("X")
+    assert ida._definition_mentions_state(object(), {"X"}) is True
+
+    model_ir = SimpleNamespace(vars=[sp.Symbol("A")], species={"B"})
+    names = ida._model_variable_names(
+        model_ir,
+        {"C": "1"},
+        {"D": "A"},
+        {"E": "A"},
+        ["F + G + k + time + sin(H)"],
+        {"k": 1.0},
+    )
+
+    assert names == ["A", "B", "C", "D", "E", "F", "G", "H"]
+
+    assert ida._ode_expressions(SimpleNamespace(odes={sp.Symbol("X"): "-X"})) == {"X": "-X"}
+    assert ida._ode_expressions(SimpleNamespace(explicit_rates={"Y": "1"})) == {"Y": "1"}
+    monkeypatch.setattr(
+        "ssys.recaster.build_sym_system",
+        lambda model_ir: SimpleNamespace(odes={sp.Symbol("Z"): "2"}),
+    )
+    assert ida._ode_expressions(SimpleNamespace(reactions=[object()])) == {"Z": "2"}
+    assert ida._ode_expressions(SimpleNamespace()) == {}
+
+
+def test_ida_binding_loader_reports_missing_and_unknown_version(monkeypatch):
+    import ssys.ode_backends.ida_sundials_backend as ida
+
+    monkeypatch.setitem(sys.modules, "sksundae", None)
+    monkeypatch.setitem(sys.modules, "sksundae.ida", None)
+    with pytest.raises(IDASundialsUnavailable, match="uv sync --extra dae"):
+        ida._load_ida_binding()
+
+    fake_package = types.ModuleType("sksundae")
+    fake_ida_module = types.ModuleType("sksundae.ida")
+
+    class FakeIDA:
+        pass
+
+    fake_ida_module.IDA = FakeIDA
+    monkeypatch.setitem(sys.modules, "sksundae", fake_package)
+    monkeypatch.setitem(sys.modules, "sksundae.ida", fake_ida_module)
+
+    def missing_version(distribution_name):
+        assert distribution_name == "scikit-sundae"
+        raise ida.metadata.PackageNotFoundError(distribution_name)
+
+    monkeypatch.setattr(ida.metadata, "version", missing_version)
+
+    binding = ida._load_ida_binding()
+
+    assert binding.package == "scikit-sundae"
+    assert binding.version == "unknown"
+    assert binding.solver_class is FakeIDA
+
+
+def test_ida_implicit_slot_selection_branches():
+    import ssys.ode_backends.ida_sundials_backend as ida
+
+    assert ida._select_implicit_slots(["X"], set(), {"X": "-X"}, [], {}) == []
+
+    with pytest.raises(ida.UnsupportedDAESystem, match="one algebraic variable"):
+        ida._select_implicit_slots(["X"], set(), {"X": "-X"}, ["Z - X"], {})
+
+    selected = ida._select_implicit_slots(
+        ["X", "Z", "W"],
+        {"W"},
+        {"X": "-X", "Z": "0", "W": "0"},
+        ["Z - X"],
+        {},
+    )
+    assert selected == ["Z"]
+
+    preferred = ida._select_implicit_slots(
+        ["X", "Z", "W"],
+        set(),
+        {"X": "-X", "Z": "0", "W": "0"},
+        ["W - X"],
+        {},
+    )
+    assert preferred == ["W"]
+
+
+def test_ida_residual_system_helpers_cover_output_and_reconstructed_ydot():
+    import ssys.ode_backends.ida_sundials_backend as ida
+
+    model_ir = ModelIR()
+    model_ir.species = {"X"}
+    model_ir.params = {"K": 1.0}
+    model_ir.initial = {"X": 1.0}
+    model_ir.explicit_rates = {"X": "-X"}
+    model_ir.assignment_rules = {"Y": "X + K"}
+
+    system = ida._build_residual_system(model_ir, None, {})
+    residual = ida._make_sksundae_residual(system)
+    out = np.empty(len(system.equations), dtype=float)
+
+    returned = residual(0.0, system.y0, system.ydot0, out)
+
+    assert returned is None
+    np.testing.assert_allclose(out, np.zeros_like(out), atol=1.0e-12)
+
+    t = np.array([0.0, 1.0])
+    y = np.array([[1.0, 2.0], [0.5, 1.5]])
+    residuals = ida._trajectory_algebraic_residuals(system, t, y, ydot=None)
+
+    assert residuals["Y"] == pytest.approx(0.0)
+
+    ode_only = ida._build_residual_system(
+        SimpleNamespace(species={"X"}, initial={"X": 1.0}, explicit_rates={"X": "-X"}),
+        None,
+        {},
+    )
+    assert ida._trajectory_algebraic_residuals(ode_only, t, y[:, :1], ydot=None) == {}
+
+
+def test_ida_solution_array_extraction_accepts_supported_shapes_and_rejects_bad_shapes():
+    import ssys.ode_backends.ida_sundials_backend as ida
+
+    object_solution = SimpleNamespace(
+        success=False,
+        t=np.array([0.0, 1.0]),
+        y=np.array([[1.0], [0.5]]),
+        yp=np.array([[-1.0], [-0.5]]),
+        status=-1,
+        message="failed",
+    )
+    success, t, y, ydot, status, message = ida._extract_solution_arrays(object_solution)
+
+    assert success is False
+    assert status == -1
+    assert message == "failed"
+    np.testing.assert_allclose(t, np.array([0.0, 1.0]))
+    np.testing.assert_allclose(y, np.array([[1.0], [0.5]]))
+    np.testing.assert_allclose(ydot, np.array([[-1.0], [-0.5]]))
+
+    values_solution = SimpleNamespace(
+        values=SimpleNamespace(
+            t=np.array([0.0, 1.0]),
+            y=np.array([[1.0, 0.5]]),
+            ydot=np.array([[-1.0, -0.5]]),
+        ),
+        flag=0,
+        message="ok",
+    )
+    success, t, y, ydot, status, message = ida._extract_solution_arrays(values_solution)
+
+    assert success is True
+    assert status == 0
+    assert message == "ok"
+    np.testing.assert_allclose(y, np.array([[1.0], [0.5]]))
+    np.testing.assert_allclose(ydot, np.array([[-1.0], [-0.5]]))
+
+    with pytest.raises(RuntimeError, match="Unsupported IDA solution object"):
+        ida._extract_solution_arrays(object())
+    with pytest.raises(RuntimeError, match="expected a 2-D array"):
+        ida._extract_solution_arrays({"t": [0.0], "y": [1.0]})
+    with pytest.raises(RuntimeError, match="expected a 1-D array"):
+        ida._extract_solution_arrays({"t": [[0.0]], "y": [[1.0]]})
+    with pytest.raises(RuntimeError, match="incompatible time/state shapes"):
+        ida._extract_solution_arrays({"t": [0.0, 1.0], "y": np.ones((3, 1))})
+    with pytest.raises(RuntimeError, match="ydot with shape"):
+        ida._extract_solution_arrays({"t": [0.0], "y": [[1.0]], "yp": [0.0]})
+
+
+def test_ida_simulate_failure_paths_and_solver_options(monkeypatch):
+    import ssys.ode_backends.ida_sundials_backend as ida
+
+    def binding_for(solver_class):
+        return SimpleNamespace(package="fake-sundials", version="1.0", solver_class=solver_class)
+
+    class UnusedIDA:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("solver should not be constructed")
+
+    monkeypatch.setattr(ida, "_load_ida_binding", lambda: binding_for(UnusedIDA))
+    unsupported = ida.simulate_with_ida_sundials(ModelIR(), 0.0, 1.0, 2)
+
+    assert unsupported["success"] is False
+    assert unsupported["unsupported_solver_requirement"] is True
+    assert "no model variables" in unsupported["message"]
+
+    real_build_residual_system = ida._build_residual_system
+
+    def bad_setup(*args, **kwargs):
+        raise RuntimeError("bad setup")
+
+    monkeypatch.setattr(ida, "_build_residual_system", bad_setup)
+    setup_failed = ida.simulate_with_ida_sundials(ModelIR(), 0.0, 1.0, 2)
+
+    assert setup_failed["success"] is False
+    assert setup_failed["unsupported_solver_requirement"] is False
+    assert "bad setup" in setup_failed["message"]
+
+    monkeypatch.setattr(ida, "_build_residual_system", real_build_residual_system)
+
+    model_ir = ModelIR()
+    model_ir.species = {"X"}
+    model_ir.initial = {"X": 1.0}
+    model_ir.explicit_rates = {"X": "-X"}
+
+    class FailingIDA:
+        kwargs = {}
+
+        def __init__(self, residual, **kwargs):
+            FailingIDA.kwargs = kwargs
+
+        def solve(self, t_eval, y0, yp0):
+            return {"success": False, "t": t_eval, "y": np.array([[1.0], [0.5]]), "message": "bad"}
+
+    monkeypatch.setattr(ida, "_load_ida_binding", lambda: binding_for(FailingIDA))
+    failed = ida.simulate_with_ida_sundials(
+        model_ir,
+        0.0,
+        1.0,
+        2,
+        options={"max_num_steps": 123},
+    )
+
+    assert failed["success"] is False
+    assert "solver failed" in failed["message"]
+    assert FailingIDA.kwargs["max_num_steps"] == 123
+
+    class CrashingIDA:
+        def __init__(self, residual, **kwargs):
+            pass
+
+        def solve(self, t_eval, y0, yp0):
+            raise RuntimeError("linear solver failed")
+
+    monkeypatch.setattr(ida, "_load_ida_binding", lambda: binding_for(CrashingIDA))
+    crashed = ida.simulate_with_ida_sundials(model_ir, 0.0, 1.0, 2)
+
+    assert crashed["success"] is False
+    assert "linear solver failed" in crashed["message"]
+    assert crashed["integrator_stats"]["solver_diagnostics"] == "linear solver failed"
 
 
 def test_simulate_ode_interface():

@@ -23,6 +23,7 @@ out/
 out_*/
 output/
 dev/
+release-evidence/
 
 # IDE
 .DS_Store

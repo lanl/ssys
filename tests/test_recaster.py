@@ -1,6 +1,7 @@
 """Tests for core recasting functionality."""
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,24 +14,37 @@ from ssys import (
     recast_to_ssystem,
     ssystem_to_antimony,
 )
+from ssys._recaster.templates import (
+    _expand_function_calls,
+    _find_next_template_call,
+    _parse_function_args,
+    expand_antimony_function_templates,
+)
 
 
 def _minimal_sbml(
     *,
     species: str,
+    compartments: str | None = None,
+    function_definitions: str = "",
+    parameters: str = "",
     reactions: str = "",
     rules: str = "",
     initial_assignments: str = "",
 ) -> str:
+    compartment_block = compartments if compartments is not None else """
+    <listOfCompartments>
+      <compartment id="cell" spatialDimensions="3" size="1" units="litre" constant="true"/>
+    </listOfCompartments>"""
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <sbml xmlns="http://www.sbml.org/sbml/level3/version2/core" level="3" version="2">
   <model id="m" substanceUnits="mole" timeUnits="second" extentUnits="mole">
-    <listOfCompartments>
-      <compartment id="cell" spatialDimensions="3" size="1" units="litre" constant="true"/>
-    </listOfCompartments>
+{compartment_block}
+{function_definitions}
     <listOfSpecies>
 {species}
     </listOfSpecies>
+{parameters}
 {reactions}
 {rules}
 {initial_assignments}
@@ -68,6 +82,165 @@ class TestAntimonyParser:
         assert "X" in ir.species
         assert "X" in ir.explicit_rates
         assert ir.explicit_rates["X"] == "-k*X"
+
+    def test_legacy_parser_records_boundary_const_algebraic_and_symbolic_initials(self):
+        """Small local parser constructs should preserve their diagnostic metadata."""
+        from ssys.recaster import SolverRequirement
+
+        text = """
+        model parser_edges()
+          J0: 2 S -> P; k*S
+          $S' = -k*S
+          const k = 0.5
+          $B = 2.0
+          0 = P - S
+          X = k + 1
+          obs := X + time
+        end
+        """
+
+        ir = parse_antimony(text)
+
+        assert ir.reactions[0].lhs == [(2, "S")]
+        assert ir.boundary == {"S", "B"}
+        assert ir.explicit_rates["S"] == "-k*S"
+        assert ir.params["k"] == 0.5
+        assert ir.algebraic_constraints == ["P - S"]
+        assert ir.solver_requirement == SolverRequirement.DAE_REQUIRED
+        assert ir.initial_exprs["X"] == "k + 1"
+        assert ir.assignment_rules == {"obs": "X + time"}
+
+    def test_parser_helper_branches_are_structured(self):
+        """Tokenization, substitutions, and SBML helper branches have stable contracts."""
+        from ssys._recaster.parsing import (
+            _evaluate_initial_assignment,
+            _iter_kinetic_law_local_parameters,
+            _numeric_param_subs,
+            _replace_formula_identifiers,
+            _sanitize_sbml_identifier,
+            _sympify_sbml_formula,
+            _unique_identifier,
+        )
+        from ssys.recaster import SBMLParseError
+
+        assert parse_antimony("$A + two B").reactions == []
+        assert ssys.recaster.tokenize_species_side("$A + two B") == [
+            (1, "A"),
+            (1, "two B"),
+        ]
+
+        X, k = sp.symbols("X k")
+        assert _numeric_param_subs(X + k, {}) == X + k
+        assert sp.simplify(_numeric_param_subs(X + k, {"k": 2.0}) - (X + 2.0)) == 0
+        assert _replace_formula_identifiers("k + kk + k_1", {"": "skip", "k": "J__k"}) == (
+            "J__k + kk + k_1"
+        )
+        assert _sanitize_sbml_identifier(" 1 bad-id! ", fallback="fallback") == "_1_bad_id"
+        assert _sanitize_sbml_identifier(" !!! ", fallback="fallback") == "fallback"
+        assert _unique_identifier("k", {"k", "k_2"}) == "k_3"
+
+        class LocalKineticLaw:
+            def getNumLocalParameters(self):
+                return 1
+
+            def getLocalParameter(self, idx):
+                assert idx == 0
+                return "local"
+
+            def getNumParameters(self):
+                raise AssertionError("legacy parameter path should not run")
+
+        class LegacyKineticLaw:
+            def getNumParameters(self):
+                return 1
+
+            def getParameter(self, idx):
+                assert idx == 0
+                return "legacy"
+
+        assert _iter_kinetic_law_local_parameters(LocalKineticLaw()) == ["local"]
+        assert _iter_kinetic_law_local_parameters(LegacyKineticLaw()) == ["legacy"]
+
+        all_syms = {"X": X, "k": k}
+        with pytest.raises(SBMLParseError, match="missing math formula"):
+            _sympify_sbml_formula(None, all_syms, source="inline", kind="rate_rule")
+        with pytest.raises(SBMLParseError, match="unsupported function"):
+            _sympify_sbml_formula("f(X)", all_syms, source="inline", kind="rate_rule")
+        with pytest.raises(SBMLParseError, match="unknown identifier"):
+            _sympify_sbml_formula("X + missing", all_syms, source="inline", kind="rate_rule")
+        with pytest.raises(SBMLParseError, match="expected numeric expression"):
+            _sympify_sbml_formula("[1, 2]", all_syms, source="inline", kind="rate_rule")
+
+        scoped = sp.Symbol("reaction_10__k1")
+        scoped_expr = _sympify_sbml_formula(
+            "reaction_10__k1 * 5.9e-4 * X",
+            {"X": X, "reaction_10__k1": scoped},
+            source="inline",
+            kind="rate_rule",
+        )
+        assert sp.simplify(scoped_expr - scoped * sp.Float("5.9e-4") * X) == 0
+
+        assert _evaluate_initial_assignment(
+            "k + 1",
+            all_syms,
+            {"k": 3.0},
+            source="inline",
+            variable="X",
+            warn_initial_assignment_failures=False,
+        ) == 4.0
+        with pytest.warns(RuntimeWarning, match="initial assignment"):
+            assert _evaluate_initial_assignment(
+                "X + missing",
+                all_syms,
+                {},
+                source="inline",
+                variable="X",
+                warn_initial_assignment_failures=True,
+            ) is None
+
+    def test_antimony_sbml_bridge_reports_library_failures(self, monkeypatch):
+        """Antimony conversion failures are classified before SBML parsing."""
+        from ssys.recaster import parse_antimony_via_sbml
+
+        class ParseFailureAntimony:
+            def clearPreviousLoads(self):
+                pass
+
+            def loadAntimonyString(self, text):
+                return -1
+
+            def getLastError(self):
+                return "bad syntax"
+
+        monkeypatch.setitem(sys.modules, "antimony", ParseFailureAntimony())
+        with pytest.raises(ValueError, match="Antimony parsing error: bad syntax"):
+            parse_antimony_via_sbml("not antimony")
+
+        class NoModuleAntimony(ParseFailureAntimony):
+            def loadAntimonyString(self, text):
+                return 0
+
+            def getMainModuleName(self):
+                return ""
+
+        monkeypatch.setitem(sys.modules, "antimony", NoModuleAntimony())
+        with pytest.raises(ValueError, match="Antimony library failed: No module found"):
+            parse_antimony_via_sbml("model m() end")
+
+        class NoSbmlAntimony(NoModuleAntimony):
+            def getMainModuleName(self):
+                return "m"
+
+            def getSBMLString(self, module_name):
+                assert module_name == "m"
+                return ""
+
+            def getLastError(self):
+                return "conversion failed"
+
+        monkeypatch.setitem(sys.modules, "antimony", NoSbmlAntimony())
+        with pytest.raises(ValueError, match="SBML conversion failed: conversion failed"):
+            parse_antimony_via_sbml("model m() end")
 
     def test_function_template_substitution_parenthesizes_expression_arguments(self):
         """Regression: f(x+1) must not become X + 1/(X + 2)."""
@@ -120,6 +293,50 @@ class TestAntimonyParser:
         assert ":=" not in expanded
         antimony.clearPreviousLoads()
         assert antimony.loadAntimonyString(expanded) >= 0, antimony.getLastError()
+
+    def test_function_template_helpers_reject_non_expandable_calls(self):
+        """Template call discovery skips unknown, unbalanced, and wrong-arity calls."""
+        templates = {"f": (["x"], "x + 1")}
+
+        assert _find_next_template_call("g(X)", templates) is None
+        assert _find_next_template_call("f(X", templates) is None
+        assert _find_next_template_call("f(X, Y)", templates) is None
+        assert _expand_function_calls("f(X)", templates, max_depth=0) == "f(X)"
+        assert _expand_function_calls("f(X)", {}) == "f(X)"
+
+    def test_function_template_argument_parser_handles_empty_and_nested_args(self):
+        """Argument splitting preserves nested commas and drops empty argument lists."""
+        assert _parse_function_args("") == []
+        assert _parse_function_args("X, (A + B), f(Y, Z)") == [
+            "X",
+            "(A + B)",
+            "f(Y, Z)",
+        ]
+
+    def test_function_template_expansion_preserves_comments_and_skips_model_boundaries(self):
+        """Executable lines expand while model/end boundaries and comments are preserved."""
+        text = """
+        model templated()
+          f(x) := x + 1 // keep template comment
+          X' = f(X);
+          note = f(2);
+        end
+        """
+
+        expanded = expand_antimony_function_templates(text)
+
+        assert "f(x) :=" not in expanded
+        assert "// keep template comment" in expanded
+        assert "model templated()" in expanded
+        assert "X' = (X + 1);" in expanded
+        assert "note = (2 + 1);" in expanded
+        assert expanded.strip().endswith("end")
+
+    def test_function_template_expansion_noops_without_templates(self):
+        """Models without function-template definitions are returned unchanged."""
+        text = "model plain()\n  X' = -X;\nend"
+
+        assert expand_antimony_function_templates(text) == text
 
 
 class TestSymbolicSystem:
@@ -569,9 +786,12 @@ class TestEpsInitMetadata:
 
         result = recast_to_ssystem(sym)
 
-        # System should use default EPS_INIT or keep 0.0
-        # (depends on whether negative exponents are present)
-        assert result is not None  # Should not crash
+        # The zero initial condition is exact because expanded exponents do not
+        # require the zero-valued pool variable as a denominator.
+        assert result.eps_init is None
+        x_factors = result.factor_map[X]
+        assert result.initials[x_factors[0]] == 0.0
+        assert all(abs(value - 1e-6) > 1e-14 for value in result.initials.values())
 
 
 class TestSbmlParserIcHandling:
@@ -698,6 +918,60 @@ class TestSbmlParserIcHandling:
         assert err.variable == "S"
         assert "unsupported function(s): unsupported" in err.message
 
+    def test_sbml_function_definition_expands_in_kinetic_law(self):
+        """Declared SBML FunctionDefinition helpers are expanded before parsing."""
+        from ssys.recaster import parse_sbml_from_string
+
+        species = """
+      <species id="S" compartment="cell" initialAmount="1" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="P" compartment="cell" initialAmount="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        function_definitions = """
+    <listOfFunctionDefinitions>
+      <functionDefinition id="rate_law">
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+          <lambda>
+            <bvar><ci> k </ci></bvar>
+            <bvar><ci> substrate </ci></bvar>
+            <apply><times/><ci> k </ci><ci> substrate </ci></apply>
+          </lambda>
+        </math>
+      </functionDefinition>
+    </listOfFunctionDefinitions>"""
+        parameters = """
+    <listOfParameters>
+      <parameter id="k" value="0.5" constant="true"/>
+    </listOfParameters>"""
+        reactions = """
+    <listOfReactions>
+      <reaction id="J_fn" reversible="false">
+        <listOfReactants>
+          <speciesReference species="S" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="P" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><ci> rate_law </ci><ci> k </ci><ci> S </ci></apply>
+          </math>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>"""
+        sbml = _minimal_sbml(
+            species=species,
+            function_definitions=function_definitions,
+            parameters=parameters,
+            reactions=reactions,
+        )
+
+        sym = parse_sbml_from_string(sbml)
+        s_sym = sp.Symbol("S", positive=True)
+        p_sym = sp.Symbol("P", positive=True)
+        k_sym = sp.Symbol("k", positive=True)
+
+        assert sp.simplify(sym.odes[s_sym] + k_sym * s_sym) == 0
+        assert sp.simplify(sym.odes[p_sym] - k_sym * s_sym) == 0
+
     def test_malicious_formula_string_rejected_before_sympify(self, monkeypatch):
         """Malicious-looking formula text is reported as parser data, not evaluated."""
         import libsbml
@@ -800,6 +1074,103 @@ class TestSbmlParserIcHandling:
         S = sp.Symbol("S", positive=True)
         assert sym.initials[S] == 0.0
 
+    def test_initial_assignment_can_reference_declared_species_initial_value(self):
+        """SBML InitialAssignments may be numeric expressions over declared species."""
+        from ssys.recaster import parse_sbml_from_string
+
+        species = """
+      <species id="template" compartment="cell" initialAmount="2.5" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="S" compartment="cell" initialAmount="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        initial_assignments = """
+    <listOfInitialAssignments>
+      <initialAssignment symbol="S">
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+          <apply><times/><cn> 2 </cn><ci> template </ci></apply>
+        </math>
+      </initialAssignment>
+    </listOfInitialAssignments>"""
+        sbml = _minimal_sbml(species=species, initial_assignments=initial_assignments)
+
+        sym = parse_sbml_from_string(sbml)
+
+        S = sp.Symbol("S", positive=True)
+        assert sym.initials[S] == 5.0
+
+    def test_formula_identifier_scan_ignores_scientific_notation(self, monkeypatch):
+        """Scientific notation exponents are numeric literals, not identifiers."""
+        import libsbml
+
+        from ssys.recaster import parse_sbml_from_string
+
+        species = """
+      <species id="S" compartment="cell" initialAmount="1" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="P" compartment="cell" initialAmount="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        reactions = """
+    <listOfReactions>
+      <reaction id="J_sci" reversible="false">
+        <listOfReactants>
+          <speciesReference species="S" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="P" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML"><ci> S </ci></math>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>"""
+        sbml = _minimal_sbml(species=species, reactions=reactions)
+        monkeypatch.setattr(libsbml, "formulaToString", lambda _math: "5.9e-4 * S")
+
+        sym = parse_sbml_from_string(sbml)
+
+        S = sp.Symbol("S", positive=True)
+        P = sp.Symbol("P", positive=True)
+        expected = sp.Float("5.9e-4") * S
+        assert sp.simplify(sym.odes[S] + expected) == 0
+        assert sp.simplify(sym.odes[P] - expected) == 0
+
+    def test_declared_keyword_identifier_parses_as_model_symbol(self):
+        """Valid SBML ids such as lambda are model symbols, not Python syntax."""
+        from ssys.recaster import parse_sbml_from_string
+
+        species = """
+      <species id="S" compartment="cell" initialAmount="1" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="P" compartment="cell" initialAmount="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        parameters = """
+    <listOfParameters>
+      <parameter id="lambda" value="0.5" constant="true"/>
+    </listOfParameters>"""
+        reactions = """
+    <listOfReactions>
+      <reaction id="J_lambda" reversible="false">
+        <listOfReactants>
+          <speciesReference species="S" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="P" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><times/><ci> lambda </ci><ci> S </ci></apply>
+          </math>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>"""
+        sbml = _minimal_sbml(
+            species=species,
+            parameters=parameters,
+            reactions=reactions,
+        )
+
+        sym = parse_sbml_from_string(sbml)
+
+        S = sp.Symbol("S", positive=True)
+        P = sp.Symbol("P", positive=True)
+        lambda_sym = sp.Symbol("lambda", positive=True)
+        assert sp.simplify(sym.odes[S] + lambda_sym * S) == 0
+        assert sp.simplify(sym.odes[P] - lambda_sym * S) == 0
+
     def test_same_named_local_parameters_are_scoped_by_reaction(self):
         """Same local parameter ids in different reactions preserve distinct values."""
         from ssys.recaster import parse_sbml_from_string
@@ -857,6 +1228,75 @@ class TestSbmlParserIcHandling:
 
         numeric_subs = {J0_k: sym.params["J0__k"], J1_k: sym.params["J1__k"]}
         assert sp.simplify(sym.odes[P].subs(numeric_subs) - (S - 2 * P)) == 0
+
+    def test_sbml_rules_and_initial_assignments_are_preserved(self):
+        """SBML rate, assignment, algebraic, species, parameter, and compartment data survive."""
+        from ssys.recaster import SolverRequirement, parse_sbml_from_string
+
+        compartments = """
+    <listOfCompartments>
+      <compartment id="cell" spatialDimensions="3" constant="true"/>
+    </listOfCompartments>"""
+        species = """
+      <species id="S" compartment="cell" initialConcentration="1.5" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="B" compartment="cell" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        parameters = """
+    <listOfParameters>
+      <parameter id="k" constant="true"/>
+      <parameter id="obs" constant="false"/>
+    </listOfParameters>"""
+        rules = """
+    <listOfRules>
+      <rateRule variable="S">
+        <math xmlns="http://www.w3.org/1998/Math/MathML"><ci> k </ci></math>
+      </rateRule>
+      <assignmentRule variable="obs">
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+          <apply><plus/><ci> S </ci><ci> k </ci></apply>
+        </math>
+      </assignmentRule>
+      <algebraicRule>
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+          <apply><minus/><ci> obs </ci><ci> S </ci></apply>
+        </math>
+      </algebraicRule>
+    </listOfRules>"""
+        initial_assignments = """
+    <listOfInitialAssignments>
+      <initialAssignment symbol="S">
+        <math xmlns="http://www.w3.org/1998/Math/MathML"><cn> 4 </cn></math>
+      </initialAssignment>
+      <initialAssignment symbol="k">
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+          <apply><divide/><cn> 1 </cn><cn> 7 </cn></apply>
+        </math>
+      </initialAssignment>
+      <initialAssignment symbol="cell">
+        <math xmlns="http://www.w3.org/1998/Math/MathML"><cn> 2 </cn></math>
+      </initialAssignment>
+    </listOfInitialAssignments>"""
+        sbml = _minimal_sbml(
+            compartments=compartments,
+            species=species,
+            parameters=parameters,
+            rules=rules,
+            initial_assignments=initial_assignments,
+        )
+
+        sym = parse_sbml_from_string(sbml)
+
+        S = sp.Symbol("S", positive=True)
+        B = sp.Symbol("B", positive=True)
+        k = sp.Symbol("k", positive=True)
+        assert sym.vars == [S, B]
+        assert sym.initials[S] == 4.0
+        assert sym.initials[B] == 0.0
+        assert sym.params["k"] == pytest.approx(1.0 / 7.0)
+        assert sym.compartments["cell"] == 2.0
+        assert sp.simplify(sym.odes[S] - k) == 0
+        assert sym.assignment_rules == {"obs": "S + k"}
+        assert sym.algebraic_constraints == ["obs - S"]
+        assert sym.solver_requirement == SolverRequirement.DAE_REQUIRED
 
     def test_species_ic_in_params_used_for_auxiliary_ic(self):
         """Test that species ICs in params are used for auxiliary IC."""
@@ -1182,12 +1622,14 @@ class TestSymbolicExponents:
 
         sym = parse_antimony_via_sbml(text)
 
-        # This should NOT raise TypeError
         result = recast_to_ssystem(sym)
 
-        # Should succeed and produce valid output
-        assert result is not None
-        assert len(result.variables) > 0
+        X = sp.Symbol("X", positive=True)
+        h = sp.Symbol("h", positive=True)
+        assert [var.name for var in result.factor_map[X]] == ["Z_1", "Z_2"]
+        assert result.auxiliary_defs == {}
+        assert h in result.equations[0].growth[1].values()
+        assert result.equations[0].growth[1][result.factor_map[X][1]] == -1.0
 
     def test_symbolic_exponent_in_complex_model(self):
         """Test symbolic exponents in realistic model (bistable gene switch)."""
@@ -1211,11 +1653,16 @@ class TestSymbolicExponents:
 
         sym = parse_antimony_via_sbml(text)
 
-        # This should NOT raise TypeError
         result = recast_to_ssystem(sym)
 
-        assert result is not None
-        assert len(result.variables) > 0
+        X = sp.Symbol("X", positive=True)
+        Y = sp.Symbol("Y", positive=True)
+        h = sp.Symbol("h", positive=True)
+        Y_1 = sp.Symbol("Y_1", positive=True)
+        assert result.factor_map[X] == [X]
+        assert result.factor_map[Y] == [Y]
+        assert result.auxiliary_defs == {Y_1: sp.Symbol("K", positive=True) ** h + Y**h}
+        assert any(h in exps.values() for eq in result.equations for exps in [eq.growth[1], eq.decay[1]])
 
 
 class TestCanonicalModeFormatting:

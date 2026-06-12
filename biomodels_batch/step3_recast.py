@@ -28,6 +28,7 @@ import argparse
 import json
 import logging
 import sys
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -266,6 +267,21 @@ def log_failure(model_id: str, mode: str, error_msg: str):
         f.write(f"{explanation}\n")
 
 
+def worker_error_result(model_id: str, mode: str, exc: BaseException) -> dict:
+    """Record a worker-level failure in the same shape as process_model()."""
+    error_msg = f"Worker error: {type(exc).__name__}: {exc}"
+    log_failure(model_id, mode, error_msg)
+    return {
+        "model_id": model_id,
+        "mode": mode,
+        "recast_success": False,
+        "recast_time": 0.0,
+        "validation_attempted": False,
+        "validation_pass": False,
+        "error": error_msg,
+    }
+
+
 def process_model(model_id: str, mode: str, validate: bool = True, timeout: int = 15) -> dict:
     """
     Process a single model: recast and optionally validate.
@@ -336,6 +352,57 @@ def process_model(model_id: str, mode: str, validate: bool = True, timeout: int 
             logger.warning(f"Validation error for {model_id}: {e}")
 
     return result
+
+
+def should_process_model(model_id: str, mode: str, *, resume: bool, retry_timeouts: bool) -> bool:
+    """Return whether a candidate should be processed for the selected mode."""
+    if resume:
+        output_path = Path(config.RECASTS_DIR) / f"{model_id}_{mode}.ant"
+        if output_path.exists():
+            return False
+
+    if retry_timeouts:
+        failure_path = Path(config.FAILURES_DIR) / f"{model_id}_{mode}.log"
+        if not failure_path.exists():
+            return False
+        try:
+            failure_content = failure_path.read_text()
+        except Exception:
+            return False
+        if "Category: TIMEOUT" not in failure_content:
+            return False
+
+    return True
+
+
+def process_models(
+    model_ids: list[str],
+    *,
+    mode: str,
+    validate: bool,
+    timeout: int,
+    workers: int,
+) -> list[dict]:
+    """Process candidate models sequentially or with a process pool."""
+    if workers <= 1:
+        return [
+            process_model(model_id, mode, validate=validate, timeout=timeout)
+            for model_id in tqdm(model_ids, total=len(model_ids), desc="Recasting")
+        ]
+
+    results: list[dict] = []
+    with ProcessPoolExecutor(max_workers=workers) as executor:
+        futures = {
+            executor.submit(process_model, model_id, mode, validate, timeout): model_id
+            for model_id in model_ids
+        }
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Recasting"):
+            model_id = futures[future]
+            try:
+                results.append(future.result())
+            except Exception as exc:
+                results.append(worker_error_result(model_id, mode, exc))
+    return results
 
 
 def generate_batch_summary(results: list[dict]) -> str:
@@ -430,6 +497,12 @@ def main():
         action="store_true",
         help="Delete old results (recasts/, failures/, validation/, validated/) before starting"
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of parallel recast worker processes (default: 1)",
+    )
 
     args = parser.parse_args()
 
@@ -445,6 +518,7 @@ def main():
     logger.info(f"Validate: {not args.no_validate}")
     logger.info(f"Resume: {args.resume}")
     logger.info(f"Retry timeouts only: {args.retry_timeouts}")
+    logger.info(f"Workers: {args.workers}")
 
     # Clean old results if requested
     if args.clean:
@@ -484,39 +558,29 @@ def main():
 
     logger.info(f"Processing {len(df)} models...")
 
-    # Process each model
-    results = []
+    # Select models to process
+    model_ids: list[str] = []
     skipped = 0
-    for _, row in tqdm(df.iterrows(), total=len(df), desc="Recasting"):
+    for _, row in df.iterrows():
         model_id = row["model_id"]
+        if should_process_model(
+            model_id,
+            args.mode,
+            resume=args.resume,
+            retry_timeouts=args.retry_timeouts,
+        ):
+            model_ids.append(model_id)
+        else:
+            skipped += 1
 
-        # Skip if resume mode and output already exists
-        if args.resume:
-            output_path = Path(config.RECASTS_DIR) / f"{model_id}_{args.mode}.ant"
-            if output_path.exists():
-                skipped += 1
-                continue
-
-        # If retry-timeouts mode, only process models that have TIMEOUT failures
-        if args.retry_timeouts:
-            failure_path = Path(config.FAILURES_DIR) / f"{model_id}_{args.mode}.log"
-            if not failure_path.exists():
-                skipped += 1
-                continue
-            # Check if this failure was a timeout
-            try:
-                failure_content = failure_path.read_text()
-                if "Category: TIMEOUT" not in failure_content:
-                    skipped += 1
-                    continue
-            except Exception:
-                skipped += 1
-                continue
-
-        result = process_model(
-            model_id, args.mode, validate=not args.no_validate, timeout=args.timeout
-        )
-        results.append(result)
+    # Process selected models
+    results = process_models(
+        model_ids,
+        mode=args.mode,
+        validate=not args.no_validate,
+        timeout=args.timeout,
+        workers=max(1, args.workers),
+    )
 
     if skipped > 0:
         logger.info(f"Skipped {skipped} models (already have output files)")

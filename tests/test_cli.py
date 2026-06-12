@@ -8,7 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from ssys.cli import build_notebook, main, read_manifest, recast_file
+from ssys.cli import TROUBLESHOOTING_HINT, build_notebook, main, read_manifest, recast_file
+from ssys.types import SBMLParseError
 
 
 class TestReadManifest:
@@ -179,6 +180,279 @@ class TestRecastFile:
         assert called["sbml"] is True
         assert Path(out).exists()
 
+    def test_recast_file_overwrites_existing_output(self, tmp_path: Path):
+        input_ant = tmp_path / "overwrite.ant"
+        input_ant.write_text("""
+            X' = -k*X
+            k = 0.5
+            X = 1.0
+        """)
+        out_path = tmp_path / "overwrite_recast.ant"
+        out_path.write_text("stale output")
+
+        with pytest.warns(DeprecationWarning, match="legacy Antimony parser mode"):
+            _, _, out, _ = recast_file(
+                str(input_ant),
+                str(tmp_path),
+                parser="legacy",
+                validate=False,
+            )
+
+        assert out == str(out_path)
+        output_content = out_path.read_text()
+        assert output_content != "stale output"
+        assert "model overwrite_recast" in output_content
+
+
+class TestCliContracts:
+    """End-user CLI contract tests for exit codes, diagnostics, and artifacts."""
+
+    def _set_argv(self, monkeypatch: pytest.MonkeyPatch, args: list[str]) -> None:
+        monkeypatch.setattr(sys, "argv", ["ssys-recast", *args])
+
+    def _write_model_and_manifest(self, tmp_path: Path, name: str = "model") -> tuple[Path, Path]:
+        input_ant = tmp_path / f"{name}.ant"
+        input_ant.write_text("""
+            X' = -k*X
+            k = 0.5
+            X = 1.0
+        """)
+        manifest = tmp_path / "models.manifest"
+        manifest.write_text(f"{input_ant}\n")
+        return input_ant, manifest
+
+    def test_main_success_writes_recast_and_notebook(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        _, manifest = self._write_model_and_manifest(tmp_path, "success")
+        outdir = tmp_path / "out"
+        self._set_argv(
+            monkeypatch,
+            [
+                "--manifest",
+                str(manifest),
+                "--outdir",
+                str(outdir),
+                "--parser",
+                "legacy",
+            ],
+        )
+
+        with pytest.warns(DeprecationWarning, match="legacy Antimony parser mode"):
+            main()
+        output = capsys.readouterr().out
+
+        assert "Processing 1 model(s)" in output
+        assert "Recast complete" in output
+        assert (outdir / "success_recast.ant").exists()
+        assert (outdir / "recast_report.ipynb").exists()
+
+    def test_main_missing_manifest_exits_nonzero(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        self._set_argv(
+            monkeypatch,
+            [
+                "--manifest",
+                str(tmp_path / "missing.manifest"),
+                "--outdir",
+                str(tmp_path / "out"),
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        stderr = capsys.readouterr().err
+
+        assert exc.value.code == 1
+        assert "Could not read manifest" in stderr
+        assert TROUBLESHOOTING_HINT in stderr
+
+    def test_main_empty_manifest_exits_nonzero(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        manifest = tmp_path / "models.manifest"
+        manifest.write_text("# no models\n\n")
+        self._set_argv(
+            monkeypatch,
+            [
+                "--manifest",
+                str(manifest),
+                "--outdir",
+                str(tmp_path / "out"),
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        stderr = capsys.readouterr().err
+
+        assert exc.value.code == 1
+        assert "Manifest contained no .ant files" in stderr
+        assert TROUBLESHOOTING_HINT in stderr
+
+    def test_main_missing_model_file_reports_recast_failure(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        manifest = tmp_path / "models.manifest"
+        missing_model = tmp_path / "missing.ant"
+        manifest.write_text(f"{missing_model}\n")
+        self._set_argv(
+            monkeypatch,
+            [
+                "--manifest",
+                str(manifest),
+                "--outdir",
+                str(tmp_path / "out"),
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        stderr = capsys.readouterr().err
+
+        assert exc.value.code == 1
+        assert "Recast failed for" in stderr
+        assert "No models were successfully recast" in stderr
+        assert TROUBLESHOOTING_HINT in stderr
+        assert "Traceback" not in stderr
+
+    def test_main_unsupported_model_feature_reports_structured_diagnostic(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        manifest = tmp_path / "models.manifest"
+        model = tmp_path / "unsupported.ant"
+        model.write_text("model unsupported()\nend\n")
+        manifest.write_text(f"{model}\n")
+
+        def unsupported_feature(*args, **kwargs):
+            raise SBMLParseError(
+                "unsupported_feature",
+                None,
+                "events are unsupported",
+                source="unsupported.ant",
+            )
+
+        monkeypatch.setattr("ssys.cli.recast_file", unsupported_feature)
+        self._set_argv(
+            monkeypatch,
+            [
+                "--manifest",
+                str(manifest),
+                "--outdir",
+                str(tmp_path / "out"),
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        stderr = capsys.readouterr().err
+
+        assert exc.value.code == 1
+        assert "unsupported_feature" in stderr
+        assert "events are unsupported" in stderr
+        assert TROUBLESHOOTING_HINT in stderr
+        assert "Traceback" not in stderr
+
+    def test_main_notebook_generation_failure_exits_nonzero(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        input_ant, manifest = self._write_model_and_manifest(tmp_path, "notebook")
+        outdir = tmp_path / "out"
+
+        def fake_recast(*args, **kwargs):
+            return ("notebook", str(input_ant), str(outdir / "notebook_recast.ant"), None)
+
+        def fail_notebook(*args, **kwargs):
+            raise RuntimeError("notebook writer failed")
+
+        monkeypatch.setattr("ssys.cli.recast_file", fake_recast)
+        monkeypatch.setattr("ssys.cli.build_notebook", fail_notebook)
+        self._set_argv(
+            monkeypatch,
+            [
+                "--manifest",
+                str(manifest),
+                "--outdir",
+                str(outdir),
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        stderr = capsys.readouterr().err
+
+        assert exc.value.code == 1
+        assert "Notebook generation failed" in stderr
+        assert "notebook writer failed" in stderr
+        assert TROUBLESHOOTING_HINT in stderr
+
+    def test_main_recast_failure_is_not_masked_by_notebook_failure(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        success = tmp_path / "success.ant"
+        failure = tmp_path / "failure.ant"
+        success.write_text("X' = -X\nX = 1\n")
+        failure.write_text("bad model\n")
+        manifest = tmp_path / "models.manifest"
+        manifest.write_text(f"{success}\n{failure}\n")
+        outdir = tmp_path / "out"
+        notebook_called = False
+
+        def fake_recast(ant_path, *args, **kwargs):
+            if ant_path == str(failure):
+                raise RuntimeError("parser failed")
+            return ("success", str(success), str(outdir / "success_recast.ant"), None)
+
+        def fail_notebook(*args, **kwargs):
+            nonlocal notebook_called
+            notebook_called = True
+            raise RuntimeError("notebook writer failed")
+
+        monkeypatch.setattr("ssys.cli.recast_file", fake_recast)
+        monkeypatch.setattr("ssys.cli.build_notebook", fail_notebook)
+        self._set_argv(
+            monkeypatch,
+            [
+                "--manifest",
+                str(manifest),
+                "--outdir",
+                str(outdir),
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            main()
+        stderr = capsys.readouterr().err
+
+        assert exc.value.code == 1
+        assert notebook_called is False
+        assert "Recast failures:" in stderr
+        assert "parser failed" in stderr
+        assert TROUBLESHOOTING_HINT in stderr
+        assert "Notebook generation failed" not in stderr
+
 
 class TestValidationCliExit:
     """Tests for hard-fail CLI validation semantics."""
@@ -195,7 +469,10 @@ class TestValidationCliExit:
         return input_ant, manifest
 
     def test_validate_exits_nonzero_when_report_fails(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
     ):
         _, manifest = self._write_manifested_model(tmp_path, "failed")
         outdir = tmp_path / "out"
@@ -225,10 +502,13 @@ class TestValidationCliExit:
             ],
         )
 
-        with pytest.raises(SystemExit) as exc:
-            main()
+        with pytest.warns(DeprecationWarning, match="legacy Antimony parser mode"):
+            with pytest.raises(SystemExit) as exc:
+                main()
+        stderr = capsys.readouterr().err
 
         assert exc.value.code == 1
+        assert TROUBLESHOOTING_HINT in stderr
         report = json.loads((outdir / "failed_validation.json").read_text())
         assert report["overall_pass"] is False
 
@@ -263,11 +543,62 @@ class TestValidationCliExit:
             ],
         )
 
-        main()
+        with pytest.warns(DeprecationWarning, match="legacy Antimony parser mode"):
+            main()
 
         report = json.loads((outdir / "best_effort_validation.json").read_text())
         assert report["overall_pass"] is False
         assert (outdir / "recast_report.ipynb").exists()
+
+    def test_partial_validation_profile_is_not_reported_as_validated(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ):
+        _, manifest = self._write_manifested_model(tmp_path, "structural")
+        outdir = tmp_path / "out"
+        captured_kwargs = {}
+
+        def fake_validate_recast_pair(*args, output_json=None, **kwargs):
+            assert output_json is not None
+            captured_kwargs.update(kwargs)
+            Path(output_json).write_text(json.dumps({
+                "overall_pass": True,
+                "summary": "forced structural pass",
+                "validation_profile": {
+                    "name": kwargs["profile"],
+                    "description": "structural smoke",
+                    "required_tests": ["generated_output", "parser", "mapping"],
+                },
+            }))
+            return SimpleNamespace(overall_pass=True, summary="forced structural pass")
+
+        monkeypatch.setattr("ssys.validator.validate_recast_pair", fake_validate_recast_pair)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "ssys-recast",
+                "--manifest",
+                str(manifest),
+                "--outdir",
+                str(outdir),
+                "--parser",
+                "legacy",
+                "--validate",
+                "--validation-profile",
+                "structural",
+            ],
+        )
+
+        with pytest.warns(DeprecationWarning, match="legacy Antimony parser mode"):
+            main()
+        output = capsys.readouterr().out
+
+        assert captured_kwargs["profile"] == "structural"
+        assert "Validation profile 'structural' passed 1/1 models" in output
+        assert "Validated 1/1 models" not in output
 
     def test_validate_exits_nonzero_and_writes_report_for_invalid_recast(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

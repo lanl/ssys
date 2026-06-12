@@ -3,7 +3,11 @@
 
 This toolkit converts ordinary differential equation (ODE) models into **S‑System** or **GMA** form and writes the result back to Antimony. The command-line interface batch-processes **Antimony** models and generates **Jupyter notebook** verification reports; the Python library can also parse SBML files directly.
 
-**Release maturity:** ssys is currently published as alpha software. Treat the APIs and generated report format as subject to change until the release gates in `dev/punchlist2.md` and `RELEASE_CHECKLIST.md` are closed.
+**Release maturity:** ssys is alpha software. ssys supports Python 3.10, 3.11, and 3.12. Python 3.13 and NumPy 2.x are not advertised for this release because the RoadRunner-backed validation stack currently requires NumPy 1.x. Treat the APIs, generated Antimony details, and validation-report format as subject to change until the local release gates in `dev/punchlist3.md` and `RELEASE_CHECKLIST.md` are closed.
+
+**Scope:** current release work is local-first. Local artifact builds, local validation reports, local benchmark evidence, and local release-evidence directories are the source of truth. Hosted documentation, hosted CI, public issue links, and release uploads are deferred until public project infrastructure exists.
+
+**Trust boundary:** ssys treats Antimony and SBML inputs as trusted local scientific model files, not as safe untrusted uploads. Do not expose the CLI or parser directly to arbitrary user-submitted model text in a multi-tenant or security-sensitive service.
 
 ---
 
@@ -23,6 +27,10 @@ ssys/
   test_models3/           # 40 models with published recastings
   test_models4/           # 20 systems biology models
   tests/                  # Unit tests
+  PUBLIC_API.md           # Stable public API and compatibility policy
+  CORRECTNESS_SPEC.md     # Supported correctness contract and validation limits
+  PARSER_TRUST_BOUNDARY.md # Parser threat model and trusted-input audit
+  ARCHITECTURE.md         # Local architecture and ownership map
   RECASTING.md            # Recasting theory and rules
   TEST_MODELS.md          # Test model collection documentation
   README.md               # This file
@@ -32,40 +40,69 @@ ssys/
 
 ## Installation
 
-### Quick Setup with uv (Recommended)
+Use [uv](https://astral.sh/uv) for local development and release checks.
 
-Use [uv](https://astral.sh/uv) for fast, reliable Python environment management:
+### Local Checkout
+
+Create a local environment from the checkout:
 
 ```bash
-# Install uv (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-source $HOME/.local/bin/env
+uv sync --python 3.12 --extra dev
+uv run ssys-recast --help
+```
 
-# One-time setup - creates ssys_dev environment
+Run a validation-enabled recast with the strict profile:
+
+```bash
+uv run ssys-recast --manifest test_models1/models.manifest \
+  --outdir out_test_models1 \
+  --mode simplified \
+  --validate \
+  --validation-profile strict
+```
+
+`strict` is the release-grade local validation profile. A model is not counted
+as validated when a required check is `failed`, `unsupported`,
+`not_attempted`, `timeout`, or `inconclusive`.
+
+### Named Development Environment
+
+The repository also keeps a convenience script for a named `ssys_dev`
+environment:
+
+```bash
 ./setup_dev_env.sh
-
-# Activate environment
 source ssys_dev/bin/activate
 ```
 
-The script creates a `ssys_dev` virtual environment using uv and installs ssys with all required dependencies including libRoadRunner, Antimony, and python-libsbml for SBML-based parsing.
+That script installs the `dev` extra. Use `uv sync` directly when you need
+optional extras such as `dae` or `jax`.
 
-### Manual Installation (Alternative)
+### Optional Extras
 
 ```bash
-# Create virtual environment
-uv venv ssys_dev
-source ssys_dev/bin/activate
+# Development tools: pytest, ruff, mypy, jsonschema, Jupyter/IPython
+uv sync --extra dev
 
-# Install in editable mode with all development dependencies
-uv pip install -e ".[dev]"
+# DAE trajectory validation through scikit-sundae/SUNDIALS IDA
+uv sync --extra dev --extra dae
+
+# Optional JAX numerical diagnostics
+uv sync --extra dev --extra jax
 ```
+
+The base install includes the SBML-first parser and ODE trajectory dependencies:
+libRoadRunner, Antimony, and python-libsbml. The `dae` extra is required for
+DAE-required trajectory validation; missing DAE dependencies are reported as
+`unsupported`, not as validation passes. The `jax` extra is capped below
+versions that require NumPy 2.x and is optional diagnostic acceleration, not a
+release-critical dependency.
 
 ---
 
-## Requirements
+## Requirements And Limits
 
-- Python 3.10, 3.11, or 3.12
+- Python 3.10, 3.11, and 3.12
 - sympy ≥1.12 (symbolic math)
 - numpy ≥1.24,<2 (RoadRunner 2.7.x compatibility)
 - scipy ≥1.10
@@ -75,9 +112,43 @@ uv pip install -e ".[dev]"
 - **antimony ≥2.13** (Antimony parsing via SBML)
 - **python-libsbml ≥5.20** (SBML model representation)
 
+## Dependency And Supply-Chain Checks
+
+Local release review should record dependency evidence with:
+
+```bash
+python tools/check_dependency_risk.py \
+  --evidence-dir release-evidence/dependency-risk
+```
+
+The command verifies that `uv.lock` is up to date, exports all dependency
+extras to `requirements-all-extras.txt`, records Python/platform metadata, and
+runs `pip-audit` to write a local vulnerability report. Use
+`--skip-pip-audit` only for offline development checks; it is not sufficient
+for release evidence.
+
+After the local gates have written their evidence directories, create a hashed
+manifest for the release-candidate evidence tree:
+
+```bash
+uv run python tools/archive_release_evidence.py \
+  --evidence-dir release-evidence \
+  --require artifact-smoke \
+  --require dependency-risk \
+  --require biomodels \
+  --require performance
+```
+
+The manifest records file sizes and SHA-256 hashes for local evidence files and
+artifacts under `dist/`. The `release-evidence/` directory is ignored by git and
+is intended for local release-candidate records, not source control.
+
 ## Input Trust Boundary
 
-ssys treats Antimony and SBML inputs as trusted scientific model files, not as safe untrusted uploads. Do not run the CLI or parser service directly on arbitrary user-submitted model text in a multi-tenant or security-sensitive environment. Parser hardening rejects malformed symbolic expressions where practical, but the supported threat model is trusted research inputs from local files.
+ssys treats Antimony and SBML inputs as trusted scientific model files, not as safe untrusted uploads. Parser hardening rejects malformed symbolic expressions where practical, but the supported threat model is trusted research inputs from local files.
+
+See [PARSER_TRUST_BOUNDARY.md](PARSER_TRUST_BOUNDARY.md) for the local parser
+audit and parser-mode decision.
 
 ---
 
@@ -103,6 +174,8 @@ ssys-recast --manifest test_models1/models.manifest \
   - `sbml`: Parses Antimony by converting through SBML with the reference Antimony implementation
   - `legacy`: Hand-rolled parser (deprecated)
 - `--validate`: Run mathematical correctness validation on each recast
+- `--validation-profile`: Named validation profile to run with `--validate`
+  (default: `strict`)
 
 ### Manifest Format
 
@@ -126,19 +199,124 @@ For each input model:
 
 ## Validation
 
-The validator performs three independent tests to verify mathematical correctness:
+Validation reports are fail-closed: `overall_pass` is true only when every
+required check for the selected profile returns `pass`. Unsupported,
+not-attempted, timed-out, inconclusive, and failed required checks are not valid
+passes. JSON reports include a machine-readable `reason` for every non-pass
+test result, record the selected validation profile, and include
+`schema_version`.
 
-### Test Suite
+Validation-report JSON is covered by a packaged JSON Schema. The current schema
+version is `1.0` and can be loaded from Python with:
 
-1. **Symbolic Test**: Proves exact equivalence using the Jacobian chain rule. Tests whether `J_Φ(Z) · f_recast(Z) = f_orig(Φ(Z))` simplifies to zero symbolically.
+```python
+import ssys
 
-2. **Numerical Test**: Validates equivalence at 1000 random sample points with ε = 10⁻⁵ threshold.
+schema = ssys.load_validation_report_schema()
+```
 
-3. **Trajectory Test**: Simulates both original and recast models, compares trajectories with 3.0% error threshold.
+Incompatible report-format changes must increment `schema_version`. Additive
+stable fields must update the packaged schema and local schema-validation tests.
 
-### Validation Logic
+### Profiles
 
-**Default verdict uses AND logic**: A recast is considered **valid only if all requested tests pass**. The CLI and default API call request all three tests, so symbolic, numerical, and trajectory checks must all pass.
+| Profile | Intended use | Required checks |
+| --- | --- | --- |
+| `strict` | Release-grade local validation and the default for `--validate`. The CLI only reports models as "validated" for this profile. | Generated-output roundtrip, parser, mapping, symbolic, numerical, trajectory, algebraic residuals, auxiliary identities |
+| `structural` | Fast artifact or parser smoke where solver-backed evidence is not needed. | Generated-output roundtrip, parser, mapping |
+| `symbolic` | Exact symbolic proof work without numerical simulation. | Generated-output roundtrip, parser, mapping, symbolic, auxiliary identities |
+| `numerical` | Pointwise numerical support without trajectories. | Generated-output roundtrip, parser, mapping, numerical, auxiliary identities |
+| `trajectory` | Solver-backed trajectory support. | Generated-output roundtrip, parser, mapping, trajectory, algebraic residuals, auxiliary identities |
+
+### Test Families
+
+1. **Generated-output roundtrip**: Parses the emitted Antimony/SBML artifact and
+   rejects invalid generated files.
+
+2. **Parser and mapping checks**: Confirm that original and recast models parse
+   and that every original observable has a reconstruction mapping.
+
+3. **Symbolic Test**: Proves exact equivalence using the Jacobian chain rule. Tests whether `J_Φ(Z) · f_recast(Z) = f_orig(Φ(Z))` simplifies to zero symbolically.
+
+4. **Numerical Test**: Validates equivalence at 1000 deterministic random
+   sample points with ε = 10⁻⁵ threshold. Sampling is log-uniform over positive
+   domains, expands state ranges from finite positive model initial values, uses
+   `@SIM` time metadata when present, and records the seed, sampled ranges, and
+   parameter values in the validation report.
+
+5. **Trajectory Test**: Simulates both original and recast models, compares
+   trajectories with a 3.0% peak-scaled error threshold, and reports algebraic
+   residual evidence when constraints or lifted auxiliaries require it. Reports
+   include absolute, relative, and scaled errors, the scaling method, worst
+   variable/time, solver backends, solver tolerances, output-step diagnostics,
+   and whether recast trajectories were interpolated to the original time grid.
+
+6. **Auxiliary identity checks**: Verify generated auxiliary definitions, observable
+   assignment rules, and algebraic residuals needed to reconstruct original variables.
+
+### Interpretation
+
+- `symbolic` evidence is an exact algebraic proof when SymPy simplification can
+  reduce the chain-rule identity to zero. A symbolic failure is a failed proof,
+  not a numerical tolerance issue.
+- `numerical` evidence is pointwise support over sampled domains. It can find
+  counterexamples but does not prove global equivalence. Invalid domains,
+  non-finite sampled values, and singular surfaces are non-pass diagnostics.
+- `trajectory` evidence is solver-backed behavioral support over a time grid. It
+  depends on solver availability, solver tolerances, model metadata, and the
+  documented trajectory threshold. The default 3.0% threshold is a support
+  threshold for solver-backed behavior, not proof; exact claims require
+  symbolic validation.
+- `structural` evidence proves generated-output roundtrip, parser, and mapping
+  contracts only. It is useful for smoke tests, not for a validated scientific
+  claim.
+- Auxiliary identity and algebraic residual checks protect the generated
+  variables and assignment rules that connect recast state back to original
+  observables.
+
+Failed report excerpt:
+
+```json
+{
+  "schema_version": "1.0",
+  "validation_profile": {"name": "strict"},
+  "overall_pass": false,
+  "overall_result": "failed",
+  "summary": "Validation FAILED: at least one required check failed",
+  "tests": {
+    "symbolic": {
+      "name": "symbolic_equivalence",
+      "result": "failed",
+      "reason": "failed",
+      "details": "Symbolic expressions differ",
+      "counterexamples": [{"variable": "X"}],
+      "metadata": {}
+    }
+  }
+}
+```
+
+Unsupported report excerpt:
+
+```json
+{
+  "schema_version": "1.0",
+  "validation_profile": {"name": "strict"},
+  "overall_pass": false,
+  "overall_result": "unsupported",
+  "summary": "Validation UNSUPPORTED: a required backend is unavailable",
+  "tests": {
+    "trajectory": {
+      "name": "trajectory_comparison",
+      "result": "unsupported",
+      "reason": "unsupported",
+      "details": "libRoadRunner/CVODE or IDA/SUNDIALS backend unavailable",
+      "counterexamples": [],
+      "metadata": {"required": true}
+    }
+  }
+}
+```
 
 **Example output**:
 ```
@@ -187,7 +365,11 @@ Options:
 | `test_models4/` | Systems biology models | 20 |
 | **Total** | | **117** |
 
-See [TEST_MODELS.md](TEST_MODELS.md) for complete model documentation and [RECASTING.md](RECASTING.md) for recasting theory.
+See [TEST_MODELS.md](TEST_MODELS.md) for complete model documentation,
+[RECASTING.md](RECASTING.md) for recasting theory, and
+[CORRECTNESS_SPEC.md](CORRECTNESS_SPEC.md) for the supported correctness contract.
+Public API stability and compatibility shims are documented in
+[PUBLIC_API.md](PUBLIC_API.md).
 
 ### pytest Integration Tests
 
@@ -196,7 +378,10 @@ The full integration test suite validates all 117 models in both modes:
 ```bash
 # Run full integration suite (~3 min; requires the DAE extra)
 uv sync --extra dev --extra dae
-pytest tests/test_integration.py -m slow -v
+SSYS_REQUIRE_DAE_VALIDATION=1 pytest tests/test_integration.py -m slow -v
+
+# Run backend cross-checks for representative ODE/DAE fixtures
+SSYS_REQUIRE_DAE_VALIDATION=1 pytest tests/test_solver_cross_checks.py -v
 
 # Skip slow integration tests during rapid development
 pytest -m "not slow"
@@ -204,6 +389,104 @@ pytest -m "not slow"
 # Run a specific model directory
 pytest tests/test_integration.py -k "test_models1"
 ```
+
+### Source Distribution Tests
+
+The source distribution includes `tests/` and the four committed model fixture directories
+(`test_models1/` through `test_models4/`). From a freshly unpacked sdist, run the fast
+artifact smoke test with:
+
+```bash
+python -m pip install . pytest
+python -m pytest -o addopts= tests/test_integration.py -m "integration and not slow" -v
+```
+
+To run the full 117-model validation suite from the unpacked sdist, install the DAE extra
+and use the slow integration command above.
+
+### Local Artifact Smoke
+
+To build local release artifacts and verify both installed distribution formats:
+
+```bash
+python tools/local_artifact_smoke.py --all-supported-pythons \
+  --evidence-dir release-evidence/artifact-smoke
+```
+
+The command enforces a clean git tree by default, builds wheel and sdist artifacts, installs
+each artifact in clean virtual environments, runs `ssys-recast --version`, a tiny recast,
+a validation-enabled recast, a public API import smoke, and the unpacked-sdist fast test.
+It writes logs, dependency freezes, artifact hashes, and `summary.json` under the evidence
+directory.
+
+### BioModels Benchmark Evidence
+
+The BioModels benchmark has a local evidence wrapper around
+`biomodels_batch/run_benchmark.sh`. For release-candidate evidence, use the
+wheel built by the local artifact smoke gate so the benchmark imports from the
+installed artifact rather than the source checkout. Replace the artifact path
+with the wheel path recorded in `release-evidence/artifact-smoke/summary.json`:
+
+```bash
+uv run python tools/run_biomodels_benchmark.py \
+  --artifact release-evidence/artifact-smoke/dist/ssys-0.5.5-py3-none-any.whl \
+  --evidence-dir release-evidence/biomodels \
+  --from-stage filter \
+  --force \
+  --min-candidates 900 \
+  --min-recasts 800 \
+  --min-validation-reports 200 \
+  --min-validated 200
+```
+
+The wrapper copies the tracked BioModels snapshot into the evidence directory,
+installs the artifact in an isolated virtual environment, records the benchmark
+command, runtime, return code, dependency freeze, Python/platform metadata,
+model counts, status classifications, validation profile/result/reason counts,
+representative validation reports, and key benchmark outputs under the evidence
+directory. Use `--skip-run` only to summarize existing local benchmark outputs
+during development; release evidence should run the benchmark command from the
+installed artifact.
+
+### Critical Coverage Gate
+
+For local release-candidate review, run the non-slow suite with branch coverage and
+enforce the critical-module thresholds:
+
+```bash
+uv run python tools/check_critical_coverage.py --run-pytest \
+  --coverage-json release-evidence/critical-coverage.json
+```
+
+The gate requires at least 90% statement coverage and 85% branch coverage for the
+critical recasting, parsing, formatting, validation, and solver-backend modules.
+
+### Maintainability Gate
+
+Critical modules also have a local maintainability baseline for module length,
+maximum function length, and a simple cyclomatic complexity score:
+
+```bash
+uv run python tools/check_maintainability.py
+```
+
+The baseline is stored in `tools/maintainability_baseline.json`. Lower metrics
+are allowed and should be committed after refactors; increases fail the local
+gate until they are reduced or intentionally reviewed.
+
+### Performance Budget Gate
+
+Representative recast and validation workflows have local performance budgets:
+
+```bash
+uv run python tools/check_performance_budgets.py \
+  --evidence-dir release-evidence/performance
+```
+
+The budgets are stored in `tools/performance_budgets.json`. Each task runs in a
+separate Python subprocess with a deterministic timeout, records stdout/stderr
+logs and task metadata, and writes `summary.json` under the evidence directory.
+The gate fails on task errors, timeouts, or budget overruns.
 
 ### Viewing the Notebook Reports
 
@@ -215,7 +498,7 @@ Each model entry shows:
 - Original and recast Antimony code
 - LaTeX equations (original and S-system)
 - Numerical simulation comparison plots
-- Validation results (symbolic + numerical + trajectory)
+- Validation profile results
 - System classification
 
 ---
@@ -306,7 +589,8 @@ from ssys.validator import validate_recast_pair
 
 report = validate_recast_pair(
     original_file="test_models1/m01_exp_decay.ant",
-    recast_file="out_test_models1/m01_exp_decay_recast.ant"
+    recast_file="out_test_models1/m01_exp_decay_recast.ant",
+    profile="strict",
 )
 
 print(f"Overall pass: {report.overall_pass}")
@@ -429,7 +713,8 @@ The ε-regularization approach:
 - May introduce sensitivity near `t=0`
 - May break exact conservation laws that depend on zeros
 
-Alternative strategies for exact zero handling are documented as issues at the online repository.
+Alternative strategies for exact zero handling should be tracked in local design notes until
+public project infrastructure exists.
 
 ---
 
@@ -448,20 +733,69 @@ See [RECASTING.md](RECASTING.md) for detailed worked examples covering:
 
 ## Troubleshooting
 
-**"Module not found" error:**
-- Ensure environment is activated: `source ssys_dev/bin/activate`
+**Environment or import errors:**
+- From a `uv sync` environment, run commands through `uv run ...`.
+- From the named helper environment, activate with
+  `source ssys_dev/bin/activate`.
+- If the named environment is stale or corrupted, recreate it with
+  `./setup_dev_env.sh --force`.
 
 **Parser errors:**
-- Check for unsupported constructs (modules, events)
+- The default `--parser sbml` path parses Antimony through the reference
+  Antimony implementation and then through SBML/libSBML.
+- Unsupported features such as SBML events, delays, constraints, unknown
+  functions, duplicate rate rules, malformed Antimony, and missing math
+  formulas are rejected before a successful recast artifact is produced.
+- `--parser legacy` is compatibility-only and deprecated. Prefer `--parser
+  sbml` for local release evidence.
+- Inputs are trusted local scientific model files, not safe untrusted uploads;
+  see [PARSER_TRUST_BOUNDARY.md](PARSER_TRUST_BOUNDARY.md).
 
-**Validation failures:**
-- Check the validation JSON for which test failed
-- Symbolic failures may be due to SymPy simplification limits
-- Trajectory failures may indicate numerical instability
+**Missing RoadRunner/CVODE:**
+- ODE and assignment-rule trajectory validation require libRoadRunner/CVODE.
+- If RoadRunner is unavailable, required trajectory checks report
+  `unsupported` instead of passing. Inspect the validation JSON `tests`
+  entries for `result`, `reason`, `details`, and backend metadata.
+- Re-sync the base environment with `uv sync --extra dev` before debugging
+  trajectory failures.
 
-**Simulation failures:**
-- RoadRunner is required for SBML-based simulation
-- Check parameter values for reasonableness
+**Missing DAE backend:**
+- DAE-required trajectory validation requires the `dae` extra:
+  `uv sync --extra dev --extra dae`.
+- Local release-candidate DAE checks should run with
+  `SSYS_REQUIRE_DAE_VALIDATION=1`; missing IDA/SUNDIALS support is then a
+  failing release-gate condition.
+- Normal development runs may report missing DAE support as `unsupported`, but
+  `unsupported` is never a validation pass.
+
+**Numerical sampling failures:**
+- `invalid_sampling_domain` means the model metadata did not provide a usable
+  finite positive sampling domain for a required numerical check.
+- `nonfinite_sample` means a sampled point produced a non-finite value, often
+  because the sampled domain touched a singular surface.
+- Validation reports record the deterministic seed, sampled ranges, parameter
+  values, threshold, and counterexample metadata needed to reproduce the
+  failure.
+
+**Trajectory validation mismatches:**
+- Trajectory validation is solver-backed support, not symbolic proof.
+- Check the report metadata for absolute, relative, and scaled errors, worst
+  variable/time/value, solver backend, tolerances, output-step diagnostics, and
+  interpolation status.
+- A `failed` trajectory check can indicate a recasting error, parameter/domain
+  issue, solver failure, or a model that needs symbolic rather than
+  trajectory-based evidence. Confirm with the `symbolic` or `numerical`
+  profile before treating it as a transformation bug.
+
+**Artifact install or release-gate failures:**
+- Run `python tools/local_artifact_smoke.py --allow-dirty` during development
+  to inspect local wheel/sdist smoke logs.
+- Release evidence should omit `--allow-dirty` and should archive command logs,
+  dependency freezes, validation reports, artifact hashes, and
+  `summary.json` under a local `release-evidence/` directory.
+- Run `python3 tools/check_release_metadata.py` after changing README,
+  changelog, release notes, citation metadata, package metadata, or maturity
+  wording.
 
 ---
 

@@ -110,8 +110,6 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.10", "3.11", "3.12"]
     steps:
-    - uses: actions/checkout@v4
-
     - name: Download built packages
       uses: actions/download-artifact@v4
       with:
@@ -136,21 +134,39 @@ jobs:
         venv = pathlib.Path(".wheel-smoke")
         python_exe = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
-        subprocess.check_call([str(python_exe), "-m", "pip", "install", *glob.glob("dist/*.whl")])
+        wheels = glob.glob("dist/*.whl")
+        if len(wheels) != 1:
+            raise SystemExit(f"expected exactly one wheel, found {wheels}")
+        subprocess.check_call([str(python_exe), "-m", "pip", "install", wheels[0]])
         PY
 
-    - name: Run installed CLI smoke workflow
+    - name: Run installed wheel smoke workflows
       shell: bash
       run: |
         python - <<'PY'
+        import json
         import os
         import pathlib
         import subprocess
         import tempfile
 
         venv = pathlib.Path(".wheel-smoke")
+        python_exe = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         recast = venv / ("Scripts/ssys-recast.exe" if os.name == "nt" else "bin/ssys-recast")
         tmpdir = pathlib.Path(tempfile.mkdtemp())
+        subprocess.check_call(
+            [
+                str(python_exe),
+                "-c",
+                (
+                    "import importlib.metadata; import ssys; "
+                    "assert ssys.__version__ == importlib.metadata.version('ssys'); "
+                    "assert callable(ssys.recast_to_ssystem); "
+                    "assert callable(ssys.ssystem_to_antimony)"
+                ),
+            ],
+            cwd=tmpdir,
+        )
         model = tmpdir / "decay.ant"
         model.write_text(
             "\n".join([
@@ -167,10 +183,237 @@ jobs:
         manifest.write_text(f"{model}\n")
         outdir = tmpdir / "out"
         subprocess.check_call([str(recast), "--version"])
-        subprocess.check_call([str(recast), "--manifest", str(manifest), "--outdir", str(outdir)])
+        subprocess.check_call(
+            [
+                str(recast),
+                "--manifest",
+                str(manifest),
+                "--outdir",
+                str(outdir),
+                "--mode",
+                "simplified",
+                "--parser",
+                "sbml",
+            ],
+            cwd=tmpdir,
+        )
         output = outdir / "decay_recast.ant"
         if not output.exists() or output.stat().st_size == 0:
             raise SystemExit(f"missing smoke output: {output}")
+
+        validated_outdir = tmpdir / "out_validated"
+        subprocess.check_call(
+            [
+                str(recast),
+                "--manifest",
+                str(manifest),
+                "--outdir",
+                str(validated_outdir),
+                "--mode",
+                "simplified",
+                "--parser",
+                "sbml",
+                "--validate",
+            ],
+            cwd=tmpdir,
+        )
+        report_path = validated_outdir / "decay_validation.json"
+        if not report_path.exists():
+            raise SystemExit(f"missing validation report: {report_path}")
+        report = json.loads(report_path.read_text())
+        if report.get("overall_pass") is not True:
+            raise SystemExit(f"validation smoke did not pass: {report}")
+        PY
+
+  sdist-artifact-smoke:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+    - name: Download built packages
+      uses: actions/download-artifact@v4
+      with:
+        name: dist-packages
+        path: dist/
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Install sdist in isolated environment
+      shell: bash
+      run: |
+        python -m venv .sdist-smoke
+        python - <<'PY'
+        import glob
+        import os
+        import pathlib
+        import subprocess
+
+        venv = pathlib.Path(".sdist-smoke")
+        python_exe = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
+        sdists = glob.glob("dist/*.tar.gz")
+        if len(sdists) != 1:
+            raise SystemExit(f"expected exactly one sdist, found {sdists}")
+        subprocess.check_call([str(python_exe), "-m", "pip", "install", sdists[0]])
+        PY
+
+    - name: Run installed sdist smoke workflows
+      shell: bash
+      run: |
+        python - <<'PY'
+        import json
+        import os
+        import pathlib
+        import subprocess
+        import tempfile
+
+        venv = pathlib.Path(".sdist-smoke")
+        python_exe = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        recast = venv / ("Scripts/ssys-recast.exe" if os.name == "nt" else "bin/ssys-recast")
+        tmpdir = pathlib.Path(tempfile.mkdtemp())
+        subprocess.check_call(
+            [
+                str(python_exe),
+                "-c",
+                (
+                    "import importlib.metadata; import ssys; "
+                    "assert ssys.__version__ == importlib.metadata.version('ssys'); "
+                    "assert callable(ssys.recast_to_ssystem); "
+                    "assert callable(ssys.ssystem_to_antimony)"
+                ),
+            ],
+            cwd=tmpdir,
+        )
+        model = tmpdir / "decay.ant"
+        model.write_text(
+            "\n".join([
+                "model decay()",
+                "    species X;",
+                "    X' = -k*X;",
+                "    k = 0.5;",
+                "    X = 1.0;",
+                "end",
+                "",
+            ])
+        )
+        manifest = tmpdir / "models.manifest"
+        manifest.write_text(f"{model}\n")
+        outdir = tmpdir / "out"
+        subprocess.check_call([str(recast), "--version"], cwd=tmpdir)
+        subprocess.check_call(
+            [
+                str(recast),
+                "--manifest",
+                str(manifest),
+                "--outdir",
+                str(outdir),
+                "--mode",
+                "simplified",
+                "--parser",
+                "sbml",
+            ],
+            cwd=tmpdir,
+        )
+        output = outdir / "decay_recast.ant"
+        if not output.exists() or output.stat().st_size == 0:
+            raise SystemExit(f"missing smoke output: {output}")
+
+        validated_outdir = tmpdir / "out_validated"
+        subprocess.check_call(
+            [
+                str(recast),
+                "--manifest",
+                str(manifest),
+                "--outdir",
+                str(validated_outdir),
+                "--mode",
+                "simplified",
+                "--parser",
+                "sbml",
+                "--validate",
+            ],
+            cwd=tmpdir,
+        )
+        report_path = validated_outdir / "decay_validation.json"
+        if not report_path.exists():
+            raise SystemExit(f"missing validation report: {report_path}")
+        report = json.loads(report_path.read_text())
+        if report.get("overall_pass") is not True:
+            raise SystemExit(f"validation smoke did not pass: {report}")
+        PY
+
+    - name: Verify unpacked sdist tests and fixtures
+      shell: bash
+      run: |
+        python - <<'PY'
+        import glob
+        import os
+        import pathlib
+        import subprocess
+        import sys
+        import tarfile
+        import tempfile
+
+        sdists = glob.glob("dist/*.tar.gz")
+        if len(sdists) != 1:
+            raise SystemExit(f"expected exactly one sdist, found {sdists}")
+
+        extract_root = pathlib.Path(tempfile.mkdtemp())
+        with tarfile.open(sdists[0]) as tar:
+            tar.extractall(extract_root)
+        roots = [path for path in extract_root.iterdir() if path.is_dir()]
+        if len(roots) != 1:
+            raise SystemExit(f"expected one unpacked sdist root, found {roots}")
+        sdist_root = roots[0]
+
+        required_paths = [
+            "tests/test_integration.py",
+            "test_models1/models.manifest",
+            "test_models2/models.manifest",
+            "test_models3/models.manifest",
+            "test_models4/models.manifest",
+        ]
+        for relpath in required_paths:
+            path = sdist_root / relpath
+            if not path.exists():
+                raise SystemExit(f"sdist is missing required path: {relpath}")
+
+        model_count = 0
+        for dirname in ["test_models1", "test_models2", "test_models3", "test_models4"]:
+            manifest = sdist_root / dirname / "models.manifest"
+            entries = [
+                line.strip()
+                for line in manifest.read_text().splitlines()
+                if line.strip() and not line.strip().startswith("#")
+            ]
+            missing = [entry for entry in entries if not (manifest.parent / entry).exists()]
+            if missing:
+                raise SystemExit(f"{dirname} manifest references missing models: {missing}")
+            model_count += len(entries)
+        if model_count != 117:
+            raise SystemExit(f"expected 117 committed test models in sdist, found {model_count}")
+
+        venv = pathlib.Path(".sdist-unpack-tests")
+        subprocess.check_call([sys.executable, "-m", "venv", str(venv)])
+        python_exe = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
+        subprocess.check_call([str(python_exe), "-m", "pip", "install", ".", "pytest"], cwd=sdist_root)
+        subprocess.check_call(
+            [
+                str(python_exe),
+                "-m",
+                "pytest",
+                "-o",
+                "addopts=",
+                "tests/test_integration.py",
+                "-m",
+                "integration and not slow",
+                "-v",
+            ],
+            cwd=sdist_root,
+        )
         PY
 
   integration-test:

@@ -55,6 +55,7 @@ dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
     "ruff>=0.1",
+    "jsonschema>=4.18",
     "mypy>=1.7",
     "jupyter>=1.0",
     "ipython>=8.12",
@@ -67,11 +68,11 @@ jax = [
     "jaxlib>=0.4,<0.4.26",
 ]
 
-[project.urls]
-Homepage = "https://github.com/lanl/ssys"
-Documentation = "https://github.com/lanl/ssys/blob/main/README.md"
-Repository = "https://github.com/lanl/ssys"
-Issues = "https://github.com/lanl/ssys/issues"
+[tool.ssys.release]
+date = "2025-12-31"
+maturity = "alpha"
+support = "Python 3.10, 3.11, and 3.12; platform matrix deferred until hosted automation exists"
+trust-boundary = "trusted local Antimony/SBML scientific model files; not safe for untrusted uploads"
 
 [project.scripts]
 ssys-recast = "ssys.cli:main"
@@ -83,15 +84,25 @@ packages = ["src/ssys"]
 include = [
     "/src",
     "/tests",
+    "/test_models1",
+    "/test_models2",
+    "/test_models3",
+    "/test_models4",
     "/README.md",
     "/CHANGELOG.md",
     "/CONTRIBUTING.md",
     "/CODE_OF_CONDUCT.md",
+    "/ARCHITECTURE.md",
+    "/CORRECTNESS_SPEC.md",
+    "/PARSER_TRUST_BOUNDARY.md",
+    "/PUBLIC_API.md",
     "/RECASTING.md",
     "/TEST_MODELS.md",
     "/RELEASE_CHECKLIST.md",
+    "/RELEASE_NOTES.md",
     "/LICENSE",
     "/CITATION.cff",
+    "/tools",
 ]
 
 [tool.pytest.ini_options]
@@ -159,6 +170,7 @@ module = [
     "roadrunner",
     "antimony",
     "libsbml",
+    "sksundae.*",
     "scipy.*",
     "jax",
     "jax.*",

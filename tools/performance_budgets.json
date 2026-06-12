@@ -1,0 +1,26 @@
+{
+  "description": "Local representative performance budgets. Budgets include Python subprocess startup and import time so the gate catches severe whole-command regressions.",
+  "tasks": {
+    "numerical_validation_small": {
+      "description": "SBML-backed recast plus numerical validation profile on a one-state decay model.",
+      "max_seconds": 15.0,
+      "timeout_seconds": 30.0
+    },
+    "recast_small": {
+      "description": "SBML-backed parse, simplified recast, and Antimony formatting on a one-state decay model.",
+      "max_seconds": 8.0,
+      "timeout_seconds": 20.0
+    },
+    "symbolic_validation_small": {
+      "description": "SBML-backed recast plus symbolic validation profile on a one-state decay model.",
+      "max_seconds": 15.0,
+      "timeout_seconds": 30.0
+    },
+    "trajectory_validation_small": {
+      "description": "SBML-backed recast plus trajectory validation profile on a one-state decay model.",
+      "max_seconds": 20.0,
+      "timeout_seconds": 40.0
+    }
+  },
+  "version": 1
+}

@@ -63,11 +63,15 @@ show_env_info() {
         local rr_version=$(python -c "import roadrunner; print(roadrunner.__version__)" 2>/dev/null)
         echo "libroadrunner: $rr_version"
     else
-        echo "libroadrunner: not available (RK4 fallback)"
+        echo "libroadrunner: not available (ODE trajectory validation unsupported)"
     fi
     
-    # JAX status - intentionally disabled (see DEVELOPMENT_NOTES.md)
-    echo "jax: not installed (use of JAX is intentionally disabled)"
+    if python -c "import jax" 2>/dev/null; then
+        local jax_version=$(python -c "import jax; print(jax.__version__)" 2>/dev/null)
+        echo "jax: $jax_version (optional diagnostic extra)"
+    else
+        echo "jax: not installed (optional diagnostic extra)"
+    fi
     
     echo ""
     echo "Available commands:"

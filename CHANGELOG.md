@@ -8,22 +8,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
-- Narrowed supported Python metadata and CI from Python 3.10+ to Python 3.10-3.12
+- Narrowed supported Python metadata from Python 3.10+ to Python 3.10-3.12
   while the package depends on NumPy 1.x and RoadRunner 2.7.x.
 - Documented the trusted-input boundary for Antimony and SBML model files.
 
 ### Fixed
 - Removed placeholder preferred-citation article metadata from `CITATION.cff`.
 - Corrected the `CITATION.cff` license identifier so CFF validation passes.
-- Added wheel artifact smoke tests across the supported Python and CI operating-system matrix.
+- Added local artifact smoke expectations for built wheel and sdist checks.
 
 ### Added
-- Added a release-candidate workflow and release checklist for pre-tag validation.
+- Added local release notes and a release checklist for pre-tag validation.
+- Added `CORRECTNESS_SPEC.md` to define the local correctness contract.
 
 ## [0.5.5] - 2025-12-31
 
+### Release Policy
+- Release maturity: alpha.
+- Supported on Python 3.10, 3.11, and 3.12. Platform matrix automation is deferred until hosted project infrastructure exists.
+- Input trust boundary: Antimony and SBML inputs are trusted local scientific model files, not safe untrusted uploads for multi-tenant or security-sensitive services.
+
 ### Added
-- **BioModels database benchmark results**: 204 validated models from 978 candidates
+- **BioModels database benchmark results**: 289 validated models from 978 candidates
   - 66 General → GMA transformations (functional lifting)
   - 18 GMA → S-system transformations (sum-to-product reduction)
   - 1 General → S-system (full simplification)
@@ -224,14 +230,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - matplotlib >=3.7
 - nbformat >=5.9
 
-[Unreleased]: https://github.com/lanl/ssys/compare/v0.5.5...main
-[0.5.5]: https://github.com/lanl/ssys/compare/v0.5.4...v0.5.5
-[0.5.4]: https://github.com/lanl/ssys/compare/v0.5.3...v0.5.4
-[0.5.3]: https://github.com/lanl/ssys/compare/v0.5.2...v0.5.3
-[0.5.2]: https://github.com/lanl/ssys/compare/v0.5.1...v0.5.2
-[0.5.1]: https://github.com/lanl/ssys/compare/v0.5.0...v0.5.1
-[0.5.0]: https://github.com/lanl/ssys/compare/v0.4.0...v0.5.0
-[0.4.0]: https://github.com/lanl/ssys/compare/v0.3.0...v0.4.0
-[0.3.0]: https://github.com/lanl/ssys/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/lanl/ssys/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/lanl/ssys/releases/tag/v0.1.0
+Comparison links are omitted until public project URLs exist.

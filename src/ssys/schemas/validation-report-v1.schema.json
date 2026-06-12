@@ -1,0 +1,271 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ssys:schema:validation-report:1.0",
+  "title": "ssys validation report",
+  "description": "Schema for JSON reports emitted by ssys validation profile runs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "original_file",
+    "recast_file",
+    "validation_profile",
+    "classification",
+    "solver",
+    "tests",
+    "overall_pass",
+    "overall_result",
+    "summary"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "1.0"
+    },
+    "original_file": {
+      "type": "string"
+    },
+    "recast_file": {
+      "type": "string"
+    },
+    "validation_profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "description",
+        "required_tests"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "strict",
+            "structural",
+            "symbolic",
+            "numerical",
+            "trajectory",
+            "custom"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "required_tests": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "generated_output",
+              "parser",
+              "mapping",
+              "symbolic",
+              "numerical",
+              "trajectory",
+              "algebraic_residuals",
+              "auxiliaries"
+            ]
+          }
+        }
+      }
+    },
+    "classification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "original",
+        "recast",
+        "expected",
+        "canonical_refusal_reason"
+      ],
+      "properties": {
+        "original": {
+          "$ref": "#/$defs/system_class_or_null"
+        },
+        "recast": {
+          "$ref": "#/$defs/system_class_or_null"
+        },
+        "expected": {
+          "$ref": "#/$defs/system_class_or_null"
+        },
+        "canonical_refusal_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "solver": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "original_requirement",
+        "recast_requirement"
+      ],
+      "properties": {
+        "original_requirement": {
+          "$ref": "#/$defs/solver_requirement_or_null"
+        },
+        "recast_requirement": {
+          "$ref": "#/$defs/solver_requirement_or_null"
+        }
+      }
+    },
+    "tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generated_output",
+        "parser",
+        "mapping",
+        "symbolic",
+        "numerical",
+        "trajectory",
+        "algebraic_residuals",
+        "auxiliaries"
+      ],
+      "properties": {
+        "generated_output": {
+          "$ref": "#/$defs/test_or_null"
+        },
+        "parser": {
+          "$ref": "#/$defs/test_or_null"
+        },
+        "mapping": {
+          "$ref": "#/$defs/test_or_null"
+        },
+        "symbolic": {
+          "$ref": "#/$defs/test_or_null"
+        },
+        "numerical": {
+          "$ref": "#/$defs/test_or_null"
+        },
+        "trajectory": {
+          "$ref": "#/$defs/test_or_null"
+        },
+        "algebraic_residuals": {
+          "$ref": "#/$defs/test_or_null"
+        },
+        "auxiliaries": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/test"
+          }
+        }
+      }
+    },
+    "overall_pass": {
+      "type": "boolean"
+    },
+    "overall_result": {
+      "$ref": "#/$defs/validation_result"
+    },
+    "summary": {
+      "type": "string"
+    }
+  },
+  "$defs": {
+    "validation_result": {
+      "enum": [
+        "pass",
+        "failed",
+        "timeout",
+        "not_attempted",
+        "unsupported",
+        "inconclusive"
+      ]
+    },
+    "system_class_or_null": {
+      "anyOf": [
+        {
+          "enum": [
+            "S-system",
+            "Canonical S-system",
+            "GMA",
+            "GMA with time-varying coefficients",
+            "General"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "solver_requirement_or_null": {
+      "anyOf": [
+        {
+          "enum": [
+            "ode_only",
+            "ode_with_assignment_rules",
+            "dae_required"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "test_or_null": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/test"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "test": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "result",
+        "reason",
+        "max_error",
+        "mean_error",
+        "details",
+        "counterexamples",
+        "metadata"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "result": {
+          "$ref": "#/$defs/validation_result"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "max_error": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "mean_error": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "details": {
+          "type": "string"
+        },
+        "counterexamples": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

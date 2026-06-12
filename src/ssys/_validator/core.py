@@ -6,7 +6,16 @@ import sympy as sp
 
 from ssys._validator.mapping import MappingValidationMixin
 from ssys._validator.numerical import NumericalValidationMixin
-from ssys._validator.report import EquivalenceTest, ValidationReport, ValidationResult, _test_passed
+from ssys._validator.report import (
+    EquivalenceTest,
+    ValidationProfile,
+    ValidationProfileSpec,
+    ValidationReport,
+    ValidationResult,
+    _test_passed,
+    custom_validation_profile,
+    resolve_validation_profile,
+)
 from ssys._validator.serialization import validate_generated_output_roundtrip
 from ssys._validator.symbolic import SymbolicValidationMixin
 from ssys._validator.trajectory import TrajectoryValidationMixin
@@ -16,6 +25,49 @@ from ssys.classification import (
 )
 from ssys.parsing import build_sym_system, parse_antimony, parse_antimony_via_sbml
 from ssys.types import SolverRequirement, SystemClass
+
+
+def _required_test_names_for_profile(profile: ValidationProfileSpec) -> list[str]:
+    """Return report test groups required by the selected profile."""
+    tests = ["generated_output", "parser", "mapping"]
+    if profile.run_symbolic:
+        tests.append("symbolic")
+    if profile.run_numerical:
+        tests.append("numerical")
+    if profile.run_trajectory:
+        tests.extend(["trajectory", "algebraic_residuals"])
+    if profile.run_auxiliaries:
+        tests.append("auxiliaries")
+    return tests
+
+
+def _profile_excluded_equivalence_test(
+    name: str,
+    profile: ValidationProfileSpec,
+) -> EquivalenceTest:
+    """Represent a profile-excluded check explicitly in serialized reports."""
+    return EquivalenceTest(
+        name=name,
+        result=ValidationResult.NOT_ATTEMPTED,
+        reason="profile_excluded",
+        details=f"Check is not part of validation profile {profile.name!r}",
+        metadata={"validation_profile": profile.name, "required": False},
+    )
+
+
+def _parser_blocked_equivalence_test(
+    name: str,
+    parser: str,
+    exception: Exception,
+) -> EquivalenceTest:
+    """Represent a check that could not run because validator parsing failed."""
+    return EquivalenceTest(
+        name=name,
+        result=ValidationResult.NOT_ATTEMPTED,
+        reason="parser_failed",
+        details=f"Check could not run because validator parsing failed: {exception}",
+        metadata={"parser": parser, "blocked_by": "validator_parser", "required": True},
+    )
 
 
 class RecastValidator(
@@ -184,6 +236,51 @@ class RecastValidator(
             return SystemClass.GMA
         return None
 
+    def _resolve_profile(
+        self,
+        profile: ValidationProfile | ValidationProfileSpec | str | None,
+        *,
+        run_symbolic: bool,
+        run_numerical: bool,
+        run_trajectory: bool,
+        run_auxiliaries: bool,
+    ) -> ValidationProfileSpec:
+        """Resolve named profiles while preserving legacy boolean compatibility."""
+        profile_spec = resolve_validation_profile(profile)
+        if profile_spec is not None:
+            return profile_spec
+        if run_symbolic and run_numerical and run_trajectory and run_auxiliaries:
+            strict = resolve_validation_profile(ValidationProfile.STRICT)
+            assert strict is not None
+            return strict
+        return custom_validation_profile(
+            run_symbolic=run_symbolic,
+            run_numerical=run_numerical,
+            run_trajectory=run_trajectory,
+            run_auxiliaries=run_auxiliaries,
+        )
+
+    def _required_test_names(self, profile: ValidationProfileSpec) -> list[str]:
+        """Return report test groups required by the selected profile."""
+        return _required_test_names_for_profile(profile)
+
+    def _profile_excluded_test(
+        self,
+        name: str,
+        profile: ValidationProfileSpec,
+    ) -> EquivalenceTest:
+        """Represent a profile-excluded check explicitly in serialized reports."""
+        return _profile_excluded_equivalence_test(name, profile)
+
+    def _not_applicable_pass_test(self, name: str, details: str) -> EquivalenceTest:
+        """Represent an applicable check family with no model-specific cases."""
+        return EquivalenceTest(
+            name=name,
+            result=ValidationResult.PASS,
+            details=details,
+            metadata={"not_applicable": True},
+        )
+
     def _refine_recast_solver_requirement_from_auxiliaries(self) -> None:
         """Use auxiliary definition comments to classify manifold-constrained recasts."""
         if self.recast_solver_requirement == SolverRequirement.DAE_REQUIRED:
@@ -211,6 +308,7 @@ class RecastValidator(
         use_jax: bool = False,
         run_auxiliaries: bool = True,
         algebraic_residual_threshold: float = 1e-8,
+        profile: ValidationProfile | ValidationProfileSpec | str | None = None,
     ) -> ValidationReport:
         """
         Run full validation suite.
@@ -222,10 +320,24 @@ class RecastValidator(
             use_jax: Use JAX autodiff for numerical validation (faster, no symbolic)
             run_auxiliaries: Run auxiliary identity validation
             algebraic_residual_threshold: Maximum absolute algebraic residual over trajectory
+            profile: Named validation profile. When set, profile flags override
+                the legacy run_* boolean flags.
 
         Returns:
             ValidationReport with all test results
         """
+        profile_spec = self._resolve_profile(
+            profile,
+            run_symbolic=run_symbolic,
+            run_numerical=run_numerical,
+            run_trajectory=run_trajectory,
+            run_auxiliaries=run_auxiliaries,
+        )
+        run_symbolic = profile_spec.run_symbolic
+        run_numerical = profile_spec.run_numerical
+        run_trajectory = profile_spec.run_trajectory
+        run_auxiliaries = profile_spec.run_auxiliaries
+
         report = ValidationReport(
             original_file=self.original_file,
             recast_file=self.recast_file,
@@ -235,6 +347,9 @@ class RecastValidator(
             canonical_refusal_reason=self.canonical_refusal_reason,
             original_solver_requirement=self.orig_solver_requirement,
             recast_solver_requirement=self.recast_solver_requirement,
+            validation_profile=profile_spec.name,
+            validation_profile_description=profile_spec.description,
+            required_tests=self._required_test_names(profile_spec),
             generated_output_test=validate_generated_output_roundtrip(
                 self.recast_file, self.recast_text
             ),
@@ -254,21 +369,52 @@ class RecastValidator(
         # Run tests
         if run_symbolic:
             report.symbolic_test = self.check_symbolic_equivalence()
+        else:
+            report.symbolic_test = self._profile_excluded_test(
+                "symbolic_equivalence", profile_spec
+            )
 
         if run_numerical:
             if use_jax:
                 report.numerical_test = self.check_numerical_pointwise_jax()
             else:
                 report.numerical_test = self.check_numerical_pointwise()
+        else:
+            report.numerical_test = self._profile_excluded_test(
+                "numerical_pointwise", profile_spec
+            )
 
         if run_trajectory:
             report.trajectory_test = self.check_trajectory_comparison()
             report.algebraic_residual_test = self.check_algebraic_manifold_preservation(
                 threshold=algebraic_residual_threshold
             )
+            if report.algebraic_residual_test is None:
+                report.algebraic_residual_test = self._not_applicable_pass_test(
+                    "algebraic_manifold_residuals",
+                    "No algebraic definitions or constraints require residual checking",
+                )
+        else:
+            report.trajectory_test = self._profile_excluded_test(
+                "trajectory_comparison", profile_spec
+            )
+            report.algebraic_residual_test = self._profile_excluded_test(
+                "algebraic_manifold_residuals", profile_spec
+            )
 
         if run_auxiliaries:
             report.auxiliary_tests = self.check_auxiliary_identities()
+            if not report.auxiliary_tests:
+                report.auxiliary_tests = [
+                    self._not_applicable_pass_test(
+                        "auxiliary_identities",
+                        "No lifted auxiliary or observable assignment identities to validate",
+                    )
+                ]
+        else:
+            report.auxiliary_tests = [
+                self._profile_excluded_test("auxiliary_identities", profile_spec)
+            ]
 
         required_tests: list[EquivalenceTest | None] = [
             report.generated_output_test,
@@ -297,6 +443,8 @@ class RecastValidator(
                 report.summary = "Validation FAILED: at least one required check failed"
             elif report.overall_result == ValidationResult.UNSUPPORTED:
                 report.summary = "Validation UNSUPPORTED: a required backend is unavailable"
+            elif report.overall_result == ValidationResult.TIMEOUT:
+                report.summary = "Validation TIMEOUT: a required check exceeded its limit"
             elif report.overall_result == ValidationResult.NOT_ATTEMPTED:
                 report.summary = "Validation NOT ATTEMPTED: a required check was skipped"
             else:
@@ -312,6 +460,8 @@ class RecastValidator(
         results = [test.result for test in required_tests if test is not None]
         if any(result == ValidationResult.FAIL for result in results):
             return ValidationResult.FAIL
+        if any(result == ValidationResult.TIMEOUT for result in results):
+            return ValidationResult.TIMEOUT
         if any(result == ValidationResult.UNSUPPORTED for result in results):
             return ValidationResult.UNSUPPORTED
         if any(result == ValidationResult.NOT_ATTEMPTED for result in results):
@@ -331,6 +481,7 @@ def validate_recast_pair(
     use_jax: bool = False,
     run_auxiliaries: bool = True,
     algebraic_residual_threshold: float = 1e-8,
+    profile: ValidationProfile | ValidationProfileSpec | str | None = None,
 ) -> ValidationReport:
     """
     Convenience function to validate a recast.
@@ -348,6 +499,8 @@ def validate_recast_pair(
         use_jax: Use JAX autodiff for numerical validation
         run_auxiliaries: Run auxiliary identity validation
         algebraic_residual_threshold: Maximum absolute residual for algebraic manifolds
+        profile: Named validation profile. When set, profile flags override
+            the legacy run_* boolean flags.
 
     Returns:
         ValidationReport
@@ -362,6 +515,7 @@ def validate_recast_pair(
             use_jax,
             run_auxiliaries,
             algebraic_residual_threshold,
+            profile,
         )
     except Exception as e:
         expected_class = None
@@ -378,14 +532,65 @@ def validate_recast_pair(
             details=f"Validator parser failed with {parser} parser: {e}",
             metadata={"parser": parser, "exception": str(e)},
         )
+        failure_profile = resolve_validation_profile(profile)
+        if failure_profile is None:
+            if run_symbolic and run_numerical and run_trajectory and run_auxiliaries:
+                failure_profile = resolve_validation_profile(ValidationProfile.STRICT)
+                assert failure_profile is not None
+            else:
+                failure_profile = custom_validation_profile(
+                    run_symbolic=run_symbolic,
+                    run_numerical=run_numerical,
+                    run_trajectory=run_trajectory,
+                    run_auxiliaries=run_auxiliaries,
+                )
+        mapping_test = _parser_blocked_equivalence_test("mapping_completeness", parser, e)
+        symbolic_test = (
+            _parser_blocked_equivalence_test("symbolic_equivalence", parser, e)
+            if failure_profile.run_symbolic
+            else _profile_excluded_equivalence_test("symbolic_equivalence", failure_profile)
+        )
+        numerical_test = (
+            _parser_blocked_equivalence_test("numerical_pointwise", parser, e)
+            if failure_profile.run_numerical
+            else _profile_excluded_equivalence_test("numerical_pointwise", failure_profile)
+        )
+        trajectory_test = (
+            _parser_blocked_equivalence_test("trajectory_comparison", parser, e)
+            if failure_profile.run_trajectory
+            else _profile_excluded_equivalence_test("trajectory_comparison", failure_profile)
+        )
+        algebraic_residual_test = (
+            _parser_blocked_equivalence_test("algebraic_manifold_residuals", parser, e)
+            if failure_profile.run_trajectory
+            else _profile_excluded_equivalence_test(
+                "algebraic_manifold_residuals", failure_profile
+            )
+        )
+        auxiliary_tests = [
+            (
+                _parser_blocked_equivalence_test("auxiliary_identities", parser, e)
+                if failure_profile.run_auxiliaries
+                else _profile_excluded_equivalence_test("auxiliary_identities", failure_profile)
+            )
+        ]
         report = ValidationReport(
             original_file=original_file,
             recast_file=recast_file,
             original_class=None,
             recast_class=None,
             expected_class=expected_class,
+            validation_profile=failure_profile.name,
+            validation_profile_description=failure_profile.description,
+            required_tests=_required_test_names_for_profile(failure_profile),
             generated_output_test=generated_output_test,
             parser_test=parser_test,
+            mapping_test=mapping_test,
+            symbolic_test=symbolic_test,
+            numerical_test=numerical_test,
+            trajectory_test=trajectory_test,
+            algebraic_residual_test=algebraic_residual_test,
+            auxiliary_tests=auxiliary_tests,
             overall_pass=False,
             overall_result=ValidationResult.FAIL,
             summary="Validation FAILED: validator parser failed",
