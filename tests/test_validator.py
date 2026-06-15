@@ -9,6 +9,9 @@ import numpy as np
 import pytest
 import sympy as sp
 
+import ssys._validator.common as validator_common
+import ssys._validator.mapping as validator_mapping
+import ssys.classification as classification_module
 from ssys._validator.numerical import NumericalValidationMixin
 from ssys._validator.trajectory import TrajectoryValidationMixin
 from ssys.ode_backends.ida_sundials_backend import IDASundialsUnavailable
@@ -150,6 +153,104 @@ class TestValidationReport:
         assert data["tests"]["symbolic"]["reason"] == "timeout"
 
 
+class TestSystemClassification:
+    """Focused tests for validator system classification branches."""
+
+    def test_non_monomial_denominator_classifies_general_before_expand(
+        self, monkeypatch
+    ):
+        x, y, z = sp.symbols("X Y Z", positive=True)
+        system = SimpleNamespace(
+            vars=[x, y, z],
+            params={},
+            odes={x: x / (y + z)},
+            assignment_rules={},
+        )
+        phases = []
+
+        def fail_expand(expr):
+            raise AssertionError(f"classification should not expand {expr}")
+
+        monkeypatch.setattr(classification_module.sp, "expand", fail_expand)
+
+        result = classification_module.classify_system(
+            system,
+            progress_callback=phases.append,
+            progress_prefix="validator_parser_classify_systems:recast",
+        )
+
+        assert result == SystemClass.GENERAL
+        assert "validator_parser_classify_systems:recast:denominator:X" in phases
+
+    def test_assignment_rule_denominator_classifies_general_before_expand(
+        self, monkeypatch
+    ):
+        x, y, z, a = sp.symbols("X Y Z A", positive=True)
+        system = SimpleNamespace(
+            vars=[x, y, z],
+            params={},
+            odes={x: x / a},
+            assignment_rules={"A": "Y + Z"},
+        )
+
+        def fail_expand(expr):
+            raise AssertionError(f"classification should not expand {expr}")
+
+        monkeypatch.setattr(classification_module.sp, "expand", fail_expand)
+
+        result = classification_module.classify_system(system)
+
+        assert result == SystemClass.GENERAL
+
+    def test_assignment_rule_substitution_uses_shared_demand_cache(
+        self, monkeypatch
+    ):
+        x, y, rate = sp.symbols("X Y rate", positive=True)
+        system = SimpleNamespace(
+            vars=[x, y],
+            params={"k": 1.0},
+            odes={x: rate - x, y: 2 * rate - y},
+            assignment_rules={
+                "rate": "inner * X",
+                "inner": "k * X",
+                "unused": "unused_inner * X",
+                "unused_inner": "k + 1",
+            },
+        )
+        cache_misses = []
+        original_expand = classification_module._expand_assignment_rule_by_name
+
+        def counting_expand(
+            rule_name,
+            assignment_rules,
+            all_syms,
+            parse_cache,
+            expanded_cache,
+            visiting,
+        ):
+            if rule_name not in expanded_cache:
+                cache_misses.append(rule_name)
+            return original_expand(
+                rule_name,
+                assignment_rules,
+                all_syms,
+                parse_cache,
+                expanded_cache,
+                visiting,
+            )
+
+        monkeypatch.setattr(
+            classification_module,
+            "_expand_assignment_rule_by_name",
+            counting_expand,
+        )
+
+        result = classification_module.classify_system(system)
+
+        assert result == SystemClass.CANONICAL_SSYSTEM
+        assert cache_misses == ["rate", "inner"]
+
+
 class TestFailClosedValidation:
     """Tests for fail-closed report aggregation."""
 
@@ -189,6 +290,64 @@ class TestFailClosedValidation:
 
         assert captured["parser"] == "sbml"
         assert report.overall_pass is True
+
+    def test_validate_recast_pair_reports_parser_subphase_progress(self, tmp_path):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        phases = []
+
+        report = validate_recast_pair(
+            str(original),
+            str(recast),
+            parser="sbml",
+            profile="structural",
+            progress_callback=phases.append,
+        )
+
+        assert report.overall_pass is True
+        expected_subsequence = [
+            "generated_output_roundtrip",
+            "validator_parser",
+            "validator_parser_recast_read",
+            "validator_parser_original_read",
+            "validator_parser_original_sbml",
+            "validator_parser_original_sbml_preprocess",
+            "validator_parser_original_sbml_antimony_load",
+            "validator_parser_original_sbml_sbml_export",
+            "validator_parser_original_sbml_sym_system_parse_libsbml_read",
+            "validator_parser_original_sbml_sym_system_parse_sym_system_build",
+            "validator_parser_recast_sbml",
+            "validator_parser_recast_sbml_preprocess",
+            "validator_parser_recast_sbml_antimony_load",
+            "validator_parser_recast_sbml_sbml_export",
+            "validator_parser_recast_sbml_sym_system_parse_libsbml_read",
+            "validator_parser_recast_sbml_sym_system_parse_sym_system_build",
+            "generated_output_roundtrip",
+            "mapping",
+        ]
+        cursor = 0
+        for phase in phases:
+            if phase == expected_subsequence[cursor]:
+                cursor += 1
+                if cursor == len(expected_subsequence):
+                    break
+        assert cursor == len(expected_subsequence), phases
 
     def test_symbolic_profile_records_excluded_checks_without_requiring_them(self, tmp_path):
         original = tmp_path / "original.ant"
@@ -715,6 +874,53 @@ class TestFailClosedValidation:
         assert report.numerical_test.reason == "profile_excluded"
         assert report.trajectory_test is not None
         assert report.trajectory_test.reason == "profile_excluded"
+
+    def test_validate_recast_pair_classifies_unsupported_parser_features(
+        self,
+        tmp_path,
+    ):
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            model original()
+                species X;
+                X' = -k*X;
+                k = 0.5;
+                X = 1.0;
+            end
+        """)
+        recast = tmp_path / "piecewise_recast.ant"
+        recast.write_text("""
+            model piecewise_recast()
+                species Z_1;
+                Z_1' = piecewise(-Z_1, T > threshold, 0);
+                Z_1 = 1.0;
+                T = 1.0;
+                threshold = 0.5;
+            end
+        """)
+        output_json = tmp_path / "validation.json"
+
+        report = validate_recast_pair(
+            str(original),
+            str(recast),
+            output_json=str(output_json),
+            parser="sbml",
+            profile="numerical",
+        )
+        data = json.loads(output_json.read_text())
+
+        assert report.generated_output_test is not None
+        assert report.generated_output_test.result == ValidationResult.PASS
+        assert data["tests"]["parser"]["result"] == "unsupported"
+        assert data["tests"]["parser"]["reason"] == "unsupported_feature"
+        assert data["tests"]["parser"]["metadata"]["unsupported_features"] == [
+            "gt",
+            "piecewise",
+        ]
+        assert "unsupported function(s): gt" in data["tests"]["parser"]["details"]
+        assert data["tests"]["mapping"]["reason"] == "unsupported_feature"
+        assert data["tests"]["numerical"]["reason"] == "unsupported_feature"
+        assert data["overall_result"] == "unsupported"
 
 
 class TestSolverAwareValidation:
@@ -1888,6 +2094,92 @@ def _make_unresolved_auxiliary_numerical_harness():
     return harness
 
 
+def _make_nested_auxiliary_numerical_harness():
+    X = sp.Symbol("X", positive=True)
+    Y = sp.Symbol("Y_1", positive=True)
+    Z = sp.Symbol("Z_1", positive=True)
+
+    harness = _NumericalHarness()
+    harness.orig_odes = {X: -(X + 2)}
+    harness.orig_odes_expanded = dict(harness.orig_odes)
+    harness.recast_odes = {X: -Y, Y: sp.Integer(0), Z: sp.Integer(0)}
+    harness.recast_odes_expanded = dict(harness.recast_odes)
+    harness.recast_state_vars = [X, Y, Z]
+    harness.mapping = {X: X}
+    harness.orig_ir = SimpleNamespace(
+        initial={"X": 1.0},
+        sim_t_start=None,
+        sim_t_end=None,
+    )
+    harness.recast_ir = SimpleNamespace(
+        params={},
+        initial={"X": 1.0, "Y_1": 3.0, "Z_1": 2.0},
+        assignment_rules={},
+        sim_t_start=None,
+        sim_t_end=None,
+    )
+    harness.auxiliary_defs = {Y: X + Z, Z: sp.Integer(2)}
+    harness.canonical_symbols = {"X": X, "Y_1": Y, "Z_1": Z}
+    return harness
+
+
+def _make_assignment_rule_state_numerical_harness():
+    X = sp.Symbol("X", positive=True)
+    A = sp.Symbol("A", positive=True)
+
+    harness = _NumericalHarness()
+    harness.orig_odes = {X: -(X + 1)}
+    harness.orig_odes_expanded = dict(harness.orig_odes)
+    harness.recast_odes = {X: -A, A: sp.Integer(0)}
+    harness.recast_odes_expanded = dict(harness.recast_odes)
+    harness.recast_state_vars = [X, A]
+    harness.mapping = {X: X}
+    harness.orig_ir = SimpleNamespace(
+        initial={"X": 1.0},
+        sim_t_start=None,
+        sim_t_end=None,
+    )
+    harness.recast_ir = SimpleNamespace(
+        params={},
+        initial={"X": 1.0, "A": 2.0},
+        assignment_rules={"A": "X + 1"},
+        sim_t_start=None,
+        sim_t_end=None,
+    )
+    harness.auxiliary_defs = {}
+    harness.canonical_symbols = {"X": X, "A": A}
+    return harness
+
+
+def _make_assignment_rule_auxiliary_numerical_harness():
+    X = sp.Symbol("X", positive=True)
+    Y = sp.Symbol("Y_1", positive=True)
+    ell = sp.Symbol("l", positive=True)
+
+    harness = _NumericalHarness()
+    harness.orig_odes = {X: -(X + 2)}
+    harness.orig_odes_expanded = dict(harness.orig_odes)
+    harness.recast_odes = {X: -Y, Y: sp.Integer(0)}
+    harness.recast_odes_expanded = dict(harness.recast_odes)
+    harness.recast_state_vars = [X, Y]
+    harness.mapping = {X: X}
+    harness.orig_ir = SimpleNamespace(
+        initial={"X": 1.0},
+        sim_t_start=None,
+        sim_t_end=None,
+    )
+    harness.recast_ir = SimpleNamespace(
+        params={"l": 0.0},
+        initial={"X": 1.0, "Y_1": 3.0},
+        assignment_rules={"l": "2"},
+        sim_t_start=None,
+        sim_t_end=None,
+    )
+    harness.auxiliary_defs = {Y: X + ell}
+    harness.canonical_symbols = {"X": X, "Y_1": Y, "l": ell}
+    return harness
+
+
 def _make_jax_auxiliary_harness():
     X = sp.Symbol("X", positive=True)
     T = sp.Symbol("T", positive=True)
@@ -1909,7 +2201,7 @@ def _make_jax_auxiliary_harness():
         sim_t_end=None,
     )
     harness.recast_ir = SimpleNamespace(
-        params={"k": 0.5},
+        params={"k": 0.5, "u": 0.25},
         initial={"X": 1.0, "T": 1.0, "Y_1": 2.0},
         sim_t_start=None,
         sim_t_end=None,
@@ -1937,6 +2229,119 @@ class TestNumericalValidationMixinDirect:
             "source": "positive_initial",
             "initial": 1.0,
         }
+
+    def test_numerical_pointwise_reports_subphase_progress(self):
+        harness = _make_numerical_harness()
+        phases = []
+
+        result = harness.check_numerical_pointwise(
+            n_samples=2,
+            threshold=1.0e-10,
+            progress_callback=phases.append,
+        )
+
+        assert result.result == ValidationResult.PASS
+        for expected in [
+            "numerical_setup",
+            "numerical_collect_symbols",
+            "numerical_parameters",
+            "numerical_sampling_metadata",
+            "numerical_jacobian",
+            "numerical_lambdify_jacobian",
+            "numerical_lambdify_recast_odes",
+            "numerical_lambdify_original_odes",
+            "numerical_computed_definitions",
+            "numerical_preflight",
+            "numerical_sample_evaluation",
+            "numerical_result_aggregation",
+        ]:
+            assert expected in phases
+        assert any(
+            phase.startswith("numerical_sample_evaluation:") for phase in phases
+        )
+
+    def test_numerical_pointwise_sample_budget_reports_complexity(self):
+        harness = _make_numerical_harness()
+
+        result = harness.check_numerical_pointwise(
+            n_samples=2,
+            threshold=1.0e-10,
+            sample_evaluation_timeout=0.0,
+        )
+
+        assert result.result == ValidationResult.NOT_ATTEMPTED
+        assert result.reason == "numerical_complexity"
+        assert "complexity budget" in result.details
+        diagnostic = result.metadata["diagnostics"][0]
+        assert diagnostic["reason"] == "numerical_complexity"
+        assert diagnostic["phase"] == "numerical_sample_evaluation"
+        assert diagnostic["active_subphase"] == "sample_generation"
+        assert diagnostic["sample_index"] == 0
+        assert diagnostic["samples_completed"] == 0
+        assert diagnostic["n_samples"] == 2
+        assert diagnostic["limit_seconds"] == 0.0
+
+    def test_numerical_pointwise_expression_complexity_fails_closed(self):
+        harness = _make_numerical_harness()
+
+        result = harness.check_numerical_pointwise(
+            n_samples=2,
+            threshold=1.0e-10,
+            expression_complexity_limit=0,
+        )
+
+        assert result.result == ValidationResult.NOT_ATTEMPTED
+        assert result.reason == "numerical_complexity"
+        assert "complexity budget" in result.details
+        diagnostic = result.metadata["diagnostics"][0]
+        assert diagnostic["reason"] == "numerical_complexity"
+        assert diagnostic["phase"] == "numerical_preflight"
+        assert diagnostic["active_subphase"] == "expression_complexity"
+        assert diagnostic["side"] == "recast"
+        assert diagnostic["expression_label"] == "Z"
+        assert diagnostic["expression_ops"] > diagnostic["max_expression_ops"]
+        assert diagnostic["free_symbol_count"] == 2
+
+    def test_numerical_pointwise_skips_zero_jacobian_lambdify(self, monkeypatch):
+        import ssys._validator.numerical as numerical_module
+
+        real_lambdify = numerical_module.lambdify
+
+        def reject_zero_jacobian_lambdify(args, expr, modules):
+            if expr == 0:
+                raise AssertionError("zero Jacobian entries should not be lambdified")
+            return real_lambdify(args, expr, modules)
+
+        X = sp.Symbol("X", positive=True)
+        Z = sp.Symbol("Z", positive=True)
+        Y = sp.Symbol("Y", positive=True)
+        k = sp.Symbol("k", positive=True)
+        harness = _NumericalHarness()
+        harness.orig_odes = {X: -k * X}
+        harness.orig_odes_expanded = dict(harness.orig_odes)
+        harness.recast_odes = {Z: -k * Z, Y: -Y}
+        harness.recast_odes_expanded = dict(harness.recast_odes)
+        harness.recast_state_vars = [Z, Y]
+        harness.mapping = {X: Z}
+        harness.orig_ir = SimpleNamespace(
+            initial={"X": 1.0},
+            sim_t_start=None,
+            sim_t_end=None,
+        )
+        harness.recast_ir = SimpleNamespace(
+            params={"k": 0.5},
+            initial={"Z": 1.0, "Y": 1.0},
+            sim_t_start=None,
+            sim_t_end=None,
+        )
+        harness.auxiliary_defs = {}
+        harness.canonical_symbols = {"X": X, "Z": Z, "Y": Y, "k": k}
+        monkeypatch.setattr(numerical_module, "lambdify", reject_zero_jacobian_lambdify)
+
+        result = harness.check_numerical_pointwise(n_samples=2, threshold=1.0e-10)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error == 0.0
 
     def test_numerical_pointwise_expands_domain_from_model_initials(self):
         harness = _make_numerical_harness()
@@ -1992,6 +2397,152 @@ class TestNumericalValidationMixinDirect:
         assert result.max_error < 1.0e-10
         assert "time" in harness.canonical_symbols
 
+    def test_numerical_pointwise_ignores_exported_time_parameter_binding(self):
+        harness = _make_time_clock_numerical_harness()
+        harness.recast_ir.params["time"] = 0.0
+
+        result = harness.check_numerical_pointwise(n_samples=3, threshold=1.0e-10)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error < 1.0e-10
+        assert "time" not in result.metadata["parameter_values"]
+
+    def test_numerical_pointwise_canonicalizes_time_symbol_case_variants(self):
+        X = sp.Symbol("X", positive=True)
+        k = sp.Symbol("k", positive=True)
+        lower_time = sp.Symbol("time", positive=True)
+        upper_time = sp.Symbol("Time", positive=True)
+
+        harness = _NumericalHarness()
+        harness.orig_odes = {X: -X / (lower_time + k)}
+        harness.orig_odes_expanded = dict(harness.orig_odes)
+        harness.recast_odes = {X: -X / (upper_time + k)}
+        harness.recast_odes_expanded = dict(harness.recast_odes)
+        harness.recast_state_vars = [X]
+        harness.mapping = {X: X}
+        harness.orig_ir = SimpleNamespace(
+            initial={"X": 1.0},
+            sim_t_start=None,
+            sim_t_end=None,
+        )
+        harness.recast_ir = SimpleNamespace(
+            params={"k": 1.0, "Time": 0.0},
+            initial={"X": 1.0},
+            sim_t_start=None,
+            sim_t_end=None,
+        )
+        harness.auxiliary_defs = {}
+        harness.canonical_symbols = {"X": X, "k": k, "time": lower_time, "Time": upper_time}
+
+        result = harness.check_numerical_pointwise(n_samples=3, threshold=1.0e-10)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error == 0.0
+        assert "Time" not in result.metadata["parameter_values"]
+
+    def test_numerical_pointwise_canonicalizes_recast_lower_t_clock(self):
+        X = sp.Symbol("X", positive=True)
+        k = sp.Symbol("k", positive=True)
+        time = sp.Symbol("time", positive=True)
+        t = sp.Symbol("t", positive=True)
+
+        harness = _NumericalHarness()
+        harness.orig_odes = {X: -X / (time + k)}
+        harness.orig_odes_expanded = dict(harness.orig_odes)
+        harness.recast_odes = {X: -X / (t + k)}
+        harness.recast_odes_expanded = dict(harness.recast_odes)
+        harness.recast_state_vars = [X]
+        harness.mapping = {X: X}
+        harness.orig_ir = SimpleNamespace(
+            initial={"X": 1.0},
+            sim_t_start=None,
+            sim_t_end=None,
+        )
+        harness.recast_ir = SimpleNamespace(
+            params={"k": 1.0, "t": 0.0},
+            initial={"X": 1.0},
+            assignment_rules={"X0": "sin(t)"},
+            sim_t_start=None,
+            sim_t_end=None,
+        )
+        harness.auxiliary_defs = {}
+        harness.canonical_symbols = {"X": X, "k": k, "time": time, "t": t}
+
+        result = harness.check_numerical_pointwise(n_samples=3, threshold=1.0e-10)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error == 0.0
+        assert "t" not in result.metadata["parameter_values"]
+        assert "time" in result.metadata["sampling"]
+
+    def test_numerical_pointwise_keeps_declared_t_parameter(self):
+        X = sp.Symbol("X", positive=True)
+        t = sp.Symbol("t", positive=True)
+
+        harness = _NumericalHarness()
+        harness.orig_odes = {X: -t * X}
+        harness.orig_odes_expanded = dict(harness.orig_odes)
+        harness.recast_odes = {X: -t * X}
+        harness.recast_odes_expanded = dict(harness.recast_odes)
+        harness.recast_state_vars = [X]
+        harness.mapping = {X: X}
+        harness.orig_ir = SimpleNamespace(
+            params={"t": 2.0},
+            initial={"X": 1.0},
+            sim_t_start=None,
+            sim_t_end=None,
+        )
+        harness.recast_ir = SimpleNamespace(
+            params={"t": 2.0},
+            initial={"X": 1.0},
+            assignment_rules={},
+            sim_t_start=None,
+            sim_t_end=None,
+        )
+        harness.auxiliary_defs = {}
+        harness.canonical_symbols = {"X": X, "t": t}
+
+        result = harness.check_numerical_pointwise(n_samples=3, threshold=1.0e-10)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error == 0.0
+        assert result.metadata["parameter_values"]["t"] == 2.0
+        assert "time" not in result.metadata["sampling"]
+
+    def test_numerical_pointwise_keeps_t_state_variable(self):
+        t = sp.Symbol("t", positive=True)
+        k = sp.Symbol("k", positive=True)
+
+        harness = _NumericalHarness()
+        harness.orig_odes = {t: -k * t}
+        harness.orig_odes_expanded = dict(harness.orig_odes)
+        harness.recast_odes = {t: -k * t}
+        harness.recast_odes_expanded = dict(harness.recast_odes)
+        harness.recast_state_vars = [t]
+        harness.mapping = {t: t}
+        harness.orig_ir = SimpleNamespace(
+            params={"k": 1.0},
+            initial={"t": 1.0},
+            sim_t_start=None,
+            sim_t_end=None,
+        )
+        harness.recast_ir = SimpleNamespace(
+            params={"k": 1.0, "t": 0.0},
+            initial={"t": 1.0},
+            assignment_rules={},
+            sim_t_start=None,
+            sim_t_end=None,
+        )
+        harness.auxiliary_defs = {}
+        harness.canonical_symbols = {"t": t, "k": k}
+
+        result = harness.check_numerical_pointwise(n_samples=3, threshold=1.0e-10)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error == 0.0
+        assert "t" not in result.metadata["parameter_values"]
+        assert "time" not in result.metadata["sampling"]
+
     def test_numerical_pointwise_samples_time_for_auxiliary_definition(self):
         harness = _make_time_auxiliary_numerical_harness()
 
@@ -2000,13 +2551,171 @@ class TestNumericalValidationMixinDirect:
         assert result.result == ValidationResult.PASS
         assert result.max_error < 1.0e-10
 
-    def test_numerical_pointwise_auxiliary_fallback_uses_default_for_unresolved_symbol(self):
+    def test_numerical_pointwise_auxiliary_unresolved_symbol_is_diagnostic(self):
         harness = _make_unresolved_auxiliary_numerical_harness()
 
         result = harness.check_numerical_pointwise(n_samples=2, threshold=1.0e-10)
 
+        assert result.result == ValidationResult.NOT_ATTEMPTED
+        assert result.reason == "unresolved_parameter"
+        assert result.metadata["diagnostics"][0]["unresolved_symbols"] == ["u"]
+
+    def test_numerical_pointwise_evaluates_nested_auxiliaries_in_dependency_order(self):
+        harness = _make_nested_auxiliary_numerical_harness()
+
+        result = harness.check_numerical_pointwise(n_samples=3, threshold=1.0e-10)
+
         assert result.result == ValidationResult.PASS
         assert result.max_error == 0.0
+
+    def test_numerical_pointwise_computes_recast_assignment_rule_state(self):
+        harness = _make_assignment_rule_state_numerical_harness()
+
+        result = harness.check_numerical_pointwise(n_samples=3, threshold=1.0e-10)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error == 0.0
+
+    def test_numerical_pointwise_expands_assignment_rules_in_auxiliary_defs(self):
+        harness = _make_assignment_rule_auxiliary_numerical_harness()
+
+        result = harness.check_numerical_pointwise(n_samples=3, threshold=1.0e-10)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error == 0.0
+
+    def test_numerical_pointwise_uses_safe_scoped_parameter_alias(self):
+        harness = _make_numerical_harness()
+        original_param = sp.Symbol("reaction1_vi", positive=True)
+        recast_param = sp.Symbol("reaction1__vi", positive=True)
+        x = next(iter(harness.orig_odes))
+        z = harness.recast_state_vars[0]
+
+        harness.orig_odes = {x: -original_param * x}
+        harness.orig_odes_expanded = dict(harness.orig_odes)
+        harness.recast_odes = {z: -recast_param * z}
+        harness.recast_odes_expanded = dict(harness.recast_odes)
+        harness.orig_ir.params = {}
+        harness.recast_ir.params = {"reaction1__vi": 0.5}
+        harness.canonical_symbols.update({
+            "reaction1_vi": original_param,
+            "reaction1__vi": recast_param,
+        })
+
+        result = harness.check_numerical_pointwise(n_samples=4, threshold=1.0e-10)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error == 0.0
+        assert result.metadata["parameter_aliases"] == {
+            "reaction1_vi": "reaction1__vi"
+        }
+        assert result.metadata["parameter_values"]["reaction1_vi"] == 0.5
+
+    def test_numerical_pointwise_uses_sanitized_parameter_alias(self):
+        harness = _make_numerical_harness()
+        original_param = sp.Symbol("Pi", positive=True)
+        recast_param = sp.Symbol("Pi_var", positive=True)
+        x = next(iter(harness.orig_odes))
+        z = harness.recast_state_vars[0]
+
+        harness.orig_odes = {x: -original_param * x}
+        harness.orig_odes_expanded = dict(harness.orig_odes)
+        harness.recast_odes = {z: -recast_param * z}
+        harness.recast_odes_expanded = dict(harness.recast_odes)
+        harness.recast_ir.params = {"Pi_var": 0.5}
+        harness.canonical_symbols.update({"Pi": original_param, "Pi_var": recast_param})
+
+        result = harness.check_numerical_pointwise(n_samples=4, threshold=1.0e-10)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error == 0.0
+        assert result.metadata["parameter_aliases"] == {"Pi": "Pi_var"}
+        assert result.metadata["parameter_values"]["Pi"] == 0.5
+
+    def test_numerical_pointwise_treats_lowercase_pi_as_constant(self):
+        X = sp.Symbol("X", positive=True)
+        T = sp.Symbol("T", positive=True)
+        A = sp.Symbol("A", positive=True)
+        period = sp.Symbol("period", positive=True)
+
+        harness = _NumericalHarness()
+        forcing = 1 + sp.sin(2 * sp.pi * T / period)
+        harness.orig_odes = {T: sp.Integer(1), X: -forcing}
+        harness.orig_odes_expanded = dict(harness.orig_odes)
+        harness.recast_odes = {T: sp.Integer(1), X: -A, A: sp.Integer(0)}
+        harness.recast_odes_expanded = dict(harness.recast_odes)
+        harness.recast_state_vars = [T, X, A]
+        harness.mapping = {T: T, X: X}
+        harness.orig_ir = SimpleNamespace(
+            params={"period": 24.0},
+            initial={"T": 1.0, "X": 1.0},
+            sim_t_start=None,
+            sim_t_end=None,
+        )
+        harness.recast_ir = SimpleNamespace(
+            params={"period": 24.0},
+            initial={"T": 1.0, "X": 1.0, "A": 1.25},
+            assignment_rules={"A": "1 + sin(2 * pi * T / period)"},
+            sim_t_start=None,
+            sim_t_end=None,
+        )
+        harness.auxiliary_defs = {}
+        harness.canonical_symbols = {"T": T, "X": X, "A": A, "period": period}
+
+        result = harness.check_numerical_pointwise(n_samples=4, threshold=1.0e-10)
+
+        assert result.result == ValidationResult.PASS
+        assert result.max_error < 1.0e-10
+        assert "pi" not in result.metadata["parameter_values"]
+
+    def test_numerical_pointwise_relational_function_is_structured_unsupported(self):
+        harness = _make_numerical_harness()
+        z = harness.recast_state_vars[0]
+        lt = sp.Function("lt")
+        relation_expr = lt(z, sp.Integer(1))
+        harness.orig_odes = {next(iter(harness.orig_odes)): -relation_expr}
+        harness.orig_odes_expanded = dict(harness.orig_odes)
+        harness.recast_odes[z] = -relation_expr
+        harness.recast_odes_expanded[z] = -relation_expr
+
+        result = harness.check_numerical_pointwise(n_samples=1)
+
+        assert result.result == ValidationResult.NOT_ATTEMPTED
+        assert result.reason == "unsupported_feature"
+        assert result.metadata["diagnostics"][0]["unsupported_functions"] == ["lt"]
+
+    def test_numerical_pointwise_floor_auxiliary_is_structured_unsupported(self):
+        harness = _make_time_auxiliary_numerical_harness()
+        y = sp.Symbol("Y_1", positive=True)
+        time = sp.Symbol("time", positive=True)
+        harness.auxiliary_defs = {y: sp.floor(time)}
+        harness.canonical_symbols["time"] = time
+
+        result = harness.check_numerical_pointwise(n_samples=1)
+
+        assert result.result == ValidationResult.NOT_ATTEMPTED
+        assert result.reason == "unsupported_feature"
+        diagnostic = result.metadata["diagnostics"][0]
+        assert diagnostic["expression_label"] == "Y_1"
+        assert diagnostic["unsupported_functions"] == ["floor"]
+
+    def test_numerical_pointwise_unparsed_auxiliary_fails_closed(self):
+        harness = _make_numerical_harness()
+        harness.auxiliary_definition_parse_errors = [
+            {
+                "auxiliary": "Bad",
+                "expression": "X +",
+                "exception": "invalid syntax",
+            }
+        ]
+
+        result = harness.check_numerical_pointwise(n_samples=1)
+
+        assert result.result == ValidationResult.NOT_ATTEMPTED
+        assert result.reason == "unsupported_feature"
+        diagnostic = result.metadata["diagnostics"][0]
+        assert diagnostic["reason"] == "auxiliary_definition_parse_failed"
+        assert diagnostic["unparsed_auxiliary_definitions"][0]["auxiliary"] == "Bad"
 
     def test_numerical_pointwise_evaluates_symbolic_jacobian_result(self, monkeypatch):
         import ssys._validator.numerical as numerical_module
@@ -2160,6 +2869,289 @@ class TestRecastValidator:
 
 class TestRecastValidatorAuxiliaryExtraction:
     """Tests for auxiliary definition extraction."""
+
+    def test_identity_simplifier_handles_float_roundoff_before_slow_simplify(
+        self, monkeypatch
+    ):
+        """Avoid expensive general simplification for tiny float residuals."""
+        x, y = sp.symbols("x y", positive=True)
+        residual = (
+            sp.Float("0.1") * x / y
+            + sp.Float("0.2") * x / y
+            - sp.Float("0.3") * x / y
+        )
+
+        def fail_slow_simplifier(*args, **kwargs):
+            raise AssertionError("slow simplification should not be needed")
+
+        monkeypatch.setattr(validator_common.sp, "nsimplify", fail_slow_simplifier)
+        monkeypatch.setattr(validator_common.sp, "simplify", fail_slow_simplifier)
+
+        assert validator_common._simplify_identity_difference(residual) == 0
+
+    def test_auxiliary_identity_reports_subphase_progress(self):
+        x = sp.Symbol("X", positive=True)
+        aux = sp.Symbol("Y_1", positive=True)
+        phases = []
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.progress_callback = phases.append
+        validator.orig_odes = {x: -x}
+        validator.orig_odes_expanded = {x: -x}
+        validator.recast_odes = {x: -x, aux: -x}
+        validator.recast_state_vars = [x, aux]
+        validator.mapping = {}
+        validator.auxiliary_defs = {aux: x + 1}
+        validator.canonical_symbols = {"X": x, "Y_1": aux}
+        validator.recast_ir = SimpleNamespace(assignment_rules={}, params={})
+
+        tests = validator.check_auxiliary_identities()
+
+        assert tests[0].result == ValidationResult.PASS
+        assert "auxiliaries_ode_identity:Y_1" in phases
+        assert "auxiliaries_ode_identity_build_expected:Y_1" in phases
+        assert "auxiliaries_equivalence:ode_auxiliary_identity:Y_1" in phases
+        assert any(
+            phase.startswith("auxiliaries_simplify:ode_auxiliary_identity:Y_1")
+            for phase in phases
+        )
+
+    def test_auxiliary_identity_checks_later_cheap_candidates_before_slow_simplify(
+        self, monkeypatch
+    ):
+        x = sp.Symbol("X", positive=True)
+        aux = sp.Symbol("Y_1", positive=True)
+        phases = []
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.progress_callback = phases.append
+        validator.auxiliary_defs = {aux: x + 1}
+        validator.recast_state_vars = [x, aux]
+        validator.canonical_symbols = {"X": x, "Y_1": aux}
+        validator.recast_ir = SimpleNamespace(params={})
+
+        def fail_slow_simplifier(*args, **kwargs):
+            raise AssertionError("later cheap candidate should be checked first")
+
+        monkeypatch.setattr(
+            validator_mapping,
+            "_simplify_identity_difference",
+            fail_slow_simplifier,
+        )
+
+        equivalent, residual = validator._expressions_equivalent(
+            aux,
+            x + 1,
+            context="ode_auxiliary_identity:Y_1",
+        )
+
+        assert equivalent is True
+        assert residual == 0
+        assert "auxiliaries_simplify:ode_auxiliary_identity:Y_1:candidate_0" in phases
+        assert "auxiliaries_simplify:ode_auxiliary_identity:Y_1:candidate_1" in phases
+
+    def test_auxiliary_identity_complexity_reports_structured_reason(self):
+        x = sp.Symbol("X", positive=True)
+        exponent = sp.Symbol("a", positive=True)
+        aux = sp.Symbol("Y_1", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.progress_callback = None
+        validator.orig_odes = {x: x}
+        validator.orig_odes_expanded = {x: x}
+        validator.recast_odes = {x: x, aux: sp.Float("2.0") * x**exponent}
+        validator.recast_state_vars = [x, aux]
+        validator.mapping = {}
+        validator.auxiliary_defs = {aux: x**exponent + 1}
+        validator.canonical_symbols = {"X": x, "Y_1": aux, "a": exponent}
+        validator.recast_ir = SimpleNamespace(assignment_rules={}, params={"a": "a"})
+
+        tests = validator.check_auxiliary_identities()
+
+        assert tests[0].result == ValidationResult.INCONCLUSIVE
+        assert tests[0].reason == "auxiliary_complexity"
+        assert tests[0].metadata["auxiliary"] == "Y_1"
+        assert tests[0].metadata["operation_count"] > 0
+
+    def test_auxiliary_identity_complexity_reports_candidate_index(self, monkeypatch):
+        symbols = sp.symbols("x0:260", positive=True)
+        aux = sp.Symbol("Y_1", positive=True)
+        definition = sum(symbols, sp.Integer(0))
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.progress_callback = None
+        validator.orig_odes_expanded = {}
+        validator.recast_odes = {symbol: symbol for symbol in symbols}
+        validator.recast_odes[aux] = 2 * definition
+        validator.recast_state_vars = [*symbols, aux]
+        validator.mapping = {}
+        validator.auxiliary_defs = {aux: definition}
+        validator.canonical_symbols = {str(symbol): symbol for symbol in [*symbols, aux]}
+        validator.recast_ir = SimpleNamespace(assignment_rules={}, params={})
+
+        def fail_slow_simplifier(*args, **kwargs):
+            raise AssertionError("high-complexity residual should be bounded")
+
+        monkeypatch.setattr(
+            validator_mapping,
+            "_simplify_identity_difference",
+            fail_slow_simplifier,
+        )
+
+        tests = validator._ode_auxiliary_identity_tests()
+
+        assert tests[0].result == ValidationResult.INCONCLUSIVE
+        assert tests[0].reason == "auxiliary_complexity"
+        assert tests[0].metadata["auxiliary"] == "Y_1"
+        assert tests[0].metadata["candidate_index"] == 0
+        assert tests[0].metadata["active_subphase"] == "cheap_simplification"
+        assert tests[0].metadata["operation_count"] > 250
+        assert tests[0].metadata["operation_threshold"] == (
+            validator_mapping.AUXILIARY_SLOW_SIMPLIFY_MAX_OPS
+        )
+        assert tests[0].metadata["free_symbol_threshold"] == (
+            validator_mapping.AUXILIARY_SLOW_SIMPLIFY_MAX_FREE_SYMBOLS
+        )
+        assert tests[0].metadata["max_operation_count"] == (
+            validator_mapping.AUXILIARY_SLOW_SIMPLIFY_MAX_OPS
+        )
+        assert tests[0].metadata["max_free_symbol_count"] == (
+            validator_mapping.AUXILIARY_SLOW_SIMPLIFY_MAX_FREE_SYMBOLS
+        )
+        assert tests[0].metadata["risky_symbolic_power_guard"] is False
+        assert tests[0].metadata["elapsed_seconds"] is not None
+
+    def test_assignment_auxiliary_complexity_reports_threshold_metadata(
+        self, monkeypatch
+    ):
+        symbols = sp.symbols("x0:260", positive=True)
+        aux = sp.Symbol("Y_1", positive=True)
+        definition = sum(symbols, sp.Integer(0))
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.progress_callback = None
+        validator.orig_odes = {}
+        validator.mapping = {}
+        validator.auxiliary_defs = {aux: definition}
+        validator.recast_state_vars = [*symbols]
+        validator.canonical_symbols = {str(symbol): symbol for symbol in [*symbols, aux]}
+        validator.recast_ir = SimpleNamespace(
+            assignment_rules={"Y_1": str(2 * definition)},
+            params={},
+        )
+
+        def fail_slow_simplifier(*args, **kwargs):
+            raise AssertionError("assignment auxiliary complexity should be bounded")
+
+        monkeypatch.setattr(
+            validator_mapping,
+            "_simplify_identity_difference",
+            fail_slow_simplifier,
+        )
+
+        tests = validator._assignment_identity_tests()
+
+        assert len(tests) == 1
+        assert tests[0].result == ValidationResult.INCONCLUSIVE
+        assert tests[0].reason == "auxiliary_complexity"
+        assert tests[0].metadata["rule"] == "Y_1"
+        assert tests[0].metadata["kind"] == "assignment_auxiliary"
+        assert tests[0].metadata["active_subphase"] == "cheap_simplification"
+        assert tests[0].metadata["candidate_index"] == 0
+        assert tests[0].metadata["operation_count"] > 250
+        assert tests[0].metadata["free_symbol_count"] == 260
+        assert tests[0].metadata["operation_threshold"] == (
+            validator_mapping.AUXILIARY_SLOW_SIMPLIFY_MAX_OPS
+        )
+        assert tests[0].metadata["free_symbol_threshold"] == (
+            validator_mapping.AUXILIARY_SLOW_SIMPLIFY_MAX_FREE_SYMBOLS
+        )
+        assert tests[0].metadata["max_operation_count"] == (
+            validator_mapping.AUXILIARY_SLOW_SIMPLIFY_MAX_OPS
+        )
+        assert tests[0].metadata["max_free_symbol_count"] == (
+            validator_mapping.AUXILIARY_SLOW_SIMPLIFY_MAX_FREE_SYMBOLS
+        )
+
+    def test_auxiliary_equivalence_bounds_large_candidate_generation(self):
+        symbols = sp.symbols("x0:760", positive=True)
+        residual = sum(symbols, sp.Integer(0))
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.progress_callback = None
+        validator.auxiliary_defs = {}
+        validator.recast_state_vars = list(symbols)
+        validator.canonical_symbols = {str(symbol): symbol for symbol in symbols}
+        validator.recast_ir = SimpleNamespace(params={})
+
+        with pytest.raises(validator_mapping.AuxiliaryIdentityComplexityError) as exc:
+            validator._expressions_equivalent(
+                residual,
+                sp.Integer(0),
+                context="ode_auxiliary_identity:Y_1",
+            )
+
+        assert exc.value.candidate_index == 0
+        assert exc.value.active_subphase == "candidate_generation"
+        assert exc.value.operation_count > 750
+        assert exc.value.operation_threshold == (
+            validator_mapping.AUXILIARY_CANDIDATE_GENERATION_MAX_OPS
+        )
+        assert exc.value.free_symbol_threshold is None
+
+    def test_auxiliary_equivalence_bounds_float_risky_preflight(self, monkeypatch):
+        x, exponent = sp.symbols("X a", positive=True)
+        residual = sp.Float("2.0") * x**exponent + sp.Float("1.0") * x
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.progress_callback = None
+        validator.auxiliary_defs = {}
+        validator.recast_state_vars = [x]
+        validator.canonical_symbols = {"X": x, "a": exponent}
+        validator.recast_ir = SimpleNamespace(params={})
+
+        def fail_cheap_simplification(*args, **kwargs):
+            raise AssertionError("float/risky preflight should run before simplification")
+
+        monkeypatch.setattr(
+            validator_mapping,
+            "_cheap_zero_simplification",
+            fail_cheap_simplification,
+        )
+
+        with pytest.raises(validator_mapping.AuxiliaryIdentityComplexityError) as exc:
+            validator._expressions_equivalent(
+                residual,
+                sp.Integer(0),
+                context="ode_auxiliary_identity:Y_1",
+            )
+
+        assert exc.value.candidate_index == 0
+        assert exc.value.active_subphase == "float_simplification_preflight"
+        assert exc.value.operation_count > 0
+        assert exc.value.max_operation_count == validator_mapping.AUXILIARY_FLOAT_SIMPLIFY_MAX_OPS
+        assert exc.value.max_free_symbol_count == validator_mapping.AUXILIARY_SLOW_SIMPLIFY_MAX_FREE_SYMBOLS
+        assert exc.value.operation_threshold == validator_mapping.AUXILIARY_FLOAT_SIMPLIFY_MAX_OPS
+        assert exc.value.free_symbol_threshold == (
+            validator_mapping.AUXILIARY_SLOW_SIMPLIFY_MAX_FREE_SYMBOLS
+        )
+        assert exc.value.risky_symbolic_power_guard is True
+        assert exc.value.elapsed_seconds is not None
+
+    def test_auxiliary_inference_skips_name_matched_existing_definition(self):
+        """Avoid expensive equality inference for auxiliaries already defined by name."""
+
+        class ExplodingExpr:
+            free_symbols = set()
+
+            def equals(self, other):
+                raise AssertionError("name-matched auxiliary should have been skipped")
+
+        validator = RecastValidator.__new__(RecastValidator)
+        original_x = sp.Symbol("X", positive=True)
+        recast_aux = sp.Symbol("Y_1", positive=True)
+        comment_aux = sp.Symbol("Y_1")
+        validator.factor_map = {comment_aux: sp.Symbol("X") + 1}
+        validator.orig_odes = {original_x: original_x}
+        validator.recast_odes = {
+            original_x: original_x,
+            recast_aux: ExplodingExpr(),
+        }
+
+        validator._infer_auxiliary_definitions()
 
     def test_extract_auxiliary_from_assignment(self, tmp_path):
         """Test extracting auxiliary from assignment rules."""
@@ -2719,6 +3711,32 @@ class TestSymbolicValidationBranches:
 class TestMappingValidationBranches:
     """Focused tests for mapping and auxiliary identity helper branches."""
 
+    def test_build_mapping_uses_sanitized_identity_for_reserved_state(self):
+        pi_orig = sp.Symbol("Pi", positive=True)
+        pi_recast = sp.Symbol("Pi_var", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.orig_odes = {pi_orig: -pi_orig}
+        validator.recast_odes = {pi_recast: -pi_recast}
+        validator.factor_map = {}
+        validator._infer_auxiliary_definitions = lambda: None
+
+        validator._build_mapping()
+
+        assert validator.mapping[pi_orig] == pi_recast
+
+    def test_build_mapping_uses_sanitized_identity_for_antimony_suffix_state(self):
+        gamma_orig = sp.Symbol("gamma_", positive=True)
+        gamma_recast = sp.Symbol("gamma_var", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.orig_odes = {gamma_orig: -gamma_orig}
+        validator.recast_odes = {gamma_recast: -gamma_recast}
+        validator.factor_map = {}
+        validator._infer_auxiliary_definitions = lambda: None
+
+        validator._build_mapping()
+
+        assert validator.mapping[gamma_orig] == gamma_recast
+
     def test_mapping_comment_parser_supports_old_format_and_bad_expression_fallback(self):
         validator = RecastValidator.__new__(RecastValidator)
         mapping = validator._extract_mapping_from_comments("""
@@ -2786,6 +3804,44 @@ class TestMappingValidationBranches:
         assert definitions[sp.Symbol("Z_1")] == sp.Symbol("X") + 1
         assert sp.Symbol("Bad") not in definitions
         assert sp.Symbol("Z_2") not in definitions
+        assert len(validator.auxiliary_definition_parse_errors) == 1
+        parse_error = validator.auxiliary_definition_parse_errors[0]
+        assert parse_error["auxiliary"] == "Bad"
+        assert parse_error["expression"] == "X +"
+        assert "invalid syntax" in parse_error["exception"]
+
+    def test_auxiliary_definition_parser_handles_keyword_identifier(self):
+        validator = RecastValidator.__new__(RecastValidator)
+
+        definitions = validator._extract_auxiliary_definitions("""
+            // AUXILIARY DEFINITIONS (for lifted variables)
+            // ========================================================================
+            // Y_3 := lambda^2 + ba2^2/ba1^2
+            // ========================================================================
+        """)
+
+        lam = sp.Symbol("lambda")
+        ba1 = sp.Symbol("ba1")
+        ba2 = sp.Symbol("ba2")
+        assert sp.simplify(
+            definitions[sp.Symbol("Y_3")] - (lam**2 + ba2**2 / ba1**2)
+        ) == 0
+        assert validator.auxiliary_definition_parse_errors == []
+
+    def test_auxiliary_definition_parser_preserves_floor_function(self):
+        validator = RecastValidator.__new__(RecastValidator)
+
+        definitions = validator._extract_auxiliary_definitions("""
+            // AUXILIARY DEFINITIONS (for lifted variables)
+            // ========================================================================
+            // Z_1 := floor(floor(phase + t)/cyclePeriod)
+            // ========================================================================
+        """)
+
+        expr = definitions[sp.Symbol("Z_1")]
+        assert expr.has(sp.floor)
+        assert sp.Symbol("floor") not in expr.free_symbols
+        assert validator.auxiliary_definition_parse_errors == []
 
     def test_infer_auxiliary_definitions_uses_denominator_matching(self):
         X = sp.Symbol("X", positive=True)
@@ -2866,6 +3922,115 @@ class TestMappingValidationBranches:
         K = sp.Symbol("K", positive=True)
         assert sp.simplify(expanded[X] - (-(X + K + 1))) == 0
 
+    def test_assignment_rule_expansion_does_not_simplify_expanded_odes(self, monkeypatch):
+        X = sp.Symbol("X", positive=True)
+        J_1 = sp.Symbol("J_1", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+
+        real_simplify = sp.simplify
+
+        def fail_simplify(expr):
+            raise AssertionError(f"assignment-rule expansion should not simplify {expr}")
+
+        monkeypatch.setattr(sp, "simplify", fail_simplify)
+        expanded = validator._expand_assignment_rules_in_odes(
+            {X: -J_1},
+            SimpleNamespace(
+                assignment_rules={
+                    "A": "X + K",
+                    "B": "A + 1",
+                    "J_1": "B + 2",
+                },
+                params={"K": 2.0},
+            ),
+        )
+        monkeypatch.setattr(sp, "simplify", real_simplify)
+
+        K = sp.Symbol("K", positive=True)
+        assert real_simplify(expanded[X] - (-(X + K + 3))) == 0
+
+    def test_computed_auxiliary_definition_expands_abs_assignment_rules(self):
+        fbp, fback, kg, r, rgpdh, vg, y, Z_1 = sp.symbols(
+            "fbp fback kg r rgpdh vg y Z_1",
+            positive=True,
+        )
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.canonical_symbols = {
+            str(symbol): symbol
+            for symbol in [fbp, fback, kg, r, rgpdh, vg, y, Z_1]
+        }
+        validator.auxiliary_defs = {Z_1: sp.exp(fback)}
+        validator.recast_ir = SimpleNamespace(
+            assignment_rules={
+                "rgpdh": "0.2 * pow(abs(fbp * 1 / pow(1, 2)), 1 / 2)",
+                "y": "vg * (rgpdh / (kg + rgpdh))",
+                "fback": "r + y",
+            },
+            params={"kg": 10.0, "r": 1.0, "vg": 2.2},
+        )
+
+        definitions = validator._computed_recast_variable_definitions([fbp, Z_1])
+
+        expected = sp.exp(r + 0.2 * sp.sqrt(fbp) * vg / (kg + 0.2 * sp.sqrt(fbp)))
+        assert sp.simplify(definitions[Z_1] - expected) == 0
+
+    def test_auxiliary_identity_keeps_uppercase_t_as_state_variable(self):
+        T, Y_1, h, k = sp.symbols("T Y_1 h k", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.canonical_symbols = {str(sym): sym for sym in [T, Y_1, h, k]}
+        validator.auxiliary_defs = {Y_1: T**2 + h}
+        validator.recast_odes = {
+            T: -k * T,
+            Y_1: -2 * k * T**2,
+        }
+        validator.recast_state_vars = [T, Y_1]
+        validator.orig_odes_expanded = {}
+        validator.recast_ir = SimpleNamespace(params={"h": 1.0, "k": 0.5}, assignment_rules={})
+
+        assert validator._is_clock_definition(T) is False
+        assert validator._is_clock_definition(sp.Symbol("t", positive=True)) is True
+
+        tests = validator._ode_auxiliary_identity_tests()
+
+        assert len(tests) == 1
+        assert tests[0].result == ValidationResult.PASS
+
+    def test_auxiliary_identity_substitutes_finite_recast_parameters(self):
+        X, Y, K, P = sp.symbols("X Y K P", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.canonical_symbols = {str(sym): sym for sym in [X, Y, K, P]}
+        validator.auxiliary_defs = {Y: X / (1 + P / K)}
+        validator.recast_odes = {
+            X: -X,
+            Y: -X,
+        }
+        validator.recast_state_vars = [X, Y]
+        validator.orig_odes_expanded = {}
+        validator.recast_ir = SimpleNamespace(params={"K": 1.0, "P": 0.0}, assignment_rules={})
+
+        tests = validator._ode_auxiliary_identity_tests()
+
+        assert len(tests) == 1
+        assert tests[0].result == ValidationResult.PASS
+
+    def test_auxiliary_identity_preserves_nonzero_parameter_residual(self):
+        X, Y, K, P = sp.symbols("X Y K P", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.canonical_symbols = {str(sym): sym for sym in [X, Y, K, P]}
+        validator.auxiliary_defs = {Y: X / (1 + P / K)}
+        validator.recast_odes = {
+            X: -X,
+            Y: -X,
+        }
+        validator.recast_state_vars = [X, Y]
+        validator.orig_odes_expanded = {}
+        validator.recast_ir = SimpleNamespace(params={"K": 1.0, "P": 2.0}, assignment_rules={})
+
+        tests = validator._ode_auxiliary_identity_tests()
+
+        assert len(tests) == 1
+        assert tests[0].result == ValidationResult.FAIL
+
     def test_mapping_completeness_allows_assignment_rule_identity(self):
         X = sp.Symbol("X", positive=True)
         validator = RecastValidator.__new__(RecastValidator)
@@ -2926,7 +4091,7 @@ class TestNumericalValidationBranches:
         assert result.max_error is not None
         assert result.max_error < 1.0e-12
 
-    def test_numerical_validation_lambdifies_partially_unresolved_auxiliary(self):
+    def test_numerical_validation_reports_partially_unresolved_auxiliary(self):
         X = sp.Symbol("X", positive=True)
         Y = sp.Symbol("Y_1", positive=True)
         U = sp.Symbol("U", positive=True)
@@ -2942,9 +4107,9 @@ class TestNumericalValidationBranches:
 
         result = validator.check_numerical_pointwise(n_samples=3)
 
-        assert result.result == ValidationResult.PASS
-        assert result.max_error is not None
-        assert result.max_error < 1.0e-12
+        assert result.result == ValidationResult.NOT_ATTEMPTED
+        assert result.reason == "unresolved_parameter"
+        assert result.metadata["diagnostics"][0]["unresolved_symbols"] == ["U"]
 
 
 if __name__ == "__main__":
