@@ -311,7 +311,11 @@ class MappingValidationMixin(ValidatorState):
 
                         # Parse expression (handles products like X_1*X_2)
                         try:
-                            expr = sp.sympify(expr_str)
+                            expr = _sympify_model_expression(
+                                expr_str,
+                                {},
+                                positive_new_symbols=True,
+                            )
                             mapping[orig_sym] = expr
                         except (TypeError, ValueError, sp.SympifyError):
                             # If parsing fails, treat as single symbol

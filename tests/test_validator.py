@@ -3540,6 +3540,41 @@ class TestVariableICollisionWithSpI:
                 f"sp.I appeared in error: {result.details}"
 
 
+class TestVariableSCollisionWithSympyRegistry:
+    """Tests for variable 'S' collision with SymPy's singleton registry sp.S."""
+
+    def test_identity_mapping_s_not_confused_with_sympy_registry(self, tmp_path):
+        """Mapping comments must parse model variable S as a Symbol, not sympy.S."""
+        original = tmp_path / "original.ant"
+        original.write_text("""
+            S' = -k*S
+            k = 0.5
+            S = 1.0
+        """)
+
+        recast = tmp_path / "recast.ant"
+        recast.write_text("""
+            model recast()
+            // ========================================================================
+            // VARIABLE MAPPING
+            // ========================================================================
+            // S = S
+            // ========================================================================
+
+            species S;
+            S' = -k*S;
+            k = 0.5;
+            S = 1.0;
+            end
+        """)
+
+        validator = RecastValidator(str(original), str(recast), parser="sbml")
+        s_symbol = sp.Symbol("S", positive=True)
+
+        assert validator.mapping[s_symbol] == s_symbol
+        assert validator.check_mapping_complete().result == ValidationResult.PASS
+
+
 class TestTimeDependentValidation:
     """Tests for time-dependent model validation with clock variables."""
 
@@ -3777,7 +3812,9 @@ class TestMappingValidationBranches:
             // Y = should_not_be_seen
         """)
 
-        assert mapping[sp.Symbol("X")] == sp.Symbol("Z_1") * sp.Symbol("Z_2")
+        assert mapping[sp.Symbol("X")] == sp.Symbol(
+            "Z_1", positive=True
+        ) * sp.Symbol("Z_2", positive=True)
         assert mapping[sp.Symbol("Bad")] == sp.Symbol("X +")
         assert sp.Symbol("Y") not in mapping
 
