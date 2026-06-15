@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -384,7 +385,10 @@ def _safe_extract_sdist(sdist: Path, extract_root: Path) -> Path:
             target = (extract_root / member.name).resolve()
             if root_resolved not in (target, *target.parents):
                 raise SystemExit(f"refusing unsafe sdist member path: {member.name}")
-        tar.extractall(extract_root)
+        extract_kwargs = {}
+        if "filter" in inspect.signature(tar.extractall).parameters:
+            extract_kwargs["filter"] = "data"
+        tar.extractall(extract_root, **extract_kwargs)
     roots = [path for path in extract_root.iterdir() if path.is_dir()]
     if len(roots) != 1:
         raise SystemExit(f"expected one unpacked sdist root, found {roots}")

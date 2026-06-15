@@ -1,11 +1,23 @@
 """Unit tests for the local release artifact smoke helper."""
 
+import inspect
+import io
+import tarfile
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
 from tools import local_artifact_smoke
+
+
+def _write_tarball(path: Path, members: dict[str, str]) -> None:
+    with tarfile.open(path, "w:gz") as tar:
+        for name, text in members.items():
+            payload = text.encode("utf-8")
+            info = tarfile.TarInfo(name)
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
 
 
 def test_safe_label_stabilizes_paths_and_versions():
@@ -64,6 +76,51 @@ def test_prepare_evidence_dir_resolves_relative_paths(tmp_path: Path, monkeypatc
 
     assert evidence_dir == (tmp_path / "release-evidence/dev").resolve()
     assert evidence_dir.is_dir()
+
+
+def test_safe_extract_sdist_uses_explicit_data_filter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    sdist = tmp_path / "ssys-0.5.5.tar.gz"
+    _write_tarball(
+        sdist,
+        {
+            "ssys-0.5.5/README.md": "# ssys\n",
+            "ssys-0.5.5/src/ssys/__init__.py": "__version__ = '0.5.5'\n",
+        },
+    )
+    captured_kwargs = {}
+    original_extractall = tarfile.TarFile.extractall
+
+    def wrapped_extractall(self, *args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return original_extractall(self, *args, **kwargs)
+
+    wrapped_extractall.__signature__ = inspect.signature(original_extractall)
+    monkeypatch.setattr(tarfile.TarFile, "extractall", wrapped_extractall)
+
+    extracted = local_artifact_smoke._safe_extract_sdist(sdist, tmp_path / "extract")
+
+    assert extracted == tmp_path / "extract" / "ssys-0.5.5"
+    assert (extracted / "README.md").read_text(encoding="utf-8") == "# ssys\n"
+    assert captured_kwargs["filter"] == "data"
+
+
+def test_safe_extract_sdist_rejects_path_traversal_member(tmp_path: Path):
+    sdist = tmp_path / "ssys-0.5.5.tar.gz"
+    _write_tarball(
+        sdist,
+        {
+            "ssys-0.5.5/README.md": "# ssys\n",
+            "ssys-0.5.5/../../escape.txt": "escape\n",
+        },
+    )
+
+    with pytest.raises(SystemExit, match="refusing unsafe sdist member path"):
+        local_artifact_smoke._safe_extract_sdist(sdist, tmp_path / "extract")
+
+    assert not (tmp_path / "escape.txt").exists()
 
 
 def test_verify_sdist_fixtures_counts_manifest_entries(tmp_path: Path):
