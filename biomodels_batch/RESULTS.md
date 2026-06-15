@@ -1,6 +1,6 @@
 # BioModels Batch Transformation Results
 
-*Auto-generated on 2025-12-31 21:16*
+*Auto-generated on 2026-06-15 14:52*
 
 ## Pipeline Summary
 
@@ -9,39 +9,40 @@
 | SBML downloads | 1,644 | Successfully downloaded |
 | Filtered out | 666 | No ODEs, events, delays, etc. |
 | **Transformation candidates** | **978** | Passed heuristic filters |
-| Successful transformations | 896 | 91.6% success rate |
-| Failed (error) | 103 | Various errors |
-| **Validated models** | **204** | Numerical validation passed |
+| Successful transformations | 848 | 86.7% success rate |
+| Failed (error) | 131 | Various errors |
+| **Validated models** | **738** | Numerical validation passed |
 
 ## Transformation Achievements
 
 | Transformation | Count | Significance |
 |----------------|-------|--------------|
-| General → S-system | 1 | Full simplification achieved |
-| General → GMA | 66 | Functional lifting to GMA form |
-| GMA → S-system | 18 | Sum-to-product reduction |
-| GMA → GMA | 74 | Already in GMA form |
+| General → S-system | 2 | Full simplification achieved |
+| General → GMA | 281 | Functional lifting to GMA form |
+| GMA → S-system | 77 | Sum-to-product reduction |
+| GMA → GMA | 182 | Already in GMA form |
 | S-system → S-system | 4 | Already in S-system form |
-| Canonical S-system → S-system | 4 | - |
-| General → General | 37 | - |
-| **Total validated** | **204** | |
+| Canonical S-system → Canonical S-system | 8 | - |
+| General → Canonical S-system | 5 | - |
+| General → General | 179 | - |
+| **Total validated** | **738** | |
 
 ## Sample Validated Models
 
 | Model ID | Original Type | Transformed Type | Max Error |
 |----------|---------------|------------------|-----------|
-| BIOMD0000000732 | General | S-system | 0.00e+00 |
-| MODEL8236520494 | General | GMA | 4.71e-16 |
-| BIOMD0000000274 | General | GMA | 3.00e-16 |
-| MODEL1108260015 | General | GMA | 0.00e+00 |
-| BIOMD0000000414 | General | GMA | 0.00e+00 |
-| BIOMD0000000423 | General | GMA | 1.76e-15 |
-| BIOMD0000000424 | General | GMA | 4.49e-16 |
-| BIOMD0000000254 | General | GMA | 2.80e-16 |
-| BIOMD0000000448 | General | GMA | 1.16e-16 |
-| BIOMD0000000245 | General | GMA | 4.65e-16 |
+| BIOMD0000000914 | General | S-system | 0.00e+00 |
+| MODEL1108260010 | General | S-system | 0.00e+00 |
+| BIOMD0000000730 | General | GMA | 8.76e-16 |
+| BIOMD0000000545 | General | GMA | 4.10e-16 |
+| MODEL1203220000 | General | GMA | 2.62e-16 |
+| BIOMD0000000520 | General | GMA | 3.82e-15 |
+| MODEL1204280001 | General | GMA | 1.93e-16 |
+| MODEL1204280002 | General | GMA | 1.93e-16 |
+| MODEL1204280003 | General | GMA | 2.98e-16 |
+| MODEL1204280004 | General | GMA | 2.47e-16 |
 
-See `results/validated/manifest.csv` for complete list (204 models).
+Rerunning the benchmark writes the complete validated manifest to `results/validated/manifest.csv` (738 models).
 
 ## Reproducing Results
 

@@ -348,7 +348,10 @@ def generate_sample_models_table(manifest_df: pd.DataFrame | None) -> str:
         lines.append(f"| {row.get('model_id', 'Unknown')} | {row.get('original_type', 'Unknown')} | "
                      f"{row.get('recast_type', 'Unknown')} | {max_err} |")
 
-    lines.append(f"\nSee `results/validated/manifest.csv` for complete list ({len(manifest_df)} models).")
+    lines.append(
+        "\nRerunning the benchmark writes the complete validated manifest to "
+        f"`results/validated/manifest.csv` ({len(manifest_df)} models)."
+    )
 
     return "\n".join(lines)
 
