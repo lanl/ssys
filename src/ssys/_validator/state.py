@@ -1,5 +1,6 @@
 """Typed state shared by validation mixins."""
 
+from collections.abc import Callable
 from typing import Any
 
 import sympy as sp
@@ -23,6 +24,7 @@ class ValidatorState:
     factor_map: dict[sp.Symbol, Any]
     auxiliary_defs: dict[sp.Symbol, sp.Expr]
     canonical_symbols: dict[str, sp.Symbol]
+    progress_callback: Callable[[str], None] | None
     orig_solver_requirement: SolverRequirement
     recast_solver_requirement: SolverRequirement
 

@@ -3131,6 +3131,35 @@ class TestRecastValidatorAuxiliaryExtraction:
         assert exc.value.risky_symbolic_power_guard is True
         assert exc.value.elapsed_seconds is not None
 
+    def test_auxiliary_equivalence_allows_small_numeric_fractional_power(self):
+        y_1, z2, z_1, u_1 = sp.symbols("Y_1 Z2 Z_1 u_1", positive=True)
+        validator = RecastValidator.__new__(RecastValidator)
+        validator.progress_callback = None
+        validator.auxiliary_defs = {
+            z_1: sp.sqrt(z2**2 + 1),
+            u_1: z2**2 + 1,
+        }
+        validator.recast_state_vars = [y_1, z2, z_1, u_1]
+        validator.canonical_symbols = {
+            "Y_1": y_1,
+            "Z2": z2,
+            "Z_1": z_1,
+            "u_1": u_1,
+        }
+        validator.recast_ir = SimpleNamespace(params={})
+
+        lhs = z2 * u_1 ** sp.Float("0.5") / (y_1 * sp.sqrt(z2**2 + 1))
+        rhs = z2 * u_1 ** sp.Float("0.5") / (y_1 * z_1)
+
+        equivalent, residual = validator._expressions_equivalent(
+            lhs,
+            rhs,
+            context="ode_auxiliary_identity:Z_1",
+        )
+
+        assert equivalent is True
+        assert residual == 0
+
     def test_auxiliary_inference_skips_name_matched_existing_definition(self):
         """Avoid expensive equality inference for auxiliaries already defined by name."""
 

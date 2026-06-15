@@ -1,6 +1,7 @@
 """System and solver classification shared by core code and notebook helpers."""
 
 import re
+from collections.abc import Callable
 
 import sympy as sp
 
@@ -97,11 +98,7 @@ def classify_sym_system_solver_requirement(sym) -> SolverRequirement:
     return configured or SolverRequirement.ODE_ONLY
 
 
-def _assignment_rule_substitutions(sym) -> dict[sp.Symbol, sp.Expr]:
-    rule_subs: dict[sp.Symbol, sp.Expr] = {}
-    if not sym.assignment_rules:
-        return rule_subs
-
+def _assignment_rule_parse_locals(sym) -> dict[str, sp.Symbol]:
     all_syms = {s.name: s for s in sym.vars}
     for param_name in sym.params:
         all_syms[param_name] = sp.Symbol(param_name, positive=True)
@@ -109,28 +106,144 @@ def _assignment_rule_substitutions(sym) -> dict[sp.Symbol, sp.Expr]:
     for rule_name in sym.assignment_rules:
         if rule_name not in all_syms:
             all_syms[rule_name] = sp.Symbol(rule_name, positive=True)
+    return all_syms
 
-    for rule_name, rule_str in sym.assignment_rules.items():
-        try:
-            rule_expr = sp.sympify(rule_str, locals=all_syms)
+
+def _parse_assignment_rule_by_name(
+    rule_name: str,
+    assignment_rules: dict[str, str],
+    all_syms: dict[str, sp.Symbol],
+    parse_cache: dict[str, sp.Expr | None],
+) -> sp.Expr | None:
+    if rule_name in parse_cache:
+        return parse_cache[rule_name]
+    try:
+        parse_cache[rule_name] = sp.sympify(
+            assignment_rules[rule_name],
+            locals=all_syms,
+        )
+    except Exception:
+        parse_cache[rule_name] = None
+    return parse_cache[rule_name]
+
+
+def _expand_assignment_rule_by_name(
+    rule_name: str,
+    assignment_rules: dict[str, str],
+    all_syms: dict[str, sp.Symbol],
+    parse_cache: dict[str, sp.Expr | None],
+    expanded_cache: dict[str, sp.Expr | None],
+    visiting: set[str],
+) -> sp.Expr | None:
+    if rule_name in expanded_cache:
+        return expanded_cache[rule_name]
+
+    rule_expr = _parse_assignment_rule_by_name(
+        rule_name,
+        assignment_rules,
+        all_syms,
+        parse_cache,
+    )
+    if rule_expr is None:
+        expanded_cache[rule_name] = None
+        return None
+
+    visiting.add(rule_name)
+    substitutions: dict[sp.Symbol, sp.Expr] = {}
+    for free_symbol in rule_expr.free_symbols:
+        dependency_name = free_symbol.name
+        if dependency_name not in assignment_rules or dependency_name in visiting:
+            continue
+        dependency_expr = _expand_assignment_rule_by_name(
+            dependency_name,
+            assignment_rules,
+            all_syms,
+            parse_cache,
+            expanded_cache,
+            visiting,
+        )
+        if dependency_expr is not None:
+            substitutions[free_symbol] = dependency_expr
+    visiting.remove(rule_name)
+
+    expanded_expr = rule_expr.xreplace(substitutions) if substitutions else rule_expr
+    expanded_cache[rule_name] = expanded_expr
+    return expanded_expr
+
+
+def _expand_assignment_rules_in_expr(
+    expr: sp.Expr,
+    assignment_rules: dict[str, str],
+    all_syms: dict[str, sp.Symbol],
+    parse_cache: dict[str, sp.Expr | None],
+    expanded_cache: dict[str, sp.Expr | None],
+) -> sp.Expr:
+    substitutions: dict[sp.Symbol, sp.Expr] = {}
+    for free_symbol in expr.free_symbols:
+        rule_name = free_symbol.name
+        if rule_name not in assignment_rules:
+            continue
+        rule_expr = _expand_assignment_rule_by_name(
+            rule_name,
+            assignment_rules,
+            all_syms,
+            parse_cache,
+            expanded_cache,
+            set(),
+        )
+        if rule_expr is not None:
+            substitutions[free_symbol] = rule_expr
+    return expr.xreplace(substitutions) if substitutions else expr
+
+
+def _assignment_rule_substitutions(sym) -> dict[sp.Symbol, sp.Expr]:
+    rule_subs: dict[sp.Symbol, sp.Expr] = {}
+    if not sym.assignment_rules:
+        return rule_subs
+
+    all_syms = _assignment_rule_parse_locals(sym)
+    parse_cache: dict[str, sp.Expr | None] = {}
+    expanded_cache: dict[str, sp.Expr | None] = {}
+    for rule_name in sym.assignment_rules:
+        rule_expr = _expand_assignment_rule_by_name(
+            rule_name,
+            sym.assignment_rules,
+            all_syms,
+            parse_cache,
+            expanded_cache,
+            set(),
+        )
+        if rule_expr is not None:
             rule_subs[all_syms[rule_name]] = rule_expr
-        except Exception:
-            pass
-
-    for _ in range(10):
-        changed = False
-        for rule_sym, rule_expr in list(rule_subs.items()):
-            new_expr = rule_expr.subs(rule_subs)
-            if new_expr != rule_expr:
-                rule_subs[rule_sym] = new_expr
-                changed = True
-        if not changed:
-            break
 
     return rule_subs
 
 
-def classify_system(sym) -> SystemClass:
+def _notify_progress(
+    progress_callback: Callable[[str], None] | None,
+    phase: str,
+) -> None:
+    """Best-effort progress hook for classification subphases."""
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(phase)
+    except Exception:
+        return
+
+
+def _has_non_monomial_denominator(expr: sp.Expr) -> bool:
+    """Return True when a rational expression cannot be monomial after expansion."""
+    _numerator, denominator = expr.as_numer_denom()
+    return denominator != 1 and not _is_term_monomial(denominator)
+
+
+def classify_system(
+    sym,
+    *,
+    progress_callback: Callable[[str], None] | None = None,
+    progress_prefix: str = "classification",
+) -> SystemClass:
     """
     Classify a symbolic system using expanded assignment-rule semantics.
 
@@ -138,19 +251,35 @@ def classify_system(sym) -> SystemClass:
     functions, time dependence, and symbolic exponents are interpreted the same
     way across the core package and notebooks.
     """
-    rule_subs = _assignment_rule_substitutions(sym)
-    name_to_expr = {rule_sym.name: expr for rule_sym, expr in rule_subs.items()}
+    _notify_progress(progress_callback, f"{progress_prefix}:assignment_substitutions")
+    assignment_rules = sym.assignment_rules
+    assignment_rule_locals = (
+        _assignment_rule_parse_locals(sym) if assignment_rules else {}
+    )
+    assignment_rule_parse_cache: dict[str, sp.Expr | None] = {}
+    assignment_rule_expanded_cache: dict[str, sp.Expr | None] = {}
 
     is_canonical = True
     is_ssystem = True
     is_gma = True
 
     for _var, ode in sym.odes.items():
-        if rule_subs:
-            ode = ode.subs(rule_subs)
-            for sym_in_ode in ode.free_symbols:
-                if sym_in_ode.name in name_to_expr:
-                    ode = ode.subs(sym_in_ode, name_to_expr[sym_in_ode.name])
+        var_name = str(_var)
+        if assignment_rules:
+            _notify_progress(progress_callback, f"{progress_prefix}:substitute:{var_name}")
+            ode = _expand_assignment_rules_in_expr(
+                ode,
+                assignment_rules,
+                assignment_rule_locals,
+                assignment_rule_parse_cache,
+                assignment_rule_expanded_cache,
+            )
+
+        _notify_progress(progress_callback, f"{progress_prefix}:denominator:{var_name}")
+        if _has_non_monomial_denominator(ode):
+            return SystemClass.GENERAL
+
+        _notify_progress(progress_callback, f"{progress_prefix}:expand:{var_name}")
         terms = expand_to_terms(sp.expand(ode))
 
         pos_monomials = []

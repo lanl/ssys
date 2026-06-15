@@ -73,7 +73,7 @@ def _has_risky_symbolic_power(expr: sp.Expr) -> bool:
     """Return True for power forms that commonly trigger expensive simplification."""
     for power in expr.atoms(sp.Pow):
         exponent = power.exp
-        if exponent.free_symbols or exponent.is_integer is False:
+        if exponent.free_symbols:
             return True
     return False
 
