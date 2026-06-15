@@ -24,16 +24,23 @@ Output:
     results/failures/ - Error logs for failed models
 """
 
+from __future__ import annotations
+
 import argparse
+import csv
 import json
 import logging
 import sys
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pandas as pd
-from tqdm import tqdm
+try:
+    from tqdm import tqdm
+except ImportError:
+    def tqdm(iterable, *args, **kwargs):
+        return iterable
 
 # Add parent directory to path for ssys import
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -46,6 +53,77 @@ import ssys  # noqa: E402
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    import pandas as pd
+
+RECAST_POLICY_FIELDS = [
+    "recast_attempt_role",
+    "recast_attempt_count",
+    "recast_base_timeout_seconds",
+    "recast_retry_timeout_seconds",
+    "recast_final_attempt_timeout_seconds",
+    "recast_retry_policy",
+    "recast_recovered_by_retry",
+]
+
+RECAST_TELEMETRY_FIELDS = [
+    "recast_last_phase",
+    "recast_dominant_phase_attribution",
+]
+
+RESULT_COLUMNS = [
+    "model_id",
+    "mode",
+    "recast_success",
+    "recast_time",
+    "recast_phase_history",
+    "recast_phase_seconds",
+    "recast_dominant_phase",
+    "recast_dominant_phase_seconds",
+    *RECAST_TELEMETRY_FIELDS,
+    *RECAST_POLICY_FIELDS,
+    "validation_attempted",
+    "validation_pass",
+    "error",
+]
+
+
+def _read_result_rows(path: Path) -> tuple[list[dict[str, str]], list[str]]:
+    if not path.exists():
+        return [], []
+    with open(path, newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        return list(reader), list(reader.fieldnames or [])
+
+
+def _result_fieldnames(
+    existing_fieldnames: list[str],
+    rows: list[dict],
+) -> list[str]:
+    fieldnames: list[str] = []
+    for field in [*existing_fieldnames, *RESULT_COLUMNS]:
+        if field not in fieldnames:
+            fieldnames.append(field)
+    for row in rows:
+        for field in row:
+            if field not in fieldnames:
+                fieldnames.append(field)
+    return fieldnames
+
+
+def _write_result_rows(
+    path: Path,
+    rows: list[dict],
+    *,
+    existing_fieldnames: list[str] | None = None,
+) -> None:
+    fieldnames = _result_fieldnames(existing_fieldnames or [], rows)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
 
 def load_candidates(filter_type: str | None = None) -> pd.DataFrame:
     """
@@ -57,6 +135,8 @@ def load_candidates(filter_type: str | None = None) -> pd.DataFrame:
     Returns:
         DataFrame of candidates to attempt
     """
+    import pandas as pd
+
     csv_path = Path(config.CANDIDATES_CSV)
     if not csv_path.exists():
         logger.error(f"Candidates file not found: {csv_path}")
@@ -76,7 +156,105 @@ def load_candidates(filter_type: str | None = None) -> pd.DataFrame:
     return df
 
 
-def attempt_recast(model_id: str, mode: str) -> tuple[bool, str | None, str | None]:
+def _dominant_phase_from_seconds(phase_seconds: dict[str, float]) -> tuple[str, float] | None:
+    """Return the slowest recorded recast phase."""
+    if not phase_seconds:
+        return None
+    phase, seconds = max(phase_seconds.items(), key=lambda item: item[1])
+    return phase, seconds
+
+
+def _last_phase_from_history(phase_history: list[dict]) -> str:
+    for item in reversed(phase_history):
+        if isinstance(item, dict) and item.get("phase"):
+            return str(item["phase"])
+    return ""
+
+
+def _open_phase_interval(
+    phase_history: list[dict],
+    *,
+    elapsed_seconds: float,
+) -> tuple[str, float] | None:
+    open_starts: dict[str, float] = {}
+    for item in phase_history:
+        if not isinstance(item, dict) or not item.get("phase"):
+            continue
+        try:
+            elapsed = float(item.get("elapsed_seconds"))
+        except (TypeError, ValueError):
+            continue
+        phase = str(item["phase"])
+        event = str(item.get("event", "phase_start"))
+        if event == "phase_start":
+            open_starts[phase] = elapsed
+        elif event == "phase_end":
+            open_starts.pop(phase, None)
+
+    if not open_starts:
+        return None
+    phase, started = max(open_starts.items(), key=lambda item: item[1])
+    if elapsed_seconds <= started:
+        return None
+    return phase, elapsed_seconds - started
+
+
+def _apply_recast_timing(
+    result: dict,
+    recast_timing: dict,
+    *,
+    elapsed_seconds: float | None = None,
+    timed_out: bool = False,
+) -> None:
+    phase_history = recast_timing.get("phase_history", [])
+    if not isinstance(phase_history, list):
+        phase_history = []
+    phase_seconds = recast_timing.get("phase_seconds", {})
+    if not isinstance(phase_seconds, dict):
+        phase_seconds = {}
+
+    result["recast_phase_history"] = json.dumps(phase_history, separators=(",", ":"))
+    result["recast_phase_seconds"] = json.dumps(phase_seconds, separators=(",", ":"))
+    result["recast_last_phase"] = recast_timing.get(
+        "last_phase",
+        _last_phase_from_history(phase_history),
+    )
+
+    if timed_out and elapsed_seconds is not None:
+        open_interval = _open_phase_interval(phase_history, elapsed_seconds=elapsed_seconds)
+        if open_interval is not None:
+            phase, seconds = open_interval
+            result["recast_dominant_phase"] = phase
+            result["recast_dominant_phase_seconds"] = round(seconds, 6)
+            result["recast_last_phase"] = phase
+            result["recast_dominant_phase_attribution"] = "inferred_open_interval"
+            return
+
+    dominant_phase = recast_timing.get("dominant_phase", "")
+    dominant_phase_seconds = recast_timing.get("dominant_phase_seconds", "")
+    if not dominant_phase:
+        dominant = _dominant_phase_from_seconds({
+            str(phase): float(seconds)
+            for phase, seconds in phase_seconds.items()
+            if isinstance(seconds, (int, float))
+        })
+        if dominant is not None:
+            dominant_phase, dominant_phase_seconds = dominant
+
+    result["recast_dominant_phase"] = dominant_phase
+    result["recast_dominant_phase_seconds"] = dominant_phase_seconds
+    if dominant_phase:
+        result["recast_dominant_phase_attribution"] = recast_timing.get(
+            "dominant_phase_attribution",
+            "measured",
+        )
+
+
+def attempt_recast(
+    model_id: str,
+    mode: str,
+    phase_recorder: dict | None = None,
+) -> tuple[bool, str | None, str | None, dict]:
     """
     Attempt to recast a single model using SBML.
 
@@ -85,27 +263,80 @@ def attempt_recast(model_id: str, mode: str) -> tuple[bool, str | None, str | No
         mode: 'simplified' or 'canonical'
 
     Returns:
-        (success, recast_text, error_message)
+        (success, recast_text, error_message, timing_metadata)
     """
     sbml_path = Path(config.SBML_CANDIDATES_DIR) / f"{model_id}.xml"
+    import time
+
+    started = time.perf_counter()
+    phase_history = []
+    phase_seconds = {}
+
+    def update_phase_recorder() -> None:
+        if phase_recorder is not None:
+            phase_recorder.clear()
+            phase_recorder.update(timing_metadata())
+
+    def start_phase(phase: str) -> float:
+        elapsed = time.perf_counter() - started
+        phase_history.append({
+            "event": "phase_start",
+            "phase": phase,
+            "elapsed_seconds": round(elapsed, 6),
+        })
+        update_phase_recorder()
+        return time.perf_counter()
+
+    def end_phase(phase: str, phase_start: float) -> None:
+        elapsed = time.perf_counter() - started
+        seconds = time.perf_counter() - phase_start
+        phase_seconds[phase] = seconds
+        phase_history.append({
+            "event": "phase_end",
+            "phase": phase,
+            "elapsed_seconds": round(elapsed, 6),
+            "phase_seconds": round(seconds, 6),
+        })
+        update_phase_recorder()
+
+    def timing_metadata() -> dict:
+        dominant = _dominant_phase_from_seconds(phase_seconds)
+        metadata = {
+            "phase_history": phase_history,
+            "phase_seconds": {key: round(value, 6) for key, value in phase_seconds.items()},
+            "last_phase": _last_phase_from_history(phase_history),
+        }
+        if dominant is not None:
+            metadata["dominant_phase"] = dominant[0]
+            metadata["dominant_phase_seconds"] = round(dominant[1], 6)
+            metadata["dominant_phase_attribution"] = "measured"
+        return metadata
 
     if not sbml_path.exists():
-        return False, None, f"SBML file not found: {sbml_path}"
+        return False, None, f"SBML file not found: {sbml_path}", timing_metadata()
 
     try:
         # Parse SBML directly using libSBML
+        phase_start = start_phase("parse_sbml")
         sym = ssys.parse_sbml(str(sbml_path))
+        end_phase("parse_sbml", phase_start)
 
         # Recast
+        phase_start = start_phase("recast_to_ssystem")
         result = ssys.recast_to_ssystem(sym, mode=mode)
+        end_phase("recast_to_ssystem", phase_start)
 
         # Generate output
+        phase_start = start_phase("ssystem_to_antimony")
         out_text = ssys.ssystem_to_antimony(result, model_name=f"{model_id}_recast", mode=mode)
+        end_phase("ssystem_to_antimony", phase_start)
 
-        return True, out_text, None
+        return True, out_text, None, timing_metadata()
 
+    except utils.TimeoutError:
+        raise
     except Exception as e:
-        return False, None, f"{type(e).__name__}: {str(e)}"
+        return False, None, f"{type(e).__name__}: {str(e)}", timing_metadata()
 
 
 def save_recast(model_id: str, mode: str, recast_text: str):
@@ -203,18 +434,37 @@ def categorize_error(error_msg: str) -> tuple[str, str]:
                 "Complex models with many species/reactions or deeply nested functions "
                 "may require longer processing time.")
 
+    if "recastcomplexityerror" in error_lower or "recast_complexity:" in error_lower:
+        return ("RECAST_COMPLEXITY",
+                "Model exceeded a bounded direct-recast symbolic complexity budget. "
+                "The recaster failed closed before generating an artifact, preserving "
+                "structured stage, operation, threshold, and expression-preview details.")
+
     if "piecewise" in error_lower or "event" in error_lower:
         return ("UNSUPPORTED_CONSTRUCT",
                 "Model contains piecewise functions or events, which are not supported "
                 "by algebraic recasting. These models have discontinuous dynamics that "
                 "cannot be represented in S-system/GMA form.")
 
+    if (
+        "unsupported_generated_output" in error_lower
+        or "unsupported composite derivative" in error_lower
+        or "unsupported derivative" in error_lower
+    ):
+        return ("UNSUPPORTED_CONSTRUCT",
+                "Model contains an unsupported derivative of a nonsmooth or unknown "
+                "function. Recasting fails closed before generating invalid Antimony.")
+
     if "delay" in error_lower:
         return ("UNSUPPORTED_CONSTRUCT",
                 "Model contains time delays (delay differential equations). "
                 "S-system recasting only supports ODEs, not DDEs.")
 
-    if "parse" in error_lower or "syntax" in error_lower:
+    if (
+        "parse" in error_lower
+        or "parsing" in error_lower
+        or "syntax" in error_lower
+    ):
         return ("PARSE_ERROR",
                 "Failed to parse the SBML/Antimony model. The model may have "
                 "syntax errors or use constructs not supported by the parser.")
@@ -250,7 +500,7 @@ def categorize_error(error_msg: str) -> tuple[str, str]:
             f"Recast failed with error: {error_msg[:200]}...")
 
 
-def log_failure(model_id: str, mode: str, error_msg: str):
+def log_failure(model_id: str, mode: str, error_msg: str, metadata: dict | None = None):
     """Log failure to file with categorization and explanation."""
     failure_path = Path(config.FAILURES_DIR) / f"{model_id}_{mode}.log"
     failure_path.parent.mkdir(parents=True, exist_ok=True)
@@ -266,8 +516,64 @@ def log_failure(model_id: str, mode: str, error_msg: str):
         f.write("\n--- Explanation ---\n")
         f.write(f"{explanation}\n")
 
+    if metadata:
+        metadata_path = Path(config.FAILURES_DIR) / f"{model_id}_{mode}_recast_metadata.json"
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f, indent=2, sort_keys=True)
 
-def worker_error_result(model_id: str, mode: str, exc: BaseException) -> dict:
+
+def failure_metadata_from_result(result: dict) -> dict:
+    """Return sidecar metadata that reconciles a failure log with CSV output."""
+    keys = [
+        "model_id",
+        "mode",
+        "recast_success",
+        "recast_time",
+        "recast_phase_history",
+        "recast_phase_seconds",
+        "recast_dominant_phase",
+        "recast_dominant_phase_seconds",
+        *RECAST_TELEMETRY_FIELDS,
+        *RECAST_POLICY_FIELDS,
+        "error",
+    ]
+    return {key: result.get(key) for key in keys}
+
+
+def recast_policy_metadata(
+    *,
+    attempt_role: str,
+    timeout: int,
+    base_timeout: int | None,
+    retry_timeout: int | None,
+    recast_policy: str,
+    recast_success: bool = False,
+) -> dict:
+    """Return CSV-stable metadata for the selected recast attempt policy."""
+    return {
+        "recast_attempt_role": attempt_role,
+        "recast_attempt_count": 2 if attempt_role == "retry" else 1,
+        "recast_base_timeout_seconds": (
+            base_timeout if base_timeout is not None else timeout
+        ),
+        "recast_retry_timeout_seconds": retry_timeout if retry_timeout is not None else "",
+        "recast_final_attempt_timeout_seconds": timeout,
+        "recast_retry_policy": recast_policy,
+        "recast_recovered_by_retry": attempt_role == "retry" and recast_success,
+    }
+
+
+def worker_error_result(
+    model_id: str,
+    mode: str,
+    exc: BaseException,
+    *,
+    attempt_role: str = "base",
+    timeout: int = 15,
+    base_timeout: int | None = None,
+    retry_timeout: int | None = None,
+    recast_policy: str = "base_timeout_only",
+) -> dict:
     """Record a worker-level failure in the same shape as process_model()."""
     error_msg = f"Worker error: {type(exc).__name__}: {exc}"
     log_failure(model_id, mode, error_msg)
@@ -276,13 +582,36 @@ def worker_error_result(model_id: str, mode: str, exc: BaseException) -> dict:
         "mode": mode,
         "recast_success": False,
         "recast_time": 0.0,
+        "recast_phase_history": "",
+        "recast_phase_seconds": "",
+        "recast_dominant_phase": "",
+        "recast_dominant_phase_seconds": "",
+        "recast_last_phase": "",
+        "recast_dominant_phase_attribution": "",
+        **recast_policy_metadata(
+            attempt_role=attempt_role,
+            timeout=timeout,
+            base_timeout=base_timeout,
+            retry_timeout=retry_timeout,
+            recast_policy=recast_policy,
+        ),
         "validation_attempted": False,
         "validation_pass": False,
         "error": error_msg,
     }
 
 
-def process_model(model_id: str, mode: str, validate: bool = True, timeout: int = 15) -> dict:
+def process_model(
+    model_id: str,
+    mode: str,
+    validate: bool = True,
+    timeout: int = 15,
+    *,
+    attempt_role: str = "base",
+    base_timeout: int | None = None,
+    retry_timeout: int | None = None,
+    recast_policy: str = "base_timeout_only",
+) -> dict:
     """
     Process a single model: recast and optionally validate.
 
@@ -291,6 +620,10 @@ def process_model(model_id: str, mode: str, validate: bool = True, timeout: int 
         mode: 'simplified' or 'canonical'
         validate: Whether to run validation
         timeout: Timeout in seconds for the recast operation
+        attempt_role: Whether this is the base attempt or timeout retry
+        base_timeout: Historical/base timeout budget in seconds
+        retry_timeout: Retry timeout budget in seconds, if configured
+        recast_policy: Stable policy label recorded in CSV output
 
     Returns:
         Results dictionary
@@ -300,6 +633,19 @@ def process_model(model_id: str, mode: str, validate: bool = True, timeout: int 
         "mode": mode,
         "recast_success": False,
         "recast_time": 0.0,
+        "recast_phase_history": "",
+        "recast_phase_seconds": "",
+        "recast_dominant_phase": "",
+        "recast_dominant_phase_seconds": "",
+        "recast_last_phase": "",
+        "recast_dominant_phase_attribution": "",
+        **recast_policy_metadata(
+            attempt_role=attempt_role,
+            timeout=timeout,
+            base_timeout=base_timeout,
+            retry_timeout=retry_timeout,
+            recast_policy=recast_policy,
+        ),
         "validation_attempted": False,
         "validation_pass": False,
         "error": None,
@@ -309,35 +655,69 @@ def process_model(model_id: str, mode: str, validate: bool = True, timeout: int 
     import time
 
     start_time = time.time()
+    recast_timing: dict = {}
 
     success, result_tuple, error = utils.safe_execute(
-        attempt_recast, model_id, mode, timeout_sec=timeout, default=(False, None, "Timeout")
+        attempt_recast,
+        model_id,
+        mode,
+        phase_recorder=recast_timing,
+        timeout_sec=timeout,
+        default=(False, None, "Timeout"),
     )
 
     result["recast_time"] = time.time() - start_time
+    if recast_timing:
+        _apply_recast_timing(
+            result,
+            recast_timing,
+            elapsed_seconds=result["recast_time"],
+            timed_out=not success and "timeout" in str(error).lower(),
+        )
 
     # Check if safe_execute failed (timeout or exception)
     if not success:
         result["error"] = error if error else "Unknown error"
-        log_failure(model_id, mode, result["error"])
+        log_failure(
+            model_id,
+            mode,
+            result["error"],
+            metadata=failure_metadata_from_result(result),
+        )
         return result
 
     # Unpack attempt_recast result
-    recast_success, recast_text, recast_error = result_tuple
+    if isinstance(result_tuple, tuple) and len(result_tuple) == 4:
+        recast_success, recast_text, recast_error, recast_timing = result_tuple
+    else:
+        recast_success, recast_text, recast_error = result_tuple
+    if recast_timing:
+        _apply_recast_timing(result, recast_timing)
 
     # Check if recast itself failed
     if not recast_success:
         result["error"] = recast_error if recast_error else "Recast failed"
-        log_failure(model_id, mode, result["error"])
+        log_failure(
+            model_id,
+            mode,
+            result["error"],
+            metadata=failure_metadata_from_result(result),
+        )
         return result
 
     # Save recast
     result["recast_success"] = True
+    result["recast_recovered_by_retry"] = attempt_role == "retry"
     try:
         save_recast(model_id, mode, recast_text)
     except Exception as e:
         result["error"] = f"Failed to save: {e}"
-        log_failure(model_id, mode, result["error"])
+        log_failure(
+            model_id,
+            mode,
+            result["error"],
+            metadata=failure_metadata_from_result(result),
+        )
         return result
 
     # Validate if requested
@@ -382,18 +762,41 @@ def process_models(
     validate: bool,
     timeout: int,
     workers: int,
+    attempt_role: str,
+    base_timeout: int | None,
+    retry_timeout: int | None,
+    recast_policy: str,
 ) -> list[dict]:
     """Process candidate models sequentially or with a process pool."""
     if workers <= 1:
         return [
-            process_model(model_id, mode, validate=validate, timeout=timeout)
+            process_model(
+                model_id,
+                mode,
+                validate=validate,
+                timeout=timeout,
+                attempt_role=attempt_role,
+                base_timeout=base_timeout,
+                retry_timeout=retry_timeout,
+                recast_policy=recast_policy,
+            )
             for model_id in tqdm(model_ids, total=len(model_ids), desc="Recasting")
         ]
 
     results: list[dict] = []
     with ProcessPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(process_model, model_id, mode, validate, timeout): model_id
+            executor.submit(
+                process_model,
+                model_id,
+                mode,
+                validate,
+                timeout,
+                attempt_role=attempt_role,
+                base_timeout=base_timeout,
+                retry_timeout=retry_timeout,
+                recast_policy=recast_policy,
+            ): model_id
             for model_id in model_ids
         }
         for future in tqdm(as_completed(futures), total=len(futures), desc="Recasting"):
@@ -401,7 +804,18 @@ def process_models(
             try:
                 results.append(future.result())
             except Exception as exc:
-                results.append(worker_error_result(model_id, mode, exc))
+                results.append(
+                    worker_error_result(
+                        model_id,
+                        mode,
+                        exc,
+                        attempt_role=attempt_role,
+                        timeout=timeout,
+                        base_timeout=base_timeout,
+                        retry_timeout=retry_timeout,
+                        recast_policy=recast_policy,
+                    )
+                )
     return results
 
 
@@ -493,6 +907,32 @@ def main():
         help="Only retry models that previously failed with timeout (requires prior run)"
     )
     parser.add_argument(
+        "--attempt-role",
+        choices=["base", "retry"],
+        default=None,
+        help=(
+            "Policy role for this recast attempt. Defaults to 'retry' with "
+            "--retry-timeouts and 'base' otherwise."
+        ),
+    )
+    parser.add_argument(
+        "--base-timeout",
+        type=int,
+        default=None,
+        help="Base/first-attempt timeout budget in seconds for policy metadata.",
+    )
+    parser.add_argument(
+        "--retry-timeout",
+        type=int,
+        default=None,
+        help="Retry timeout budget in seconds for policy metadata.",
+    )
+    parser.add_argument(
+        "--recast-policy",
+        default=None,
+        help="Stable recast retry policy label recorded in CSV output.",
+    )
+    parser.add_argument(
         "--clean",
         action="store_true",
         help="Delete old results (recasts/, failures/, validation/, validated/) before starting"
@@ -519,6 +959,26 @@ def main():
     logger.info(f"Resume: {args.resume}")
     logger.info(f"Retry timeouts only: {args.retry_timeouts}")
     logger.info(f"Workers: {args.workers}")
+
+    attempt_role = args.attempt_role or ("retry" if args.retry_timeouts else "base")
+    base_timeout = args.base_timeout if args.base_timeout is not None else args.timeout
+    retry_timeout = args.retry_timeout
+    if retry_timeout is None and attempt_role == "retry":
+        retry_timeout = args.timeout
+    recast_policy = args.recast_policy
+    if recast_policy is None:
+        recast_policy = (
+            "quick_then_retry_timeouts"
+            if args.retry_timeouts or attempt_role == "retry"
+            else "base_timeout_only"
+        )
+    logger.info(f"Recast attempt role: {attempt_role}")
+    logger.info(f"Recast policy: {recast_policy}")
+    logger.info(f"Base timeout: {base_timeout}s")
+    logger.info(
+        "Retry timeout: %s",
+        f"{retry_timeout}s" if retry_timeout is not None else "not configured",
+    )
 
     # Clean old results if requested
     if args.clean:
@@ -580,6 +1040,10 @@ def main():
         validate=not args.no_validate,
         timeout=args.timeout,
         workers=max(1, args.workers),
+        attempt_role=attempt_role,
+        base_timeout=base_timeout,
+        retry_timeout=retry_timeout,
+        recast_policy=recast_policy,
     )
 
     if skipped > 0:
@@ -589,33 +1053,31 @@ def main():
     results_csv = Path(config.RESULTS_DIR) / "batch_recast_results.csv"
     results_csv.parent.mkdir(parents=True, exist_ok=True)
 
-    new_results_df = pd.DataFrame(results)
-
-    if results_csv.exists() and not new_results_df.empty:
-        # Load existing results and merge
-        existing_df = pd.read_csv(results_csv)
-
-        # Create a key for merging (model_id + mode)
-        new_results_df["_key"] = new_results_df["model_id"] + "_" + new_results_df["mode"]
-        existing_df["_key"] = existing_df["model_id"] + "_" + existing_df["mode"]
-
-        # Remove existing entries that will be replaced by new results
-        existing_df = existing_df[~existing_df["_key"].isin(new_results_df["_key"])]
-
-        # Combine old (non-overlapping) + new results
-        merged_df = pd.concat([existing_df, new_results_df], ignore_index=True)
-        merged_df = merged_df.drop(columns=["_key"])
-
-        # Sort by model_id for consistency
-        merged_df = merged_df.sort_values("model_id").reset_index(drop=True)
-
-        merged_df.to_csv(results_csv, index=False)
-        logger.info(f"Merged {len(new_results_df)} new results with {len(existing_df)} existing")
-        logger.info(f"Total results in {results_csv}: {len(merged_df)}")
+    if results_csv.exists() and not results:
+        logger.info(f"No new results; preserved existing {results_csv}")
+    elif results_csv.exists():
+        existing_rows, existing_fieldnames = _read_result_rows(results_csv)
+        new_keys = {(row["model_id"], row["mode"]) for row in results}
+        retained_rows = [
+            row
+            for row in existing_rows
+            if (row.get("model_id"), row.get("mode")) not in new_keys
+        ]
+        merged_rows = sorted(
+            [*retained_rows, *results],
+            key=lambda row: str(row.get("model_id", "")),
+        )
+        _write_result_rows(
+            results_csv,
+            merged_rows,
+            existing_fieldnames=existing_fieldnames,
+        )
+        logger.info(f"Merged {len(results)} new results with {len(retained_rows)} existing")
+        logger.info(f"Total results in {results_csv}: {len(merged_rows)}")
     else:
         # No existing file or no new results - just save
-        new_results_df.to_csv(results_csv, index=False)
-        logger.info(f"Saved {len(new_results_df)} results to {results_csv}")
+        _write_result_rows(results_csv, results, existing_fieldnames=RESULT_COLUMNS)
+        logger.info(f"Saved {len(results)} results to {results_csv}")
 
     # Generate and print summary
     try:

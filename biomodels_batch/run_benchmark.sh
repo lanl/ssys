@@ -33,12 +33,15 @@ MIN_SBML_FILES=100
 MIN_RECAST_FILES=50
 MIN_VALIDATION_FILES=50
 
-# Timeouts
-TIMEOUT_QUICK=15
-TIMEOUT_LONG=60
-TIMEOUT_VALIDATION=60
+# Timeouts. TIMEOUT_RECAST and TIMEOUT_VALIDATION can be overridden by the
+# evidence runner or by direct shell users, for example
+# `TIMEOUT_VALIDATION=90 ./run_benchmark.sh`.
+TIMEOUT_QUICK="${TIMEOUT_QUICK:-15}"
+TIMEOUT_LONG="${TIMEOUT_RECAST:-60}"
+TIMEOUT_VALIDATION="${TIMEOUT_VALIDATION:-60}"
 TIMEOUT_JAX=120
 TIMEOUT_SYMBOLIC=120
+RECAST_RETRY_POLICY="quick_then_retry_timeouts"
 
 # Parallelism
 WORKERS_ALL=8       # Limit to 8 CPUs (leave 2 for system)
@@ -197,7 +200,15 @@ stage_recast() {
     
     # Pass 1: Quick timeout
     log_info "Pass 1: Quick recast (${TIMEOUT_QUICK}s timeout)..."
-    python step3_recast.py --mode simplified --timeout "$TIMEOUT_QUICK" --workers "$WORKERS_ALL" --no-validate
+    python step3_recast.py \
+        --mode simplified \
+        --timeout "$TIMEOUT_QUICK" \
+        --workers "$WORKERS_ALL" \
+        --no-validate \
+        --attempt-role base \
+        --base-timeout "$TIMEOUT_QUICK" \
+        --retry-timeout "$TIMEOUT_LONG" \
+        --recast-policy "$RECAST_RETRY_POLICY"
     
     local pass1_count
     pass1_count=$(count_files "$RECASTS_DIR" "*.ant")
@@ -205,7 +216,16 @@ stage_recast() {
     
     # Pass 2: Retry timeouts only
     log_info "Pass 2: Retry timeouts (${TIMEOUT_LONG}s timeout)..."
-    python step3_recast.py --mode simplified --timeout "$TIMEOUT_LONG" --workers "$WORKERS_ALL" --retry-timeouts --no-validate
+    python step3_recast.py \
+        --mode simplified \
+        --timeout "$TIMEOUT_LONG" \
+        --workers "$WORKERS_ALL" \
+        --retry-timeouts \
+        --no-validate \
+        --attempt-role retry \
+        --base-timeout "$TIMEOUT_QUICK" \
+        --retry-timeout "$TIMEOUT_LONG" \
+        --recast-policy "$RECAST_RETRY_POLICY"
     
     local final_count
     final_count=$(count_files "$RECASTS_DIR" "*.ant")
@@ -373,6 +393,13 @@ Options:
   --status        Show completion status of each stage
 
   --help          Show this help message
+
+Environment:
+  TIMEOUT_QUICK       Per-model quick/base recast timeout in seconds
+                      (default: 15)
+  TIMEOUT_RECAST      Per-model long recast retry timeout in seconds
+  TIMEOUT_VALIDATION  Per-model numerical validation timeout in seconds
+                      (default: 60)
 
 Examples:
   ./run_benchmark.sh              # Default: numerical validation only (fast)

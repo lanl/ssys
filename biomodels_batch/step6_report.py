@@ -22,8 +22,10 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pandas as pd
+if TYPE_CHECKING:
+    import pandas as pd
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -35,6 +37,38 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+RECAST_POLICY_FIELDS = [
+    "recast_attempt_role",
+    "recast_attempt_count",
+    "recast_base_timeout_seconds",
+    "recast_retry_timeout_seconds",
+    "recast_final_attempt_timeout_seconds",
+    "recast_retry_policy",
+    "recast_recovered_by_retry",
+]
+
+RECAST_TELEMETRY_FIELDS = [
+    "recast_last_phase",
+    "recast_dominant_phase_attribution",
+]
+
+RESULT_FIELDNAMES = [
+    "model_id",
+    "mode",
+    "status",
+    "recast_success",
+    "recast_time",
+    "recast_phase_history",
+    "recast_phase_seconds",
+    "recast_dominant_phase",
+    "recast_dominant_phase_seconds",
+    *RECAST_TELEMETRY_FIELDS,
+    *RECAST_POLICY_FIELDS,
+    "validation_attempted",
+    "validation_pass",
+    "error",
+]
 
 
 # ===========================================================================
@@ -49,6 +83,16 @@ def rebuild_results_csv(mode: str = "simplified") -> None:
     output_file = Path(config.RESULTS_DIR) / "batch_recast_results.csv"
 
     logger.info("Rebuilding results CSV from files...")
+
+    existing_rows = {}
+    if output_file.exists():
+        try:
+            with open(output_file, newline="") as f:
+                for row in csv.DictReader(f):
+                    key = (row.get("model_id"), row.get("mode"))
+                    existing_rows[key] = row
+        except Exception:
+            existing_rows = {}
 
     # Get all candidate model IDs from SBML files
     sbml_candidates_dir = Path(config.SBML_CANDIDATES_DIR)
@@ -88,6 +132,7 @@ def rebuild_results_csv(mode: str = "simplified") -> None:
     # Build results
     results = []
     for model_id in sorted(candidate_ids):
+        existing_row = existing_rows.get((model_id, mode), {})
         if model_id in recast_ids:
             status = "success"
         elif model_id in failure_ids:
@@ -108,11 +153,29 @@ def rebuild_results_csv(mode: str = "simplified") -> None:
             "mode": mode,
             "status": status,
             "recast_success": model_id in recast_ids,
-            "recast_time": "",
+            "recast_time": existing_row.get("recast_time", ""),
+            "recast_phase_history": existing_row.get(
+                "recast_phase_history",
+                "",
+            ),
+            "recast_phase_seconds": existing_row.get(
+                "recast_phase_seconds",
+                "",
+            ),
+            "recast_dominant_phase": existing_row.get(
+                "recast_dominant_phase",
+                "",
+            ),
+            "recast_dominant_phase_seconds": existing_row.get(
+                "recast_dominant_phase_seconds",
+                "",
+            ),
             "validation_attempted": model_id in validation_data,
             "validation_pass": False,
             "error": "",
         }
+        for field in [*RECAST_TELEMETRY_FIELDS, *RECAST_POLICY_FIELDS]:
+            row[field] = existing_row.get(field, "")
 
         if model_id in validation_data:
             row["validation_pass"] = validation_data[model_id].get("overall_pass", False)
@@ -132,9 +195,7 @@ def rebuild_results_csv(mode: str = "simplified") -> None:
     # Write CSV
     output_file.parent.mkdir(parents=True, exist_ok=True)
     with open(output_file, "w", newline="") as f:
-        fieldnames = ["model_id", "mode", "status", "recast_success", "recast_time",
-                      "validation_attempted", "validation_pass", "error"]
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer = csv.DictWriter(f, fieldnames=RESULT_FIELDNAMES)
         writer.writeheader()
         writer.writerows(results)
 
@@ -159,12 +220,16 @@ def count_files(directory: Path, pattern: str) -> int:
 
 def load_manifest() -> pd.DataFrame | None:
     """Load validated models manifest."""
+    import pandas as pd
+
     manifest_path = Path(config.RESULTS_DIR) / "validated" / "manifest.csv"
     return pd.read_csv(manifest_path) if manifest_path.exists() else None
 
 
 def load_results() -> pd.DataFrame | None:
     """Load batch recast results."""
+    import pandas as pd
+
     results_path = Path(config.RESULTS_DIR) / "batch_recast_results.csv"
     return pd.read_csv(results_path) if results_path.exists() else None
 
