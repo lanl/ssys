@@ -3,6 +3,7 @@
 import sympy as sp
 
 from ssys import SymSystem, build_sym_system, parse_antimony, recast_to_ssystem
+from ssys._recaster.algorithms import _pool_ssystem_recast
 from ssys.formatting import ssystem_to_antimony
 from ssys.types import RecastResult, RecastStatus, SolverRequirement
 
@@ -148,7 +149,7 @@ def test_pool_construction_logistic_phi_equations_and_antimony_semantics():
         initials={X: 0.5},
     )
 
-    rec = recast_to_ssystem(sym)
+    rec = _pool_ssystem_recast(sym)
 
     assert rec.status == RecastStatus.CANONICAL_SSYSTEM
     assert [var.name for var in rec.factor_map[X]] == ["Z_1", "Z_2"]

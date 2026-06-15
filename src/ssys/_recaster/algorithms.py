@@ -14,6 +14,7 @@ from ssys._recaster.lifting import (
 from ssys.classification import classify_solver_requirement
 from ssys.math_utils import (
     _exponents_match,
+    _get_coefficient_sign,
     _is_term_monomial,
     expand_to_terms,
     product_expr,
@@ -30,6 +31,12 @@ from ssys.types import (
 def _bounded_recast_simplify(expr: sp.Expr) -> sp.Expr:
     """Bound simplification for recast-stage RHS normalization."""
     return _bounded_rational_lift_simplify(expr)
+
+
+def _has_non_monomial_denominator(expr: sp.Expr) -> bool:
+    """Return true when a rational expression denominator is not monomial."""
+    _numerator, denominator = expr.as_numer_denom()
+    return denominator != 1 and not _is_term_monomial(denominator)
 
 
 _DIRECT_RECAST_EXPAND_MAX_OPS = 1500
@@ -775,6 +782,67 @@ def _copy_sym_system(sym: SymSystem) -> SymSystem:
     )
 
 
+def _is_explicit_canonical_ssystem(sym: SymSystem) -> bool:
+    """Return true for already-expanded canonical S-system source equations."""
+    if not sym.odes:
+        return False
+
+    for ode in sym.odes.values():
+        if _has_non_monomial_denominator(ode):
+            return False
+
+        terms = list(ode.args) if ode.is_Add else [ode]
+        pos_monomials = 0
+        neg_monomials = 0
+        for term in terms:
+            if term == 0:
+                continue
+            if not _is_term_monomial(term):
+                return False
+            if _get_coefficient_sign(term) > 0:
+                pos_monomials += 1
+            else:
+                neg_monomials += 1
+
+        if pos_monomials != 1 or neg_monomials != 1:
+            return False
+    return True
+
+
+def _finalize_recast_result(
+    result: RecastResult,
+    sym: SymSystem,
+    auxiliary_defs: dict[sp.Symbol, sp.Expr],
+) -> RecastResult:
+    """Attach source metadata that every recast result must preserve."""
+    result.auxiliary_defs = auxiliary_defs
+    result.assignment_rules = sym.assignment_rules
+    result.algebraic_constraints = list(sym.algebraic_constraints)
+    result.solver_requirement = classify_solver_requirement(result)
+
+    # Propagate simulation metadata from input SymSystem
+    result.sim_t_start = sym.sim_t_start
+    result.sim_t_end = sym.sim_t_end
+    result.sim_n_steps = sym.sim_n_steps
+    result.eps_slack = sym.eps_slack
+
+    # CRITICAL: If any IC was perturbed to EPS_INIT (for zero approximation),
+    # we must record the EPS_INIT value used in the output for reproducibility.
+    eps_init_used = sym.eps_init if sym.eps_init is not None else EPS_INIT
+    ic_was_perturbed = any(
+        abs(v - eps_init_used) < 1e-12
+        for v in result.initials.values()
+        if isinstance(v, (int, float))
+    )
+
+    if ic_was_perturbed:
+        result.eps_init = eps_init_used
+    else:
+        result.eps_init = sym.eps_init
+
+    return result
+
+
 def recast_to_ssystem(sym: "SymSystem", mode: str = "simplified") -> "RecastResult":
     """
     Recast system to canonical S-system or GMA format.
@@ -801,6 +869,10 @@ def recast_to_ssystem(sym: "SymSystem", mode: str = "simplified") -> "RecastResu
     # later lifting or simplification passes.
     source_sym = _copy_sym_system(sym)
     original_vars = set(source_sym.vars)
+
+    if _is_explicit_canonical_ssystem(source_sym):
+        result = _direct_ssystem_recast(source_sym, original_vars, mode=mode)
+        return _finalize_recast_result(result, source_sym, {})
 
     # Collect auxiliary definitions from lifting operations
     all_auxiliary_defs: dict[sp.Symbol, sp.Expr] = {}
@@ -916,38 +988,7 @@ def recast_to_ssystem(sym: "SymSystem", mode: str = "simplified") -> "RecastResu
                 result = _gma_recast(fallback_sym, original_vars)
                 result.canonical_refusal_reason = validation_reason
 
-    # Add auxiliary definitions to result
-    result.auxiliary_defs = all_auxiliary_defs
-
-    # Pass assignment rules (time-only auxiliaries) to result
-    result.assignment_rules = sym.assignment_rules
-    result.algebraic_constraints = list(sym.algebraic_constraints)
-    result.solver_requirement = classify_solver_requirement(result)
-
-    # Propagate simulation metadata from input SymSystem
-    result.sim_t_start = sym.sim_t_start
-    result.sim_t_end = sym.sim_t_end
-    result.sim_n_steps = sym.sim_n_steps
-    result.eps_slack = sym.eps_slack  # Propagate user-specified EPS_SLACK
-
-    # CRITICAL: If any IC was perturbed to EPS_INIT (for zero approximation),
-    # we must record the EPS_INIT value used in the output for reproducibility.
-    # Check if any IC is approximately equal to EPS_INIT.
-    eps_init_used = sym.eps_init if sym.eps_init is not None else EPS_INIT
-    ic_was_perturbed = any(
-        abs(v - eps_init_used) < 1e-12
-        for v in result.initials.values()
-        if isinstance(v, (int, float))
-    )
-
-    if ic_was_perturbed:
-        # Record the actual EPS_INIT value used
-        result.eps_init = eps_init_used
-    else:
-        # No perturbation - only propagate user-specified value
-        result.eps_init = sym.eps_init
-
-    return result
+    return _finalize_recast_result(result, sym, all_auxiliary_defs)
 
 
 def _gma_recast(

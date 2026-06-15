@@ -444,7 +444,7 @@ class TestRecasting:
         assert len(rec.equations) == 1
 
     def test_recast_two_term_ode(self):
-        """Test recasting ODE with two terms."""
+        """Test that an already canonical S-system is preserved."""
         text = """
         X' = a*X - b*X^2
         a = 1.0
@@ -456,9 +456,10 @@ class TestRecasting:
         rec = recast_to_ssystem(sym)
 
         X = sp.Symbol("X", positive=True)
-        # Two terms mean two auxiliaries
-        assert len(rec.factor_map[X]) == 2
-        assert len(rec.equations) == 2
+        assert rec.factor_map[X] == [X]
+        assert rec.variables == [X]
+        assert len(rec.equations) == 1
+        assert ssys.classify_result(rec) == ssys.SystemClass.CANONICAL_SSYSTEM
 
     def test_recast_preserves_initial_conditions(self):
         """Test that initial conditions are preserved in recasting."""
@@ -482,9 +483,10 @@ class TestRecasting:
     def test_canonical_naming(self):
         """Test that auxiliaries are named canonically (Z_1, Z_2, ...)."""
         text = """
-        A' = k1*A - k2*A^2
+        A' = k1*A + k3*A^3 - k2*A^2
         k1 = 1.0
         k2 = 0.5
+        k3 = 0.2
         A = 1.0
         """
         ir = parse_antimony(text)
@@ -1844,8 +1846,9 @@ class TestSymbolicExponents:
         # This caused TypeError before the fix because float(h) fails
         text = """
         model test
-        X' = k * X^h - d * X
+        X' = k * X^h + c * X - d * X
         k = 1.0
+        c = 0.25
         d = 0.5
         h = 2.0
         X = 1.0
@@ -1858,10 +1861,13 @@ class TestSymbolicExponents:
 
         X = sp.Symbol("X", positive=True)
         h = sp.Symbol("h", positive=True)
-        assert [var.name for var in result.factor_map[X]] == ["Z_1", "Z_2"]
+        assert [var.name for var in result.factor_map[X]] == ["Z_1", "Z_2", "Z_3"]
         assert result.auxiliary_defs == {}
-        assert h in result.equations[0].growth[1].values()
-        assert result.equations[0].growth[1][result.factor_map[X][1]] == -1.0
+        assert any(h in eq.growth[1].values() for eq in result.equations)
+        assert any(
+            eq.growth[1].get(result.factor_map[X][1]) == -1.0
+            for eq in result.equations
+        )
 
     def test_symbolic_exponent_in_complex_model(self):
         """Test symbolic exponents in realistic model (bistable gene switch)."""
@@ -2010,13 +2016,13 @@ class TestCanonicalModeFormatting:
         X = sp.Symbol("X", positive=True)
         a = sp.Symbol("a", positive=True)
         b = sp.Symbol("b", positive=True)
+        c = sp.Symbol("c", positive=True)
 
-        # System with two-term ODE creates pool variables
-        # X = Z_1 * Z_2 (non-trivial mapping)
+        # Multi-production ODE creates pool variables with a non-trivial mapping.
         sym = SymSystem(
             vars=[X],
-            params={"a": 1.0, "b": 0.5},
-            odes={X: a * X - b * X**2},  # Two terms = pool construction
+            params={"a": 1.0, "b": 0.5, "c": 0.2},
+            odes={X: a * X + c * X**3 - b * X**2},
             initials={X: 1.0},
         )
 

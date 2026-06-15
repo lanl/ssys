@@ -544,11 +544,11 @@ class TestRecastingAlgorithmBranches:
         assert sp.simplify(gma_rhs - source.odes[X]) == 0
 
     def test_recast_to_ssystem_keeps_exact_product_mapping_accepted(self):
-        X, a, b = sp.symbols("X a b", positive=True)
+        X, a, b, c = sp.symbols("X a b c", positive=True)
         sym = SymSystem(
             vars=[X],
-            params={"a": 1.0, "b": 0.5},
-            odes={X: a * X - b * X**2},
+            params={"a": 1.0, "b": 0.5, "c": 0.2},
+            odes={X: a * X + c * X**3 - b * X**2},
             initials={X: 1.0},
         )
 
@@ -556,7 +556,7 @@ class TestRecastingAlgorithmBranches:
 
         assert result.status == RecastStatus.CANONICAL_SSYSTEM
         assert result.canonical_refusal_reason is None
-        assert len(result.factor_map[X]) == 2
+        assert len(result.factor_map[X]) == 3
         assert _validate_pool_result(result, sym) == (True, None)
 
     def test_requires_gma_detects_incompatible_growth_and_decay_terms(self):
@@ -638,7 +638,7 @@ class TestRecastingAlgorithmBranches:
     def test_recast_to_ssystem_records_preflight_and_validation_refusals(self, monkeypatch):
         import ssys._recaster.algorithms as algorithms
 
-        X, a, b = sp.symbols("X a b", positive=True)
+        X, a, b, c = sp.symbols("X a b c", positive=True)
         too_many_terms = SymSystem(
             vars=[X],
             params={"a": 1.0},
@@ -653,8 +653,8 @@ class TestRecastingAlgorithmBranches:
 
         normal = SymSystem(
             vars=[X],
-            params={"a": 1.0, "b": 0.5},
-            odes={X: a * X - b * X**2},
+            params={"a": 1.0, "b": 0.5, "c": 0.2},
+            odes={X: a * X + c * X**3 - b * X**2},
             initials={X: 1.0},
         )
         monkeypatch.setattr(
