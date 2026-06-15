@@ -198,6 +198,16 @@ class TestProductToAntimony:
         # But should not have spurious parentheses if it's just -C
         # (sympy may format as -C or -1*C)
 
+    def test_symbolic_mul_exponent_parenthesized(self):
+        """Test multiplicative symbolic exponents are parenthesized."""
+        x = sp.Symbol("x", positive=True)
+        C = sp.Symbol("C", positive=True)
+
+        result = product_to_antimony(1.0, {x: 2 * C})
+
+        assert "x^(2*C)" in result or "x^(2 * C)" in result
+        assert "x^2*C" not in result
+
     def test_rational_coefficient_preserved_as_fraction(self):
         """Test that rational coefficients are preserved as fractions, not decimals."""
         x = sp.Symbol("x", positive=True)
@@ -791,6 +801,156 @@ class TestAntimonyReservedNameRoundTrip:
         assert "DNA_var' = RNA_var*DNA_var" in ode_text
         assert not re.search(r"\bDNA\b", ode_text)
         assert not re.search(r"\bRNA\b", ode_text)
+
+    def test_gma_piecewise_coefficient_uses_antimony_syntax(self):
+        z = sp.Symbol("Z_1", positive=True)
+        t = sp.Symbol("T", real=True)
+        threshold = sp.Symbol("parameter_5", real=True)
+        model_value = sp.Symbol("ModelValue_61", positive=True)
+        piecewise = sp.Piecewise((-model_value * z, t > threshold), (0, True))
+        result = RecastResult(
+            status=RecastStatus.GMA,
+            equations=[],
+            initials={z: 1.0, t: 0.0},
+            variables=[z, t],
+            gma_equations=[
+                GMAEquation(
+                    z,
+                    production=[(piecewise, {})],
+                    degradation=[],
+                ),
+                GMAEquation(
+                    t,
+                    production=[(sp.Float(1.0), {})],
+                    degradation=[],
+                ),
+            ],
+            params={"ModelValue_61": 100.0, "parameter_5": 0.0},
+        )
+
+        output = gma_to_antimony(result, model_name="piecewise_gma")
+
+        assert "Piecewise((" not in output
+        assert "piecewise(-ModelValue_61*Z_1, T > parameter_5, 0)" in output
+        _assert_antimony_roundtrips(output)
+
+    def test_roundtrip_sanitizes_antimony_function_collision_names(self):
+        at = sp.Symbol("at", positive=True)
+        gamma = sp.Symbol("gamma", positive=True)
+
+        sym = SymSystem(
+            vars=[at],
+            params={"gamma": 0.5},
+            odes={at: -gamma * at},
+            initials={at: 1.0},
+        )
+
+        result = recast_to_ssystem(sym, mode="simplified")
+        output = ssystem_to_antimony(result, model_name="function_collision")
+        _assert_antimony_roundtrips(output)
+
+        executable = "\n".join(_executable_lines(output))
+        assert "gamma_var = 0.5" in executable
+        assert "at_var :=" in executable
+        assert "gamma =" not in executable
+        assert not re.search(r"\bat\b", executable)
+
+    def test_auxiliary_definition_comments_sanitize_reserved_names(self):
+        x = sp.Symbol("x", positive=True)
+        y = sp.Symbol("Y_1", positive=True)
+        gamma = sp.Symbol("gamma", positive=True)
+
+        result = RecastResult(
+            status=RecastStatus.GMA,
+            equations=[],
+            initials={x: 0.3, y: 2.32},
+            variables=[x, y],
+            gma_equations=[
+                GMAEquation(
+                    x,
+                    production=[(sp.Float(1.0), {x: 1.0})],
+                    degradation=[],
+                ),
+                GMAEquation(
+                    y,
+                    production=[(sp.Float(1.0), {x: 1.0})],
+                    degradation=[],
+                ),
+            ],
+            params={"gamma": 2.02},
+            auxiliary_defs={y: gamma + x},
+        )
+
+        output = gma_to_antimony(result, model_name="aux_comment_sanitized")
+        _assert_antimony_roundtrips(output)
+
+        assert "// Y_1 := gamma_var + x" in output
+        assert "// Y_1 := gamma + x" not in output
+        executable = "\n".join(_executable_lines(output))
+        assert "gamma_var = 2.02" in executable
+        assert "gamma =" not in executable
+
+    def test_roundtrip_sanitizes_ext_keyword_identifier(self):
+        x = sp.Symbol("X", positive=True)
+        ext = sp.Symbol("ext", positive=True)
+
+        sym = SymSystem(
+            vars=[x],
+            params={"ext": 0.0, "const": 1.0},
+            odes={x: -ext * x},
+            initials={x: 1.0},
+            assignment_rules={"ext": "const + X"},
+        )
+
+        result = recast_to_ssystem(sym, mode="simplified")
+        output = ssystem_to_antimony(result, model_name="ext_keyword")
+        _assert_antimony_roundtrips(output)
+
+        executable = "\n".join(_executable_lines(output))
+        assert "ext_var = 0" in executable
+        assert "ext_var := const_var + X" in executable
+        assert "const_var = 1" in executable
+        assert "ext =" not in executable
+        assert "const =" not in executable
+
+    def test_roundtrip_preserves_expression_only_pi_constant(self):
+        x = sp.Symbol("X", positive=True)
+        rate = sp.Symbol("rate", positive=True)
+
+        sym = SymSystem(
+            vars=[x],
+            params={"k": 0.5},
+            odes={x: -rate * x},
+            initials={x: 1.0},
+            assignment_rules={"rate": "k + cos(2*pi*time/30)"},
+        )
+
+        result = recast_to_ssystem(sym, mode="simplified")
+        output = ssystem_to_antimony(result, model_name="pi_constant")
+        _assert_antimony_roundtrips(output)
+
+        executable = "\n".join(_executable_lines(output))
+        assert "pi_var" not in executable
+        assert re.search(r"\bpi\b", executable)
+
+    def test_roundtrip_sanitizes_declared_pi_identifier(self):
+        x = sp.Symbol("X", positive=True)
+        pi_symbol = sp.Symbol("pi", positive=True)
+
+        sym = SymSystem(
+            vars=[x],
+            params={"pi": 0.5},
+            odes={x: -pi_symbol * x},
+            initials={x: 1.0},
+        )
+
+        result = recast_to_ssystem(sym, mode="simplified")
+        output = ssystem_to_antimony(result, model_name="pi_identifier")
+        _assert_antimony_roundtrips(output)
+
+        executable = "\n".join(_executable_lines(output))
+        assert "pi_var = 0.5" in executable
+        assert "pi =" not in executable
 
 
 class TestLatexExport:

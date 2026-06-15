@@ -1,15 +1,23 @@
 """S-system and GMA recasting algorithms."""
 
+from typing import Any
+
 import sympy as sp
 
 from ssys._recaster.common import EPS_INIT
 from ssys._recaster.lifting import (
+    _bounded_rational_lift_simplify,
     lift_composite_functions,
     lift_rational_functions,
     lift_time_functions_to_autonomous,
 )
 from ssys.classification import classify_solver_requirement
-from ssys.math_utils import _exponents_match, expand_to_terms
+from ssys.math_utils import (
+    _exponents_match,
+    _is_term_monomial,
+    expand_to_terms,
+    product_expr,
+)
 from ssys.types import (
     GMAEquation,
     RecastResult,
@@ -17,6 +25,107 @@ from ssys.types import (
     SSysEquation,
     SymSystem,
 )
+
+
+def _bounded_recast_simplify(expr: sp.Expr) -> sp.Expr:
+    """Bound simplification for recast-stage RHS normalization."""
+    return _bounded_rational_lift_simplify(expr)
+
+
+_DIRECT_RECAST_EXPAND_MAX_OPS = 1500
+_DIRECT_RECAST_EXPAND_MAX_FREE_SYMBOLS = 66
+
+
+class RecastComplexityError(RuntimeError):
+    """Raised when recast-stage expression handling exceeds a bounded budget."""
+
+    def __init__(
+        self,
+        *,
+        stage: str,
+        operation: str,
+        expression_label: str,
+        expr: sp.Expr,
+        max_ops: int,
+        max_free_symbols: int,
+    ) -> None:
+        self.stage = stage
+        self.operation = operation
+        self.expression_label = expression_label
+        self.operation_count = int(sp.count_ops(expr))
+        self.free_symbol_count = len(expr.free_symbols)
+        self.max_ops = max_ops
+        self.max_free_symbols = max_free_symbols
+        preview = str(expr)
+        if len(preview) > 240:
+            preview = preview[:237] + "..."
+        self.expression_preview = preview
+        super().__init__(
+            "recast_complexity: "
+            f"stage={stage}; operation={operation}; "
+            f"expression_label={expression_label}; "
+            f"operation_count={self.operation_count}; max_ops={max_ops}; "
+            f"free_symbol_count={self.free_symbol_count}; "
+            f"max_free_symbol_count={max_free_symbols}; "
+            f"expression_preview={preview}"
+        )
+
+
+def _term_has_state_dependent_coefficient(
+    term: sp.Expr,
+    state_vars: set[sp.Symbol],
+) -> bool:
+    """Return true when an unexpanded term would hide state variables in coeffs."""
+    coeff, exps = term_to_coeff_exps(term, state_vars)
+    return bool(coeff.free_symbols & state_vars)
+
+
+def _bounded_direct_recast_terms(
+    expr: sp.Expr,
+    *,
+    expression_label: str,
+    state_vars: set[sp.Symbol],
+    max_ops: int = _DIRECT_RECAST_EXPAND_MAX_OPS,
+    max_free_symbols: int = _DIRECT_RECAST_EXPAND_MAX_FREE_SYMBOLS,
+) -> list[sp.Expr]:
+    """Return additive direct-recast terms without unbounded expansion.
+
+    Small expressions keep the historical full expansion. Large expressions are
+    only accepted without expansion when the resulting top-level terms are
+    already safe power-law monomials over the state variables. Otherwise the
+    caller receives a structured complexity error instead of a silent
+    canonical/GMA misclassification.
+    """
+    operation_count = int(sp.count_ops(expr))
+    free_symbol_count = len(expr.free_symbols)
+    if operation_count <= max_ops and free_symbol_count <= max_free_symbols:
+        return expand_to_terms(expr)
+
+    if expr.is_Add:
+        terms = [term for term in expr.args if term != 0]
+        if not terms:
+            return []
+        if all(
+            _is_term_monomial(term)
+            or not _term_has_state_dependent_coefficient(term, state_vars)
+            for term in terms
+        ):
+            return terms
+
+    elif _is_term_monomial(expr) or not _term_has_state_dependent_coefficient(
+        expr,
+        state_vars,
+    ):
+        return [expr]
+
+    raise RecastComplexityError(
+        stage="direct_ssystem_recast",
+        operation="sympy_expand",
+        expression_label=expression_label,
+        expr=expr,
+        max_ops=max_ops,
+        max_free_symbols=max_free_symbols,
+    )
 
 
 def canonicalize_aux_names(res: "RecastResult", prefix: str = "Z") -> "RecastResult":
@@ -127,7 +236,8 @@ def term_to_coeff_exps(
 
     Returns: (coeff_expr, {symbol: exponent})
     """
-    term = sp.simplify(term)
+    if not _is_term_monomial(term):
+        term = _bounded_recast_simplify(term)
     coeff = sp.Integer(1)
     exps: dict[sp.Symbol, float] = {}
 
@@ -319,6 +429,7 @@ MAX_TERMS_PER_EQUATION = 6
 MAX_DIM_FACTOR = 4
 MAX_PRODUCT_LENGTH = 4
 MAX_NEGATIVE_EXPONENT = -2
+PRODUCT_EXACTNESS_ATOL = 1.0e-8
 
 
 def _should_attempt_pool_construction(sym: SymSystem) -> tuple[bool, str | None]:
@@ -356,7 +467,255 @@ def _should_attempt_pool_construction(sym: SymSystem) -> tuple[bool, str | None]
     return True, None
 
 
-def _validate_pool_result(result: RecastResult) -> tuple[bool, str | None]:
+def _substitute_symbols_by_name(
+    expr: sp.Expr,
+    replacements_by_name: dict[str, sp.Expr],
+) -> sp.Expr:
+    """Substitute symbols by matching names instead of object identity."""
+    if not replacements_by_name:
+        return expr
+    subs = {
+        sym: replacements_by_name[str(sym)]
+        for sym in expr.free_symbols
+        if str(sym) in replacements_by_name
+    }
+    return expr.subs(subs) if subs else expr
+
+
+def _sbml_piecewise(*args) -> sp.Piecewise:
+    """Convert libSBML's piecewise(value, condition, ..., otherwise) syntax."""
+    if not args:
+        return sp.Piecewise((sp.nan, True))
+
+    pairs: list[tuple[Any, Any]] = []
+    if len(args) % 2 == 1:
+        pairs.extend((args[i], args[i + 1]) for i in range(0, len(args) - 1, 2))
+        pairs.append((args[-1], True))
+    else:
+        pairs.extend((args[i], args[i + 1]) for i in range(0, len(args), 2))
+    return sp.Piecewise(*pairs)
+
+
+def _sbml_assignment_rule_math_locals() -> dict[str, object]:
+    """Return SBML math helpers needed when parsing assignment-rule strings."""
+    return {
+        "eq": sp.Eq,
+        "geq": sp.Ge,
+        "gt": sp.Gt,
+        "leq": sp.Le,
+        "lt": sp.Lt,
+        "neq": sp.Ne,
+        "piecewise": _sbml_piecewise,
+        "pow": lambda base, exponent: base**exponent,
+    }
+
+
+def _parse_assignment_rule_substitutions(
+    sym: SymSystem,
+    mapping_by_name: dict[str, sp.Expr],
+) -> dict[str, sp.Expr]:
+    """Parse assignment rules and rewrite original variables through a product map."""
+    if not sym.assignment_rules:
+        return {}
+
+    local_symbols: dict[str, object] = {
+        var.name: var for var in sym.vars
+    }
+    for name in sym.params:
+        local_symbols.setdefault(name, sp.Symbol(name, positive=True))
+    for name in sym.compartments:
+        local_symbols.setdefault(name, sp.Symbol(name, positive=True))
+    for name in sym.assignment_rules:
+        local_symbols.setdefault(name, sp.Symbol(name, positive=True))
+    local_symbols.setdefault("time", sp.Symbol("time", positive=True))
+    local_symbols.setdefault("t", sp.Symbol("t", positive=True))
+    for name, helper in _sbml_assignment_rule_math_locals().items():
+        local_symbols.setdefault(name, helper)
+
+    parsed: dict[str, sp.Expr] = {}
+    for name, expr_text in sym.assignment_rules.items():
+        try:
+            parsed[name] = sp.sympify(expr_text, locals=local_symbols)
+        except (TypeError, ValueError, sp.SympifyError):
+            continue
+
+    expanded = dict(parsed)
+    for _ in range(len(expanded) + 1):
+        changed = False
+        for name, expr in list(expanded.items()):
+            next_expr = _substitute_symbols_by_name(expr, expanded)
+            next_expr = _substitute_symbols_by_name(next_expr, mapping_by_name)
+            if next_expr != expr:
+                expanded[name] = next_expr
+                changed = True
+        if not changed:
+            break
+    return expanded
+
+
+def _ssystem_rhs(eq: SSysEquation) -> sp.Expr:
+    """Return the symbolic RHS represented by an S-system equation."""
+    return product_expr(eq.growth[0], eq.growth[1]) - product_expr(
+        eq.decay[0],
+        eq.decay[1],
+    )
+
+
+def _symbolically_zero_residual(residual: sp.Expr) -> bool:
+    """Try bounded simplifications that are useful for product-rule identities."""
+    if residual == 0:
+        return True
+    candidates = [
+        residual,
+        sp.cancel(sp.together(residual)),
+        sp.cancel(sp.together(sp.expand(residual))),
+    ]
+    for candidate in candidates:
+        if candidate == 0:
+            return True
+        try:
+            numer, _denom = candidate.as_numer_denom()
+            if sp.cancel(sp.expand(numer)) == 0:
+                return True
+        except (TypeError, ValueError, ArithmeticError, sp.SympifyError):
+            continue
+    return False
+
+
+def _numeric_bindings_by_name(sym: SymSystem, result: RecastResult) -> dict[str, float]:
+    """Return numeric bindings for non-state symbols used in recaster preflights."""
+    bindings: dict[str, float] = {}
+    for source in (sym.params, result.params, sym.compartments, result.compartments):
+        for name, value in source.items():
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                continue
+            if sp.Float(number).is_finite:
+                bindings[str(name)] = number
+    return bindings
+
+
+def _sample_state_value(name: str, result: RecastResult, multiplier: float) -> float:
+    initials_by_name = {str(var): value for var, value in result.initials.items()}
+    try:
+        base = float(initials_by_name.get(name, 1.0))
+    except (TypeError, ValueError):
+        base = 1.0
+    if abs(base) < EPS_INIT:
+        base = 1.0
+    return abs(base) * multiplier
+
+
+def _numerically_detects_product_mismatch(
+    residual: sp.Expr,
+    *,
+    sym: SymSystem,
+    result: RecastResult,
+) -> bool:
+    """Return True when deterministic finite samples disprove product exactness."""
+    state_names = {str(var) for var in result.variables}
+    bindings = _numeric_bindings_by_name(sym, result)
+    free_symbols = sorted(residual.free_symbols, key=str)
+    unknown = [
+        str(sym_)
+        for sym_ in free_symbols
+        if str(sym_) not in state_names and str(sym_) not in bindings
+    ]
+    if unknown:
+        return False
+
+    try:
+        residual_func = sp.lambdify(free_symbols, residual, modules="numpy")
+    except (TypeError, ValueError, AttributeError, SyntaxError):
+        return False
+
+    sample_multipliers = (0.73, 1.19, 1.71)
+    for sample_index, multiplier in enumerate(sample_multipliers):
+        values: list[float] = []
+        for symbol_index, symbol in enumerate(free_symbols):
+            name = str(symbol)
+            if name in bindings:
+                values.append(bindings[name])
+            else:
+                values.append(
+                    _sample_state_value(
+                        name,
+                        result,
+                        multiplier + 0.07 * ((sample_index + symbol_index) % 3),
+                    )
+                )
+
+        try:
+            residual_value = float(residual_func(*values))
+        except NameError:
+            return True
+        except (TypeError, ValueError, ZeroDivisionError, OverflowError, FloatingPointError):
+            continue
+        if not sp.Float(residual_value).is_finite:
+            continue
+        if abs(residual_value) > PRODUCT_EXACTNESS_ATOL:
+            return True
+    return False
+
+
+def _pool_product_exactness_failure(
+    sym: SymSystem,
+    result: RecastResult,
+) -> str | None:
+    """Return a refusal reason if a pool product mapping fails the product rule."""
+    product_mappings = {
+        orig: factors
+        for orig, factors in result.factor_map.items()
+        if len(factors) > 1
+    }
+    if not product_mappings:
+        return None
+
+    recast_rhs_by_name = {str(eq.var): _ssystem_rhs(eq) for eq in result.equations}
+    mapping_by_name = {
+        str(orig): product_expr(sp.Integer(1), {factor: sp.Integer(1) for factor in factors})
+        for orig, factors in result.factor_map.items()
+    }
+    assignment_subs = _parse_assignment_rule_substitutions(sym, mapping_by_name)
+    source_odes_by_name = {str(var): ode for var, ode in sym.odes.items()}
+
+    for orig, factors in sorted(product_mappings.items(), key=lambda item: str(item[0])):
+        missing = [str(factor) for factor in factors if str(factor) not in recast_rhs_by_name]
+        if missing:
+            return (
+                f"unsupported_product_factorization: {orig.name} product mapping "
+                f"missing recast ODE(s) for {', '.join(missing)}"
+            )
+
+        phi = mapping_by_name[str(orig)]
+        lhs = sp.Integer(0)
+        for factor in factors:
+            lhs += sp.diff(phi, factor) * recast_rhs_by_name[str(factor)]
+        lhs = _substitute_symbols_by_name(lhs, assignment_subs)
+        lhs = _substitute_symbols_by_name(lhs, mapping_by_name)
+
+        expected = source_odes_by_name.get(str(orig))
+        if expected is None:
+            continue
+        expected = _substitute_symbols_by_name(expected, assignment_subs)
+        expected = _substitute_symbols_by_name(expected, mapping_by_name)
+
+        residual = lhs - expected
+        if _symbolically_zero_residual(residual):
+            continue
+        if _numerically_detects_product_mismatch(residual, sym=sym, result=result):
+            return (
+                f"unsupported_product_factorization: product-rule derivative "
+                f"for {orig.name} does not match the original RHS"
+            )
+    return None
+
+
+def _validate_pool_result(
+    result: RecastResult,
+    sym: SymSystem | None = None,
+) -> tuple[bool, str | None]:
     """
     Post-construction check: Is the pool result numerically sane?
 
@@ -387,7 +746,33 @@ def _validate_pool_result(result: RecastResult) -> tuple[bool, str | None]:
                         f"equation for {eq.var.name} has exponent {exp_val:.1f} (< {MAX_NEGATIVE_EXPONENT})",
                     )
 
+    if sym is not None:
+        exactness_reason = _pool_product_exactness_failure(sym, result)
+        if exactness_reason is not None:
+            return False, exactness_reason
+
     return True, None
+
+
+def _copy_sym_system(sym: SymSystem) -> SymSystem:
+    """Return a shallow structural copy for source-provenance checks."""
+    return SymSystem(
+        vars=list(sym.vars),
+        params=dict(sym.params),
+        odes=dict(sym.odes),
+        initials=dict(sym.initials),
+        initial_exprs=dict(sym.initial_exprs),
+        assignment_rules=dict(sym.assignment_rules),
+        algebraic_constraints=list(sym.algebraic_constraints),
+        compartments=dict(sym.compartments),
+        sim_t_start=sym.sim_t_start,
+        sim_t_end=sym.sim_t_end,
+        sim_n_steps=sym.sim_n_steps,
+        eps_init=sym.eps_init,
+        eps_slack=sym.eps_slack,
+        antimony_text=sym.antimony_text,
+        solver_requirement=sym.solver_requirement,
+    )
 
 
 def recast_to_ssystem(sym: "SymSystem", mode: str = "simplified") -> "RecastResult":
@@ -412,8 +797,10 @@ def recast_to_ssystem(sym: "SymSystem", mode: str = "simplified") -> "RecastResu
     Returns:
         RecastResult with status indicating output form and auxiliary definitions
     """
-    # Track original variables before lifting
-    original_vars = set(sym.vars)
+    # Preserve source equations for exactness checks that must not be hidden by
+    # later lifting or simplification passes.
+    source_sym = _copy_sym_system(sym)
+    original_vars = set(source_sym.vars)
 
     # Collect auxiliary definitions from lifting operations
     all_auxiliary_defs: dict[sp.Symbol, sp.Expr] = {}
@@ -513,11 +900,20 @@ def recast_to_ssystem(sym: "SymSystem", mode: str = "simplified") -> "RecastResu
             result = _pool_ssystem_recast(sym, mode=mode)
 
             # Post-flight validation: is result numerically sane?
-            is_valid, validation_reason = _validate_pool_result(result)
+            is_valid, validation_reason = _validate_pool_result(result, source_sym)
 
             if not is_valid:
-                # Pool result invalid - fallback to GMA
-                result = _gma_recast(sym, original_vars)
+                # Pool result invalid - fallback to GMA. Product exactness
+                # failures must fall back to the preserved source equations so
+                # the generated GMA does not inherit denominator-loss from a
+                # transformed pool-construction input.
+                fallback_sym = (
+                    source_sym
+                    if validation_reason
+                    and validation_reason.startswith("unsupported_product_factorization")
+                    else sym
+                )
+                result = _gma_recast(fallback_sym, original_vars)
                 result.canonical_refusal_reason = validation_reason
 
     # Add auxiliary definitions to result
@@ -554,7 +950,12 @@ def recast_to_ssystem(sym: "SymSystem", mode: str = "simplified") -> "RecastResu
     return result
 
 
-def _gma_recast(sym: SymSystem, original_vars: set[sp.Symbol]) -> RecastResult:
+def _gma_recast(
+    sym: SymSystem,
+    original_vars: set[sp.Symbol],
+    *,
+    bound_direct_terms: bool = False,
+) -> RecastResult:
     """
     GMA (Generalized Mass Action) recast for systems with multiple flux channels.
 
@@ -565,13 +966,21 @@ def _gma_recast(sym: SymSystem, original_vars: set[sp.Symbol]) -> RecastResult:
     new_initials: dict[sp.Symbol, float] = dict(sym.initials)
     new_variables: list[sp.Symbol] = list(sym.vars)
     factor_map: dict[sp.Symbol, list[sp.Symbol]] = {}
+    state_vars = set(sym.vars)
 
     for var in sorted(sym.vars, key=lambda s: s.name):
         # Get ODE - keep parameters symbolic
-        rhs = sp.simplify(sym.odes[var])
+        rhs = _bounded_recast_simplify(sym.odes[var])
 
         # Expand to terms
-        terms = expand_to_terms(rhs)
+        if bound_direct_terms:
+            terms = _bounded_direct_recast_terms(
+                rhs,
+                expression_label=var.name,
+                state_vars=state_vars,
+            )
+        else:
+            terms = expand_to_terms(rhs)
         growth_terms, decay_terms = _analyze_ode_terms(terms)
 
         # Create GMA equation preserving all terms
@@ -634,10 +1043,14 @@ def _direct_ssystem_recast(
         new_variables.append(var)
 
         # Get ODE - keep parameters symbolic
-        rhs = sp.simplify(sym.odes[var])
+        rhs = _bounded_recast_simplify(sym.odes[var])
 
         # Expand to terms
-        terms = expand_to_terms(rhs)
+        terms = _bounded_direct_recast_terms(
+            rhs,
+            expression_label=var.name,
+            state_vars=state_vars,
+        )
 
         # Use robust sign analysis that handles symbolic coefficients
         growth_terms, decay_terms = _analyze_ode_terms(terms, state_vars)
@@ -684,7 +1097,7 @@ def _direct_ssystem_recast(
 
     # If any equation needs GMA, return GMA format instead
     if needs_gma:
-        return _gma_recast(sym, original_vars)
+        return _gma_recast(sym, original_vars, bound_direct_terms=True)
 
     # Build result (no name canonicalization needed for direct form)
     return RecastResult(
@@ -719,7 +1132,7 @@ def _pool_ssystem_recast(sym: "SymSystem", mode: str = "simplified") -> "RecastR
     for Xi in sorted(sym.vars, key=lambda s: s.name):
         # Original variables: apply pool construction
         # 1) decompose RHS into signed monomial terms over ORIGINAL symbols
-        rhs = sp.simplify(sym.odes[Xi])
+        rhs = _bounded_recast_simplify(sym.odes[Xi])
         # Keep parameters symbolic - DO NOT substitute
         terms = expand_to_terms(rhs)
         state_vars = set(sym.vars)

@@ -18,6 +18,7 @@ from ssys._recaster.templates import (
     _expand_function_calls,
     _find_next_template_call,
     _parse_function_args,
+    _substitute_template_params,
     expand_antimony_function_templates,
 )
 
@@ -242,6 +243,32 @@ class TestAntimonyParser:
         with pytest.raises(ValueError, match="SBML conversion failed: conversion failed"):
             parse_antimony_via_sbml("model m() end")
 
+    def test_parse_antimony_via_sbml_repairs_empty_compartment_initializer(self):
+        """libAntimony can export an SBML compartment named compartment as unset."""
+        from ssys.recaster import parse_antimony_via_sbml
+
+        text = """
+        model exported_compartment_keyword()
+          species S, P;
+          J0: S -> P; compartment_*k*S;
+          S = 1;
+          P = 0;
+          k = 2;
+          compartment_ = ;
+        end
+        """
+
+        sym = parse_antimony_via_sbml(text)
+
+        S = sp.Symbol("S", positive=True)
+        P = sp.Symbol("P", positive=True)
+        k = sp.Symbol("k", positive=True)
+        compartment = sp.Symbol("compartment_", positive=True)
+        expected = compartment * k * S
+        assert sym.params["compartment_"] == 1.0
+        assert sp.simplify(sym.odes[S] + expected) == 0
+        assert sp.simplify(sym.odes[P] - expected) == 0
+
     def test_function_template_substitution_parenthesizes_expression_arguments(self):
         """Regression: f(x+1) must not become X + 1/(X + 2)."""
         text = """
@@ -312,6 +339,19 @@ class TestAntimonyParser:
             "(A + B)",
             "f(Y, Z)",
         ]
+
+    def test_function_template_substitution_is_simultaneous(self):
+        """Inserted arguments must not be rewritten by later parameter substitutions."""
+        body = "(kdsic_ + kdsic * Clb) * Sic1t"
+
+        assert (
+            _substitute_template_params(
+                body,
+                ["kdsic_", "kdsic", "Clb", "Sic1t"],
+                ["kdsic", "kdsic_0", "Clb", "Sic1t"],
+            )
+            == "(kdsic + kdsic_0 * Clb) * Sic1t"
+        )
 
     def test_function_template_expansion_preserves_comments_and_skips_model_boundaries(self):
         """Executable lines expand while model/end boundaries and comments are preserved."""
@@ -972,6 +1012,127 @@ class TestSbmlParserIcHandling:
         assert sp.simplify(sym.odes[s_sym] + k_sym * s_sym) == 0
         assert sp.simplify(sym.odes[p_sym] - k_sym * s_sym) == 0
 
+    def test_sbml_function_definition_preserves_prefix_like_arguments(self):
+        """Regression for BIOMD0000001058-style function parameters."""
+        from ssys.recaster import parse_sbml_from_string
+
+        species = """
+      <species id="S" compartment="cell" initialAmount="1" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="P" compartment="cell" initialAmount="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="Q" compartment="cell" initialAmount="2" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        function_definitions = """
+    <listOfFunctionDefinitions>
+      <functionDefinition id="rate_law">
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+          <lambda>
+            <bvar><ci> k_ </ci></bvar>
+            <bvar><ci> k </ci></bvar>
+            <bvar><ci> S </ci></bvar>
+            <bvar><ci> Q </ci></bvar>
+            <apply><times/>
+              <apply><plus/><ci> k_ </ci><apply><times/><ci> k </ci><ci> Q </ci></apply></apply>
+              <ci> S </ci>
+            </apply>
+          </lambda>
+        </math>
+      </functionDefinition>
+    </listOfFunctionDefinitions>"""
+        parameters = """
+    <listOfParameters>
+      <parameter id="k" value="0.5" constant="true"/>
+      <parameter id="k_0" value="2.0" constant="true"/>
+    </listOfParameters>"""
+        reactions = """
+    <listOfReactions>
+      <reaction id="J_fn" reversible="false">
+        <listOfReactants>
+          <speciesReference species="S" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="P" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><ci> rate_law </ci><ci> k </ci><ci> k_0 </ci><ci> S </ci><ci> Q </ci></apply>
+          </math>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>"""
+        sbml = _minimal_sbml(
+            species=species,
+            function_definitions=function_definitions,
+            parameters=parameters,
+            reactions=reactions,
+        )
+
+        sym = parse_sbml_from_string(sbml)
+
+        S = sp.Symbol("S", positive=True)
+        P = sp.Symbol("P", positive=True)
+        Q = sp.Symbol("Q", positive=True)
+        k = sp.Symbol("k", positive=True)
+        k_0 = sp.Symbol("k_0", positive=True)
+        expected = (k + k_0 * Q) * S
+        assert sp.simplify(sym.odes[S] + expected) == 0
+        assert sp.simplify(sym.odes[P] - expected) == 0
+
+    def test_sbml_function_definition_duplicate_parameters_keep_first_argument(self):
+        """Regression for MODEL2003040001 duplicate lambda parameter names."""
+        from ssys.recaster import parse_sbml_from_string
+
+        species = """
+      <species id="S" compartment="cell" initialAmount="1" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="P" compartment="cell" initialAmount="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        function_definitions = """
+    <listOfFunctionDefinitions>
+      <functionDefinition id="rate_law">
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+          <lambda>
+            <bvar><ci> k </ci></bvar>
+            <bvar><ci> k </ci></bvar>
+            <bvar><ci> S </ci></bvar>
+            <apply><times/><ci> k </ci><ci> S </ci></apply>
+          </lambda>
+        </math>
+      </functionDefinition>
+    </listOfFunctionDefinitions>"""
+        parameters = """
+    <listOfParameters>
+      <parameter id="k_plus" value="0.5" constant="true"/>
+      <parameter id="k_minus" value="24.0" constant="true"/>
+    </listOfParameters>"""
+        reactions = """
+    <listOfReactions>
+      <reaction id="J_fn" reversible="false">
+        <listOfReactants>
+          <speciesReference species="S" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="P" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><ci> rate_law </ci><ci> k_plus </ci><ci> k_minus </ci><ci> S </ci></apply>
+          </math>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>"""
+        sbml = _minimal_sbml(
+            species=species,
+            function_definitions=function_definitions,
+            parameters=parameters,
+            reactions=reactions,
+        )
+
+        sym = parse_sbml_from_string(sbml)
+
+        S = sp.Symbol("S", positive=True)
+        P = sp.Symbol("P", positive=True)
+        k_plus = sp.Symbol("k_plus", positive=True)
+        expected = k_plus * S
+        assert sp.simplify(sym.odes[S] + expected) == 0
+        assert sp.simplify(sym.odes[P] - expected) == 0
+
     def test_malicious_formula_string_rejected_before_sympify(self, monkeypatch):
         """Malicious-looking formula text is reported as parser data, not evaluated."""
         import libsbml
@@ -1297,6 +1458,77 @@ class TestSbmlParserIcHandling:
         assert sym.assignment_rules == {"obs": "S + k"}
         assert sym.algebraic_constraints == ["obs - S"]
         assert sym.solver_requirement == SolverRequirement.DAE_REQUIRED
+
+    def test_sbml_assignment_rule_species_are_not_recast_as_independent_states(self):
+        """Assignment-rule species are algebraic observables, not ODE states."""
+        import antimony
+
+        from ssys.recaster import parse_sbml_from_string
+
+        species = """
+      <species id="APLC" compartment="cell" initialConcentration="0.1" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="IP3" compartment="cell" initialConcentration="0.2" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="DG" compartment="cell" initialConcentration="0.2" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="PLC" compartment="cell" initialConcentration="0.3" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        parameters = """
+    <listOfParameters>
+      <parameter id="k" value="1" constant="true"/>
+      <parameter id="Cplc_total" value="10" constant="true"/>
+    </listOfParameters>"""
+        reactions = """
+    <listOfReactions>
+      <reaction id="J0" reversible="false">
+        <listOfReactants>
+          <speciesReference species="PLC" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="APLC" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><times/><ci> k </ci><ci> PLC </ci></apply>
+          </math>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>"""
+        rules = """
+    <listOfRules>
+      <assignmentRule variable="DG">
+        <math xmlns="http://www.w3.org/1998/Math/MathML"><ci> IP3 </ci></math>
+      </assignmentRule>
+      <assignmentRule variable="PLC">
+        <math xmlns="http://www.w3.org/1998/Math/MathML">
+          <apply><minus/><ci> Cplc_total </ci><ci> APLC </ci></apply>
+        </math>
+      </assignmentRule>
+    </listOfRules>"""
+        sbml = _minimal_sbml(
+            species=species,
+            parameters=parameters,
+            reactions=reactions,
+            rules=rules,
+        )
+
+        sym = parse_sbml_from_string(sbml)
+
+        assert [str(v) for v in sym.vars] == ["APLC", "IP3"]
+        assert set(map(str, sym.odes)) == {"APLC", "IP3"}
+        assert sym.assignment_rules == {"DG": "IP3", "PLC": "Cplc_total - APLC"}
+
+        rec = recast_to_ssystem(sym)
+        assert "DG" not in {str(v) for v in rec.factor_map}
+        assert "PLC" not in {str(v) for v in rec.factor_map}
+
+        output = ssystem_to_antimony(rec, model_name="assignment_rule_species")
+        assert len(re.findall(r"^DG\s*:=", output, flags=re.MULTILINE)) == 1
+        assert len(re.findall(r"^PLC\s*:=", output, flags=re.MULTILINE)) == 1
+        assert "DG := IP3;" in output
+        assert "PLC := Cplc_total - APLC;" in output
+        assert not re.search(r"\bDG\s*:=\s*Z_", output)
+        assert not re.search(r"\bPLC\s*:=\s*Z_", output)
+
+        antimony.clearPreviousLoads()
+        assert antimony.loadAntimonyString(output) >= 0, antimony.getLastError()
 
     def test_species_ic_in_params_used_for_auxiliary_ic(self):
         """Test that species ICs in params are used for auxiliary IC."""
@@ -1835,15 +2067,14 @@ class TestReservedKeywordSanitization:
         assert _sanitize_antimony_name("DNA") == "DNA_var"
         assert _sanitize_antimony_name("RNA") == "RNA_var"
 
-    def test_sanitize_antimony_name_non_reserved_functions(self):
-        """Test that function names are NOT sanitized (no modeler uses these)."""
+    def test_sanitize_antimony_name_reserved_function_identifiers(self):
+        """Test that function names are sanitized when used as identifiers."""
         from ssys.recaster import _sanitize_antimony_name
 
-        # Function names are NOT reserved - they're interpreted as function calls
-        # No reasonable modeler would name a variable "exp" or "sin"
-        assert _sanitize_antimony_name("exp") == "exp"
-        assert _sanitize_antimony_name("log") == "log"
-        assert _sanitize_antimony_name("sin") == "sin"
+        assert _sanitize_antimony_name("exp") == "exp_var"
+        assert _sanitize_antimony_name("log") == "log_var"
+        assert _sanitize_antimony_name("sin") == "sin_var"
+        assert _sanitize_antimony_name("pow") == "pow_var"
         assert _sanitize_antimony_name("time") == "time"
 
     def test_sanitize_antimony_name_safe_names(self):
@@ -1896,6 +2127,10 @@ class TestReservedKeywordSanitization:
         # Test that partial matches are not replaced (word boundary)
         result = _apply_name_sanitization("compartmental", name_map)
         assert result == "compartmental"  # Not "compartment_varal"
+
+        # Test that actual function calls are not rewritten.
+        result = _apply_name_sanitization("exp(X) + exp", name_map)
+        assert result == "exp(X) + exp_var"
 
     def test_compartment_sanitization_in_output(self):
         """Test that compartment 'compartment' is sanitized in Antimony output."""

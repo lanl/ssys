@@ -1,11 +1,33 @@
 """Identifier sanitization and name collection helpers."""
 
 import re
+from typing import Any, cast
 
 import sympy as sp
 
 from ssys._recaster.common import ANTIMONY_RESERVED_KEYWORDS
 from ssys.types import RecastResult
+
+_ANTIMONY_LITERAL_CONSTANTS = frozenset({"inf", "nan", "pi"})
+
+
+class _AntimonyExpressionPrinter(sp.StrPrinter):
+    """Print SymPy expressions using Antimony-compatible function syntax."""
+
+    def _print_Piecewise(self, expr: sp.Piecewise) -> str:
+        args: list[str] = []
+        for value, condition in expr.args:
+            args.append(self._print(value))
+            if condition is True or condition == sp.S.true:
+                continue
+            args.append(self._print(condition))
+        return f"piecewise({', '.join(args)})"
+
+    def _print_Relational(self, expr: Any) -> str:
+        return f"{self._print(expr.lhs)} {expr.rel_op} {self._print(expr.rhs)}"
+
+
+_ANTIMONY_EXPRESSION_PRINTER = _AntimonyExpressionPrinter()
 
 
 def _sanitize_antimony_name(name: str) -> str:
@@ -76,10 +98,18 @@ def _apply_name_sanitization(text: str, name_map: dict[str, str]) -> str:
         return text
     result = text
     for orig, sanitized in name_map.items():
-        # Use word boundary regex to match whole identifiers only
-        pattern = r"\b" + re.escape(orig) + r"\b"
+        # Match whole identifiers, but do not rewrite real function calls such
+        # as ``pow(...)`` when a model also has a colliding declared identifier.
+        pattern = r"(?<![A-Za-z_\d])" + re.escape(orig) + r"(?![A-Za-z_\d])(?!\s*\()"
         result = re.sub(pattern, sanitized, result)
     return result
+
+
+def _format_sympy_expression_for_antimony(expr: sp.Expr) -> str:
+    text = cast(str, _ANTIMONY_EXPRESSION_PRINTER.doprint(expr))
+    text = text.replace("**", "^")
+    text = text.replace("Abs(", "abs(")
+    return text
 
 
 def _format_antimony_token(
@@ -93,7 +123,12 @@ def _format_antimony_token(
     helper so reserved names are rewritten consistently.
     """
     if expression:
-        return _apply_name_sanitization(str(value), name_map or {})
+        text = (
+            _format_sympy_expression_for_antimony(value)
+            if isinstance(value, sp.Expr)
+            else str(value)
+        )
+        return _apply_name_sanitization(text, name_map or {})
 
     name = value.name if isinstance(value, sp.Symbol) else str(value)
     if name_map and name in name_map:
@@ -116,7 +151,9 @@ def _collect_antimony_names(result: "RecastResult") -> set[str]:
             for sym in value.free_symbols:
                 add(sym)
         else:
-            for token in re.findall(r"\b[A-Za-z_]\w*\b", str(value)):
+            for token in re.findall(r"\b[A-Za-z_]\w*\b(?!\s*\()", str(value)):
+                if token.lower() in _ANTIMONY_LITERAL_CONSTANTS:
+                    continue
                 names.add(token)
 
     for var in result.variables:

@@ -1,12 +1,278 @@
 """Symbolic lifting for rational, composite, and time-dependent terms."""
 
 from dataclasses import dataclass
+from typing import Any
 
 import sympy as sp
 
 from ssys._recaster.parsing import _sympy_to_antimony_syntax
 from ssys.math_utils import expand_to_terms
 from ssys.types import SymSystem
+
+_RATIONAL_LIFT_SIMPLIFY_MAX_OPS = 20
+_COMPOSITE_LIFT_SIMPLIFY_MAX_OPS = 20
+
+
+class UnsupportedCompositeDerivativeError(RuntimeError):
+    """Raised when composite lifting would emit unsupported symbolic derivatives."""
+
+    def __init__(
+        self,
+        *,
+        context: str,
+        function_names: list[str],
+        source_expr: sp.Expr,
+        derivative_expr: sp.Expr,
+    ) -> None:
+        self.context = context
+        self.function_names = function_names
+        self.source_expr = source_expr
+        self.derivative_expr = derivative_expr
+        source_preview = _preview_expr(source_expr)
+        derivative_preview = _preview_expr(derivative_expr)
+        functions = ", ".join(function_names) if function_names else "unknown"
+        super().__init__(
+            "unsupported_generated_output: unsupported composite derivative "
+            f"for function(s) {functions}; context={context}; "
+            "SymPy left an unevaluated Derivative/Subs expression that cannot "
+            "be emitted to Antimony safely; "
+            f"source_expr={source_preview}; derivative_expr={derivative_preview}"
+        )
+
+
+def _preview_expr(expr: sp.Expr, *, limit: int = 240) -> str:
+    preview = str(expr)
+    if len(preview) > limit:
+        preview = preview[: limit - 3] + "..."
+    return preview
+
+
+def _function_names_for_unsupported_derivative(
+    *,
+    source_expr: sp.Expr,
+    derivative_expr: sp.Expr,
+) -> list[str]:
+    names: set[str] = set()
+    for derivative in derivative_expr.atoms(sp.Derivative):
+        for func in derivative.expr.atoms(sp.Function):
+            names.add(func.func.__name__)
+        if isinstance(derivative.expr, sp.Function):
+            names.add(derivative.expr.func.__name__)
+    for func in source_expr.atoms(sp.Function):
+        names.add(func.func.__name__)
+    if isinstance(source_expr, sp.Function):
+        names.add(source_expr.func.__name__)
+    return sorted(names)
+
+
+def _raise_for_unsupported_derivative_printer(
+    derivative_expr: sp.Expr,
+    *,
+    source_expr: sp.Expr,
+    context: str,
+) -> None:
+    """Fail closed before raw SymPy Derivative/Subs text reaches Antimony."""
+    if not derivative_expr.has(sp.Derivative) and not derivative_expr.has(sp.Subs):
+        return
+    raise UnsupportedCompositeDerivativeError(
+        context=context,
+        function_names=_function_names_for_unsupported_derivative(
+            source_expr=source_expr,
+            derivative_expr=derivative_expr,
+        ),
+        source_expr=source_expr,
+        derivative_expr=derivative_expr,
+    )
+
+
+def _sbml_piecewise(*args) -> sp.Piecewise:
+    """Convert SBML-style piecewise(value, condition, ..., otherwise) syntax."""
+    if not args:
+        return sp.Piecewise((sp.nan, True))
+
+    pairs: list[tuple[Any, Any]] = []
+    if len(args) % 2 == 1:
+        pairs.extend((args[i], args[i + 1]) for i in range(0, len(args) - 1, 2))
+        pairs.append((args[-1], True))
+    else:
+        pairs.extend((args[i], args[i + 1]) for i in range(0, len(args), 2))
+    return sp.Piecewise(*pairs)
+
+
+def _assignment_rule_math_locals() -> dict[str, object]:
+    """Return math helpers needed when parsing assignment-rule strings."""
+    return {
+        "Abs": sp.Abs,
+        "abs": sp.Abs,
+        "ceiling": sp.ceiling,
+        "cos": sp.cos,
+        "eq": sp.Eq,
+        "exp": sp.exp,
+        "floor": sp.floor,
+        "geq": sp.Ge,
+        "gt": sp.Gt,
+        "leq": sp.Le,
+        "ln": sp.log,
+        "log": sp.log,
+        "lt": sp.Lt,
+        "neq": sp.Ne,
+        "piecewise": _sbml_piecewise,
+        "pow": lambda base, exponent: base**exponent,
+        "sin": sp.sin,
+        "sqrt": sp.sqrt,
+        "tan": sp.tan,
+        "tanh": sp.tanh,
+    }
+
+
+def _substitute_symbols_by_name(
+    expr: sp.Expr,
+    replacements_by_name: dict[str, sp.Expr],
+) -> sp.Expr:
+    """Substitute symbols by matching names instead of object identity."""
+    if not replacements_by_name:
+        return expr
+    substitutions = {
+        symbol: replacements_by_name[str(symbol)]
+        for symbol in expr.free_symbols
+        if str(symbol) in replacements_by_name
+    }
+    return expr.subs(substitutions) if substitutions else expr
+
+
+def _assignment_rule_parse_locals(sym: SymSystem) -> dict[str, object]:
+    """Build locals that preserve model identifiers when sympifying rules."""
+    local_symbols: dict[str, object] = {}
+    for var in sym.vars:
+        local_symbols[var.name] = var
+    for name in sym.params:
+        local_symbols.setdefault(name, sp.Symbol(name, positive=True))
+    for name in sym.compartments:
+        local_symbols.setdefault(name, sp.Symbol(name, positive=True))
+    for name in sym.assignment_rules:
+        local_symbols.setdefault(name, sp.Symbol(name, positive=True))
+    local_symbols.setdefault("time", sp.Symbol("time", positive=True))
+    local_symbols.setdefault("t", sp.Symbol("t", positive=True))
+    local_symbols.setdefault("T", sp.Symbol("T", positive=True))
+    for name, helper in _assignment_rule_math_locals().items():
+        local_symbols.setdefault(name, helper)
+    return local_symbols
+
+
+def _parse_assignment_rule_expressions(sym: SymSystem) -> dict[str, sp.Expr]:
+    """Parse assignment rules and recursively expand nested rule references."""
+    if not sym.assignment_rules:
+        return {}
+
+    local_symbols = _assignment_rule_parse_locals(sym)
+    parsed: dict[str, sp.Expr] = {}
+    for name, expr_text in sym.assignment_rules.items():
+        try:
+            parsed[name] = sp.sympify(expr_text, locals=local_symbols)
+        except (TypeError, ValueError, sp.SympifyError):
+            continue
+
+    expanded = dict(parsed)
+    for _ in range(len(expanded) + 1):
+        changed = False
+        for name, expr in list(expanded.items()):
+            replacements = {
+                other_name: other_expr
+                for other_name, other_expr in expanded.items()
+                if other_name != name
+            }
+            next_expr = _substitute_symbols_by_name(expr, replacements)
+            if next_expr != expr:
+                expanded[name] = next_expr
+                changed = True
+        if not changed:
+            break
+    return expanded
+
+
+def _expand_assignment_rules_by_name(
+    expr: sp.Expr,
+    assignment_exprs: dict[str, sp.Expr],
+) -> sp.Expr:
+    """Inline assignment-rule expressions into ``expr`` by identifier name."""
+    if not assignment_exprs:
+        return expr
+    expanded = expr
+    for _ in range(len(assignment_exprs) + 1):
+        next_expr = _substitute_symbols_by_name(expanded, assignment_exprs)
+        if next_expr == expanded:
+            break
+        expanded = next_expr
+    return expanded
+
+
+def _time_symbols(expr: sp.Expr) -> list[sp.Symbol]:
+    """Return free symbols named time, independent of SymPy assumptions."""
+    return [symbol for symbol in expr.free_symbols if symbol.name == "time"]
+
+
+def _has_compound_symbolic_power(expr: sp.Expr) -> bool:
+    """Return true for symbolic powers that make global simplify expensive."""
+    for pow_expr in expr.atoms(sp.Pow):
+        base, exp = pow_expr.as_base_exp()
+        if exp.is_number:
+            continue
+        if isinstance(base, sp.Symbol) or base.is_Number:
+            continue
+        return True
+    return False
+
+
+def _bounded_rational_lift_simplify(expr: sp.Expr) -> sp.Expr:
+    """Avoid global simplify on large lifted rational expressions."""
+    if _has_compound_symbolic_power(expr):
+        return expr
+    try:
+        if sp.count_ops(expr, visual=False) > _RATIONAL_LIFT_SIMPLIFY_MAX_OPS:
+            return expr
+    except (TypeError, ValueError):
+        return expr
+    return sp.simplify(expr)
+
+
+def _bounded_composite_lift_simplify(expr: sp.Expr) -> sp.Expr:
+    """Avoid global simplify on large lifted composite-function expressions."""
+    if _has_compound_symbolic_power(expr):
+        return expr
+    try:
+        if sp.count_ops(expr, visual=False) > _COMPOSITE_LIFT_SIMPLIFY_MAX_OPS:
+            return expr
+    except (TypeError, ValueError):
+        return expr
+    return sp.simplify(expr)
+
+
+def _bounded_composite_substitute(
+    expr: sp.Expr,
+    substitutions: dict[sp.Expr, sp.Expr],
+) -> sp.Expr:
+    """Substitute composite auxiliaries without expensive global matching."""
+    if not substitutions:
+        return expr
+
+    try:
+        if (
+            sp.count_ops(expr, visual=False) <= _COMPOSITE_LIFT_SIMPLIFY_MAX_OPS
+            and not _has_compound_symbolic_power(expr)
+        ):
+            return expr.subs(substitutions)
+    except (TypeError, ValueError):
+        pass
+
+    replaced = expr.xreplace(substitutions)
+    if _has_compound_symbolic_power(replaced):
+        return replaced
+    try:
+        if sp.count_ops(replaced, visual=False) > _COMPOSITE_LIFT_SIMPLIFY_MAX_OPS:
+            return replaced
+    except (TypeError, ValueError):
+        return replaced
+    return replaced.subs(substitutions)
 
 
 def find_rational_denominators(expr: sp.Expr) -> set[sp.Expr]:
@@ -210,8 +476,7 @@ def lift_rational_functions(
     lifted_aux_exprs = set()
     if composite_aux_defs:
         for aux, defn in composite_aux_defs.items():
-            # Normalize the definition for comparison
-            lifted_aux_exprs.add(sp.simplify(defn))
+            lifted_aux_exprs.add(defn)
 
     while iteration < max_iterations:
         iteration += 1
@@ -228,11 +493,19 @@ def lift_rational_functions(
 
         # Separate denominators into constant vs. dynamic vs. simple state variables
         state_vars = set(sym.vars)
+        assignment_rule_names = set(sym.assignment_rules)
         const_denoms = set()  # denominators that depend only on constants
         dynamic_denoms = set()  # denominators that depend on state variables AND need lifting
 
         for denom in all_denoms:
             denom_vars = denom.free_symbols & state_vars
+            denom_assignment_names = {str(sym_) for sym_ in denom.free_symbols} & assignment_rule_names
+            if denom_assignment_names:
+                # Assignment-rule targets are algebraic functions, not constants.
+                # SBML parsing may also record placeholder numeric values for
+                # them in params; using those placeholders would erase real
+                # denominators such as 1 + f_Nstar__k_cnd_D.
+                continue
             if not denom_vars:
                 # Denominator has no state variables - it's constant
                 const_denoms.add(denom)
@@ -264,12 +537,11 @@ def lift_rational_functions(
                         denom_val = denom_val.subs(param_sym, sym.params[param_sym.name])
                 try:
                     recip_val = float(1.0 / denom_val)
-                    # Replace 1/D with its numeric value
-                    new_ode = new_ode.replace(denom ** (-1), sp.Float(recip_val))
-                    # Handle other negative powers if present
-                    for n in range(2, 6):
-                        if denom ** (-n) in new_ode.atoms(sp.Pow):
-                            new_ode = new_ode.replace(denom ** (-n), sp.Float(recip_val**n))
+                    replacements = {
+                        denom ** (-n): sp.Float(recip_val**n)
+                        for n in range(1, 6)
+                    }
+                    new_ode = new_ode.xreplace(replacements)
                 except (TypeError, ValueError, ZeroDivisionError):
                     # If numeric evaluation fails, leave the denominator symbolic.
                     continue
@@ -284,30 +556,27 @@ def lift_rational_functions(
         # Build reverse lookup: normalized_denom -> existing auxiliary
         existing_denom_to_aux: dict[sp.Expr, sp.Symbol] = {}
         for aux, defn in all_aux_defs.items():
-            defn_normalized = sp.simplify(defn)
-            existing_denom_to_aux[defn_normalized] = aux
+            existing_denom_to_aux[defn] = aux
 
         for denom in sorted(dynamic_denoms, key=str):
             # Check if this denominator is already a lifted composite auxiliary
-            # Normalize for comparison
-            denom_normalized = sp.simplify(denom)
 
-            if denom_normalized in lifted_aux_exprs:
+            if denom in lifted_aux_exprs:
                 # This denominator is already a lifted auxiliary - SKIP
                 # Use negative exponent directly (e.g., log(Z_1)^-1)
                 continue
 
             # Check if we already have an auxiliary for this denominator (from previous iteration)
-            if denom_normalized in existing_denom_to_aux:
+            if denom in existing_denom_to_aux:
                 # Reuse existing auxiliary
-                denom_to_aux[denom] = existing_denom_to_aux[denom_normalized]
+                denom_to_aux[denom] = existing_denom_to_aux[denom]
                 continue
 
             # Not a lifted auxiliary and no existing auxiliary - create new Y
             Y = sp.symbols(f"Y_{aux_counter}", positive=True)
             denom_to_aux[denom] = Y
             all_aux_defs[Y] = denom  # Accumulate definitions
-            existing_denom_to_aux[denom_normalized] = Y  # Track for future denoms in this iteration
+            existing_denom_to_aux[denom] = Y  # Track for future denoms in this iteration
             aux_counter += 1
 
         # Substitute dynamic denominators with auxiliaries
@@ -319,11 +588,12 @@ def lift_rational_functions(
                 # Find all Pow atoms and check if their base matches denom
                 for atom in list(new_ode.atoms(sp.Pow)):
                     base, exp = atom.as_base_exp()
-                    # Check if base matches this denominator (using simplify for robustness)
-                    if sp.simplify(base - denom) == 0:
+                    # Denominators are collected from Pow bases, so structural
+                    # identity avoids expensive algebraic matching here.
+                    if base == denom:
                         # Replace denom^exp with Y^exp
                         new_ode = new_ode.subs(atom, Y**exp)
-            new_odes[var] = sp.simplify(new_ode)
+            new_odes[var] = _bounded_rational_lift_simplify(new_ode)
 
         # Compute Y' for dynamic auxiliaries using the LIFTED ODEs
         # Y' = dD/dt (direct derivative, no chain rule needed)
@@ -340,7 +610,7 @@ def lift_rational_functions(
             # denom_prime is already computed from lifted ODEs (which have Y in them)
             # No additional substitution needed - it would cause spurious replacements
             Y_ode = denom_prime
-            new_aux_odes[Y] = sp.simplify(Y_ode)
+            new_aux_odes[Y] = _bounded_rational_lift_simplify(Y_ode)
 
         # Combine original and auxiliary ODEs
         combined_odes = {**new_odes, **new_aux_odes}
@@ -1391,12 +1661,14 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
     # Time-only → assignment rules (no ODE needed)
     # State-dependent → ODEs via chain rule
     state_vars = set(sym.vars)
+    assignment_exprs = _parse_assignment_rule_expressions(sym)
 
     time_only_functions = set()
     state_dependent_functions = set()
 
     for func in all_functions:
-        if _is_time_only_function(func, state_vars):
+        expanded_func = _expand_assignment_rules_by_name(func, assignment_exprs)
+        if _is_time_only_function(expanded_func, state_vars):
             time_only_functions.add(func)
         else:
             state_dependent_functions.add(func)
@@ -1444,6 +1716,16 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
 
     # NOTE: time_only_functions and time_only_aux are now UNUSED - all functions get ODEs
 
+    def _function_subs_map() -> dict[sp.Expr, sp.Expr]:
+        substitutions: dict[sp.Expr, sp.Expr] = {}
+        for known_func, known_aux in func_to_aux.items():
+            offset = func_to_offset[known_func]
+            replacement = known_aux - offset if offset > 0 else known_aux
+            substitutions[known_func] = replacement
+            expanded_known_func = _expand_assignment_rules_by_name(known_func, assignment_exprs)
+            substitutions[expanded_known_func] = replacement
+        return substitutions
+
     # Handle sin/cos pairs (state-dependent only) - create BOTH auxiliaries even if only one appears
     for arg, funcs_dict in sin_cos_pairs.items():
         sin_func = funcs_dict.get("sin", sp.sin(arg))
@@ -1473,7 +1755,8 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
     sqrt_to_aux: dict[sp.Expr, sp.Symbol] = {}
     for sqrt_expr in sorted(all_sqrt_sums, key=str):
         # Check if sqrt is time-only
-        if _is_time_only_function(sqrt_expr, state_vars):
+        expanded_sqrt_expr = _expand_assignment_rules_by_name(sqrt_expr, assignment_exprs)
+        if _is_time_only_function(expanded_sqrt_expr, state_vars):
             # Time-only sqrt → assignment rule
             Z = sp.symbols(f"Z_{aux_counter}", positive=True)
             time_only_aux[sqrt_expr] = Z
@@ -1491,14 +1774,12 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
     # We need the original functions present for the chain rule to work correctly
     # Keep original ODEs unchanged for now
     new_odes: dict[sp.Symbol, sp.Expr] = dict(sym.odes)
+    function_subs = _function_subs_map()
 
     # Compute Z' using coupled derivatives for sin/cos
     new_aux_odes: dict[sp.Symbol, sp.Expr] = {}
 
     # Handle sin/cos pairs with coupled derivatives
-    # CRITICAL: Create time symbol with positive=True to match SBML parser
-    time_sym = sp.Symbol("time", positive=True)
-
     for arg, funcs_dict2 in sin_cos_pairs.items():
         sin_func = funcs_dict2.get("sin", sp.sin(arg))
         cos_func = funcs_dict2.get("cos", sp.cos(arg))
@@ -1508,26 +1789,28 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
         # d/dt[sin(arg) + 2] = cos(arg) * d(arg)/dt = (Z_cos - 2) * d(arg)/dt
         # d/dt[cos(arg) + 2] = -sin(arg) * d(arg)/dt = -(Z_sin - 2) * d(arg)/dt = (2 - Z_sin) * d(arg)/dt
 
-        # Compute d(arg)/dt using chain rule
+        # Compute d(arg)/dt using chain rule. Assignment-rule targets are
+        # algebraic expressions, so expand them before differentiating.
+        diff_arg = _expand_assignment_rules_by_name(arg, assignment_exprs)
         arg_prime = sp.Integer(0)
         for var in sym.vars:
-            if var in arg.free_symbols:
-                partial = sp.diff(arg, var)
+            if var in diff_arg.free_symbols:
+                partial = sp.diff(diff_arg, var)
                 arg_prime += partial * new_odes[var]
 
         # Handle explicit time dependence: d(time)/dt = 1
         # CRITICAL: For sin(time), cos(time), the argument IS time, so arg' = 1
-        if time_sym in arg.free_symbols:
-            partial_t = sp.diff(arg, time_sym)
+        for time_symbol in _time_symbols(diff_arg):
+            partial_t = sp.diff(diff_arg, time_symbol)
             arg_prime += partial_t  # d(time)/dt = 1
 
         # Z_sin' = (Z_cos - 2) * arg'
         Z_sin_ode = (Z_cos - 2) * arg_prime
-        new_aux_odes[Z_sin] = sp.simplify(Z_sin_ode)
+        new_aux_odes[Z_sin] = _bounded_composite_lift_simplify(Z_sin_ode)
 
         # Z_cos' = (2 - Z_sin) * arg'
         Z_cos_ode = (2 - Z_sin) * arg_prime
-        new_aux_odes[Z_cos] = sp.simplify(Z_cos_ode)
+        new_aux_odes[Z_cos] = _bounded_composite_lift_simplify(Z_cos_ode)
 
     # Collect all variables that have ODEs at this point:
     # - Original variables (from sym.vars)
@@ -1542,17 +1825,18 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
         if sqrt_expr in time_only_aux:
             continue
         base = sqrt_expr.args[0]  # The base of sqrt(base)
+        diff_base = _expand_assignment_rules_by_name(base, assignment_exprs)
 
         # Compute d(base)/dt using chain rule
         base_prime = sp.Integer(0)
         for var in sym.vars:
-            if var in base.free_symbols:
-                partial = sp.diff(base, var)
+            if var in diff_base.free_symbols:
+                partial = sp.diff(diff_base, var)
                 base_prime += partial * new_odes[var]
 
         # Handle time dependence (time_sym defined above at start of sin/cos loop)
-        if time_sym in base.free_symbols:
-            partial_t = sp.diff(base, time_sym)
+        for time_symbol in _time_symbols(diff_base):
+            partial_t = sp.diff(diff_base, time_symbol)
             base_prime += partial_t  # d(time)/dt = 1
 
         # Z' = base' / (2*Z)
@@ -1575,14 +1859,20 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
     # Handle other functions with standard chain rule
     for func in other_functions:
         Z = func_to_aux[func]
+        diff_func = _expand_assignment_rules_by_name(func, assignment_exprs)
 
         # Compute df/dt using chain rule: df/dt = sum_i (∂f/∂X_i) * dX_i/dt
         func_prime = sp.Integer(0)
         # CRITICAL FIX: Use all_vars_with_odes which includes ALL variables with ODEs
         # (original variables + sin/cos auxiliaries created earlier)
         for var in all_vars_with_odes:
-            if var in func.free_symbols:
-                partial = sp.diff(func, var)
+            if var in diff_func.free_symbols:
+                partial = sp.diff(diff_func, var)
+                _raise_for_unsupported_derivative_printer(
+                    partial,
+                    source_expr=diff_func,
+                    context=f"d/d{var}",
+                )
 
                 # Use the ODE for var (either from new_odes or new_aux_odes)
                 var_ode = new_odes.get(var) or new_aux_odes.get(var)
@@ -1593,30 +1883,21 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
                     # Replace composite functions with auxiliaries AFTER multiplication
                     # Use .subs() instead of .replace() to handle algebraic simplifications
                     # (e.g., exp(2*x) = exp(x)^2)
-                    subs_map = {}
-                    for other_func, other_Z in func_to_aux.items():
-                        offset = func_to_offset[other_func]
-                        if offset > 0:
-                            subs_map[other_func] = other_Z - offset
-                        else:
-                            subs_map[other_func] = other_Z
-                    term = term.subs(subs_map)
+                    term = _bounded_composite_substitute(term, function_subs)
 
                     func_prime += term
 
         # Handle explicit time dependence: d(time)/dt = 1
         # (time_sym defined above at start of sin/cos loop)
-        if time_sym in func.free_symbols:
-            partial_t = sp.diff(func, time_sym)
+        for time_symbol in _time_symbols(diff_func):
+            partial_t = sp.diff(diff_func, time_symbol)
+            _raise_for_unsupported_derivative_printer(
+                partial_t,
+                source_expr=diff_func,
+                context=f"d/d{time_symbol}",
+            )
             # Substitute auxiliaries in the time derivative term
-            subs_map = {}
-            for other_func, other_Z in func_to_aux.items():
-                offset = func_to_offset[other_func]
-                if offset > 0:
-                    subs_map[other_func] = other_Z - offset
-                else:
-                    subs_map[other_func] = other_Z
-            partial_t = partial_t.subs(subs_map)
+            partial_t = _bounded_composite_substitute(partial_t, function_subs)
             func_prime += partial_t
 
         # Store the computed ODE
@@ -1628,16 +1909,14 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
 
         # Replace any remaining instances of composite functions with auxiliaries
         # Use .subs() instead of .replace() to handle algebraic simplifications
-        subs_map = {}
-        for other_func, other_Z in func_to_aux.items():
-            offset = func_to_offset[other_func]
-            if offset > 0:
-                subs_map[other_func] = other_Z - offset
-            else:
-                subs_map[other_func] = other_Z
-        Z_ode = Z_ode.subs(subs_map)
+        Z_ode = _bounded_composite_substitute(Z_ode, function_subs)
 
-        Z_ode = sp.simplify(Z_ode)
+        Z_ode = _bounded_composite_lift_simplify(Z_ode)
+        _raise_for_unsupported_derivative_printer(
+            Z_ode,
+            source_expr=diff_func,
+            context=f"auxiliary_ode:{Z}",
+        )
 
         # CRITICAL: DO NOT apply inverse mappings to eliminate original variables
         # This violates the chain rule and creates incorrect dynamics.
@@ -1659,7 +1938,7 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
         #
         # The inverse mappings break the chain rule relationships.
 
-        new_aux_odes[Z] = sp.simplify(Z_ode)
+        new_aux_odes[Z] = Z_ode
 
     # NOW substitute composite functions with auxiliaries ONLY in original ODEs
     # This must happen AFTER computing all auxiliary ODEs via chain rule
@@ -1675,13 +1954,13 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
                 subs_map[func] = Z - offset
             else:
                 subs_map[func] = Z
-        new_ode = new_ode.subs(subs_map)
+        new_ode = _bounded_composite_substitute(new_ode, subs_map)
 
         # Also substitute sqrt(sum) expressions
         for sqrt_expr, Z in sqrt_to_aux.items():
-            new_ode = new_ode.subs(sqrt_expr, Z)
+            new_ode = _bounded_composite_substitute(new_ode, {sqrt_expr: Z})
 
-        new_odes[var] = sp.simplify(new_ode)
+        new_odes[var] = _bounded_composite_lift_simplify(new_ode)
 
     # Combine original and auxiliary ODEs
     combined_odes = {**new_odes, **new_aux_odes}
@@ -1698,10 +1977,10 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
         if func in sqrt_to_aux:
             continue
         # Evaluate function at t=0
-        func_at_0 = func
+        func_at_0 = _expand_assignment_rules_by_name(func, assignment_exprs)
         # CRITICAL: Substitute time=0 FIRST for time-only functions
-        time_sym = sp.Symbol("time")
-        func_at_0 = func_at_0.subs(time_sym, 0)
+        for time_symbol in _time_symbols(func_at_0):
+            func_at_0 = func_at_0.subs(time_symbol, 0)
         # Then substitute state variables
         # CRITICAL: Check BOTH initials AND params - SBML parser puts species ICs in params
         for var in sym.vars:
@@ -1731,10 +2010,10 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
 
     for sqrt_expr, Z in sqrt_to_aux.items():
         # Evaluate sqrt at t=0
-        sqrt_at_0 = sqrt_expr
+        sqrt_at_0 = _expand_assignment_rules_by_name(sqrt_expr, assignment_exprs)
         # First substitute time=0
-        time_sym = sp.Symbol("time")
-        sqrt_at_0 = sqrt_at_0.subs(time_sym, 0)
+        for time_symbol in _time_symbols(sqrt_at_0):
+            sqrt_at_0 = sqrt_at_0.subs(time_symbol, 0)
         # Then substitute state variables by NAME (symbol identity may differ)
         for sym_in_sqrt in list(sqrt_at_0.free_symbols):
             if sym_in_sqrt.name in initials_by_name:
@@ -1826,6 +2105,7 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
             odes=combined_odes,
             initials=new_initials,
             initial_exprs=sym.initial_exprs,
+            assignment_rules=sym.assignment_rules,
             compartments=sym.compartments,  # Propagate compartments
             sim_t_start=sym.sim_t_start,  # Propagate sim metadata
             sim_t_end=sym.sim_t_end,
@@ -1905,6 +2185,32 @@ def lift_composite_functions(sym: SymSystem) -> tuple[SymSystem, dict[sp.Symbol,
             for aux, defn in new_comp_aux_defs.items():
                 if aux not in aux_to_func_with_offset:
                     aux_to_func_with_offset[aux] = defn
+
+    # Recompute numeric auxiliary ICs from the final definitions. Bounded
+    # substitution during ODE construction can leave intermediate ICs stale for
+    # nested functions such as exp(log(Z)**2), while the final definition map is
+    # still authoritative.
+    initial_values_by_name = {str(name): value for name, value in sym.params.items()}
+    for var, value in sym.initials.items():
+        if hasattr(var, "name"):
+            initial_values_by_name[var.name] = value
+    for var, value in new_initials.items():
+        if hasattr(var, "name"):
+            initial_values_by_name[var.name] = value
+
+    for aux_sym, aux_def in aux_to_func_with_offset.items():
+        aux_at_0 = _expand_assignment_rules_by_name(aux_def, assignment_exprs)
+        for time_symbol in _time_symbols(aux_at_0):
+            aux_at_0 = aux_at_0.subs(time_symbol, 0)
+        for free_symbol in list(aux_at_0.free_symbols):
+            initial_value = initial_values_by_name.get(free_symbol.name)
+            if initial_value is not None:
+                aux_at_0 = aux_at_0.subs(free_symbol, initial_value)
+        try:
+            new_initials[aux_sym] = float(aux_at_0)
+            initial_values_by_name[aux_sym.name] = new_initials[aux_sym]
+        except (TypeError, ValueError, sp.SympifyError):
+            pass
 
     # Build symbolic IC expressions for auxiliary variables
     # CRITICAL: Only use symbolic ICs when they DON'T depend on state variables

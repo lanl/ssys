@@ -20,6 +20,16 @@ from ssys.metadata import (
 from ssys.types import RecastResult, RecastStatus
 
 
+def _symbolic_exponent_needs_parentheses(exp: sp.Expr) -> bool:
+    """Return True when an Antimony exponent would otherwise bind incorrectly."""
+    if exp.is_Add:
+        return True
+    if exp.is_Mul:
+        coeff, rest = exp.as_coeff_Mul()
+        return not (coeff == -1 and isinstance(rest, sp.Symbol))
+    return False
+
+
 def product_to_antimony(
     coeff, exps: dict[sp.Symbol, float], name_map: dict[str, str] | None = None
 ) -> str:
@@ -101,7 +111,7 @@ def product_to_antimony(
                         parts.append(f"{s_name}^{e_simplified}")
                 else:
                     # Symbolic exponent - add parentheses if it's a sum/difference
-                    if e_simplified.is_Add:
+                    if _symbolic_exponent_needs_parentheses(e_simplified):
                         exp_str = _format_antimony_token(
                             e_simplified, name_map, expression=True
                         )
@@ -212,7 +222,7 @@ def _format_factor(factor: sp.Expr, name_map: dict[str, str] | None = None) -> s
             # Symbolic exponent - wrap in parentheses if it's a sum/difference
             # CRITICAL: Without parentheses, (T+a)^-C-1 parses as (T+a)^(-C) - 1
             # instead of (T+a)^(-C-1), completely corrupting the equation
-            if exp.is_Add:
+            if _symbolic_exponent_needs_parentheses(exp):
                 exp_str = f"({_format_antimony_token(exp, name_map, expression=True)})"
             else:
                 exp_str = _format_antimony_token(exp, name_map, expression=True)
@@ -337,7 +347,9 @@ def gma_to_antimony(
         lines.append("// AUXILIARY DEFINITIONS (for lifted variables)")
         lines.append("// ========================================================================")
         for aux, defn in sorted(all_aux_defs_for_comments.items(), key=lambda kv: str(kv[0])):
-            lines.append(f"// {aux} := {defn}")
+            aux_id = _format_antimony_token(aux, name_map)
+            defn_str = _format_antimony_token(defn, name_map, expression=True)
+            lines.append(f"// {aux_id} := {defn_str}")
         lines.append("// ========================================================================")
         lines.append("")
 
@@ -574,7 +586,9 @@ def _ssystem_to_antimony_simplified(result, model_name: str) -> str:
         lines.append("// AUXILIARY DEFINITIONS (for lifted variables)")
         lines.append("// ========================================================================")
         for aux, defn in sorted(result.auxiliary_defs.items(), key=lambda kv: str(kv[0])):
-            lines.append(f"// {aux} := {defn}")
+            aux_id = _format_antimony_token(aux, name_map)
+            defn_str = _format_antimony_token(defn, name_map, expression=True)
+            lines.append(f"// {aux_id} := {defn_str}")
         lines.append("// ========================================================================")
         lines.append("")
 
@@ -852,7 +866,9 @@ def _ssystem_to_antimony_canonical(result, model_name: str) -> str:
             "  // ========================================================================"
         )
         for aux, defn in sorted(result.auxiliary_defs.items(), key=lambda kv: str(kv[0])):
-            lines.append(f"  // {aux} := {defn}")
+            aux_id = _format_antimony_token(aux, name_map)
+            defn_str = _format_antimony_token(defn, name_map, expression=True)
+            lines.append(f"  // {aux_id} := {defn_str}")
         lines.append(
             "  // ========================================================================"
         )

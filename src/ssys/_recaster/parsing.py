@@ -1,5 +1,8 @@
 """Antimony and SBML parsing plus symbolic-system construction."""
 
+import re
+from collections.abc import Callable
+
 import sympy as sp
 
 from ssys._recaster.common import arrow_pat, func_def_pat, prime_rule_pat
@@ -31,6 +34,16 @@ from ssys.types import (
     SolverRequirement,
     SymSystem,
 )
+
+
+def _notify_progress(progress_callback: Callable[[str], None] | None, phase: str) -> None:
+    """Best-effort parser progress hook for timeout diagnostics."""
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(phase)
+    except Exception:
+        return
 
 
 def tokenize_species_side(side: str) -> list[tuple[int, str]]:
@@ -228,17 +241,22 @@ def _preprocess_antimony_text(text: str) -> str:
     """
     Preprocess Antimony text before passing to libantimony.
 
-    Currently a no-op - we require input .ant files to use standard Antimony syntax:
+    We generally require input .ant files to use standard Antimony syntax:
     - Use backslash \\ for line continuation (NOT implicit continuation)
     - Use `function name(x) expr end` for function definitions (NOT `name(x) := expr`)
-
-    This function exists as a hook for future preprocessing needs.
     """
-    return text
+    # libAntimony emits this when exporting an SBML compartment literally named
+    # "compartment". The source compartment has size 1, but the exported helper
+    # parameter is left unset, which otherwise parses as 0 and zeroes all rates.
+    return re.sub(r"(?m)^(\s*compartment_\s*=\s*);\s*$", r"\g<1>1;", text)
 
 
 def parse_antimony_via_sbml(
-    antimony_text: str, *, warn_initial_assignment_failures: bool = False
+    antimony_text: str,
+    *,
+    warn_initial_assignment_failures: bool = False,
+    progress_callback: Callable[[str], None] | None = None,
+    progress_prefix: str = "parse_antimony_via_sbml",
 ) -> "SymSystem":
     """
     Parse Antimony text using the Antimony library (SBML-first approach).
@@ -250,6 +268,10 @@ def parse_antimony_via_sbml(
 
     Args:
         antimony_text: Antimony model text
+        warn_initial_assignment_failures: If true, invalid InitialAssignments are warned
+            and the parser keeps existing defaults. The default raises.
+        progress_callback: Optional callback for parser subphase timeout diagnostics.
+        progress_prefix: Prefix used for emitted progress phase names.
 
     Returns:
         SymSystem ready for recasting
@@ -271,6 +293,7 @@ def parse_antimony_via_sbml(
 
     # CRITICAL: Preprocess to join multi-line statements
     # libantimony requires complete statements on single lines
+    _notify_progress(progress_callback, f"{progress_prefix}_preprocess")
     preprocessed_text = _preprocess_antimony_text(antimony_text)
 
     # Use antimony library to parse Antimony and convert to SBML
@@ -279,12 +302,14 @@ def parse_antimony_via_sbml(
         antimony.clearPreviousLoads()
 
         # Load the preprocessed Antimony string
+        _notify_progress(progress_callback, f"{progress_prefix}_antimony_load")
         result = antimony.loadAntimonyString(preprocessed_text)
         if result == -1:
             error_msg = antimony.getLastError()
             raise ValueError(f"Antimony parsing error: {error_msg}")
 
         # Get the module name (first/main module)
+        _notify_progress(progress_callback, f"{progress_prefix}_sbml_export")
         module_name = antimony.getMainModuleName()
         if not module_name:
             raise ValueError("No module found in Antimony text")
@@ -301,16 +326,21 @@ def parse_antimony_via_sbml(
 
     # Parse SBML string using existing infrastructure
     sym = parse_sbml_from_string(
-        sbml_string, warn_initial_assignment_failures=warn_initial_assignment_failures
+        sbml_string,
+        warn_initial_assignment_failures=warn_initial_assignment_failures,
+        progress_callback=progress_callback,
+        progress_prefix=f"{progress_prefix}_sym_system_parse",
     )
 
     # Attach simulation metadata if found
     # These public attributes are used by the validator for trajectory tests
+    _notify_progress(progress_callback, f"{progress_prefix}_metadata_attach")
     sym.sim_t_start = t_start
     sym.sim_t_end = t_end
     sym.sim_n_steps = n_steps
     sym.eps_init = eps_init
     sym.eps_slack = eps_slack
+    _notify_progress(progress_callback, f"{progress_prefix}_solver_requirement")
     classified_requirement = classify_sym_system_solver_requirement(sym)
     sym.solver_requirement = (
         classified_requirement
@@ -325,7 +355,11 @@ def parse_antimony_via_sbml(
 
 
 def parse_sbml_from_string(
-    sbml_string: str, *, warn_initial_assignment_failures: bool = False
+    sbml_string: str,
+    *,
+    warn_initial_assignment_failures: bool = False,
+    progress_callback: Callable[[str], None] | None = None,
+    progress_prefix: str = "parse_sbml_from_string",
 ) -> "SymSystem":
     """
     Parse an SBML string and return a SymSystem for recasting.
@@ -336,6 +370,8 @@ def parse_sbml_from_string(
         sbml_string: SBML model as string
         warn_initial_assignment_failures: If true, invalid InitialAssignments are warned
             and the parser keeps existing defaults. The default raises.
+        progress_callback: Optional callback for parser subphase timeout diagnostics.
+        progress_prefix: Prefix used for emitted progress phase names.
 
     Returns:
         SymSystem ready for recasting
@@ -349,16 +385,20 @@ def parse_sbml_from_string(
     except ImportError:
         raise ImportError(
             "python-libsbml is required for SBML parsing. Install with: pip install python-libsbml"
-        )
+    )
 
     # Read SBML from string
+    _notify_progress(progress_callback, f"{progress_prefix}_libsbml_read")
     doc = libsbml.readSBMLFromString(sbml_string)
 
     # Delegate to shared implementation
+    _notify_progress(progress_callback, f"{progress_prefix}_sym_system_build")
     return _parse_sbml_document(
         doc,
         source="<string>",
         warn_initial_assignment_failures=warn_initial_assignment_failures,
+        progress_callback=progress_callback,
+        progress_prefix=f"{progress_prefix}_sym_system_build",
     )
 
 
@@ -406,7 +446,12 @@ def parse_sbml(sbml_path: str, *, warn_initial_assignment_failures: bool = False
 
 
 def _parse_sbml_document(
-    doc, source: str = "<unknown>", *, warn_initial_assignment_failures: bool = False
+    doc,
+    source: str = "<unknown>",
+    *,
+    warn_initial_assignment_failures: bool = False,
+    progress_callback: Callable[[str], None] | None = None,
+    progress_prefix: str = "parse_sbml_document",
 ) -> "SymSystem":
     """
     Shared implementation for parsing an SBML document.
@@ -422,12 +467,15 @@ def _parse_sbml_document(
     """
     import libsbml
 
+    _notify_progress(progress_callback, f"{progress_prefix}_checked_model")
     model = _checked_sbml_model(doc, libsbml, source=source)
+    _notify_progress(progress_callback, f"{progress_prefix}_function_templates")
     function_templates = _extract_sbml_function_templates(model, libsbml, source=source)
 
     # ========================================================================
     # STEP 1: Extract species information
     # ========================================================================
+    _notify_progress(progress_callback, f"{progress_prefix}_species")
     species_info: dict[str, dict] = {}
     boundary_species: set[str] = set()
 
@@ -452,6 +500,7 @@ def _parse_sbml_document(
     # ========================================================================
     # STEP 2: Extract parameters (global and local)
     # ========================================================================
+    _notify_progress(progress_callback, f"{progress_prefix}_parameters")
     params: dict[str, float] = {}
 
     # Global parameters
@@ -493,6 +542,7 @@ def _parse_sbml_document(
     # ========================================================================
     # STEP 3: Extract compartments
     # ========================================================================
+    _notify_progress(progress_callback, f"{progress_prefix}_compartments")
     compartments: dict[str, float] = {}
     for i in range(model.getNumCompartments()):
         c = model.getCompartment(i)
@@ -506,6 +556,7 @@ def _parse_sbml_document(
     # ========================================================================
     # STEP 4: Build SymPy symbol dictionary
     # ========================================================================
+    _notify_progress(progress_callback, f"{progress_prefix}_symbols")
     all_syms: dict[str, sp.Symbol] = {}
 
     # Time symbol
@@ -527,6 +578,7 @@ def _parse_sbml_document(
     # ========================================================================
     # STEP 5: Compute ODEs from reactions
     # ========================================================================
+    _notify_progress(progress_callback, f"{progress_prefix}_reactions")
     # Initialize ODEs for floating species only (not boundary)
     odes: dict[sp.Symbol, sp.Expr] = {}
     for sid, info in species_info.items():
@@ -585,6 +637,7 @@ def _parse_sbml_document(
     # ========================================================================
     # STEP 6: Handle rate rules (explicit ODEs defined in SBML)
     # ========================================================================
+    _notify_progress(progress_callback, f"{progress_prefix}_rate_rules")
     rate_rule_variables: set[str] = set()
     for i in range(model.getNumRules()):
         rule = model.getRule(i)
@@ -627,6 +680,7 @@ def _parse_sbml_document(
     # ========================================================================
     # STEP 6a: Handle assignment rules (V_1 := expression)
     # ========================================================================
+    _notify_progress(progress_callback, f"{progress_prefix}_assignment_rules")
     # Assignment rules define algebraic relationships, not ODEs
     # They are used for quantities that can be computed from other quantities
     assignment_rules: dict[str, str] = {}
@@ -643,6 +697,7 @@ def _parse_sbml_document(
     # ========================================================================
     # STEP 6a.1: Handle algebraic rules (implicit constraints)
     # ========================================================================
+    _notify_progress(progress_callback, f"{progress_prefix}_algebraic_rules")
     algebraic_constraints: list[str] = []
     for i in range(model.getNumRules()):
         rule = model.getRule(i)
@@ -658,6 +713,7 @@ def _parse_sbml_document(
             )
             algebraic_constraints.append(formula_str)
 
+    _notify_progress(progress_callback, f"{progress_prefix}_initial_assignments")
     _apply_initial_assignments(
         model,
         libsbml,
@@ -673,7 +729,15 @@ def _parse_sbml_document(
     # ========================================================================
     # STEP 7: Build SymSystem
     # ========================================================================
-    # Variables (floating species with ODEs)
+    _notify_progress(progress_callback, f"{progress_prefix}_build_system")
+    # Variables are floating species with ODEs. SBML assignment-rule targets are
+    # algebraic quantities, not independent ODE states, even when the target is a
+    # species that appeared in the reaction-derived ODE table.
+    assignment_rule_targets = set(assignment_rules)
+    for target in assignment_rule_targets:
+        target_sym = all_syms.get(target)
+        if target_sym is not None:
+            odes.pop(target_sym, None)
     vars_list = list(odes.keys())
 
     # Initial conditions

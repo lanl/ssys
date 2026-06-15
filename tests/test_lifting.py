@@ -4,8 +4,11 @@ import pytest
 import sympy as sp
 
 from ssys._recaster.algorithms import (
+    RecastComplexityError,
     _analyze_ode_terms,
+    _bounded_direct_recast_terms,
     _direct_ssystem_recast,
+    _pool_product_exactness_failure,
     _pool_ssystem_recast,
     _requires_gma,
     _should_attempt_pool_construction,
@@ -14,6 +17,10 @@ from ssys._recaster.algorithms import (
 )
 from ssys._recaster.lifting import (
     AutonomousLiftResult,
+    UnsupportedCompositeDerivativeError,
+    _bounded_composite_lift_simplify,
+    _bounded_composite_substitute,
+    _bounded_rational_lift_simplify,
     _build_composite_inverse_mappings,
     _detect_exp_decay_pattern,
     _detect_harmonic_pattern,
@@ -43,6 +50,7 @@ from ssys.recaster import (
     lift_rational_functions,
     lift_time_functions_to_autonomous,
     product_expr,
+    recast_to_ssystem,
     term_to_coeff_exps,
 )
 
@@ -160,6 +168,25 @@ class TestTermDecomposition:
         assert coeff == sp.sin(x)
         assert exps == {}
 
+    def test_term_to_coeff_exps_monomial_skips_global_simplify(self, monkeypatch):
+        """Large monomial terms decompose without global SymPy simplification."""
+        import ssys._recaster.algorithms as algorithms
+
+        symbols = sp.symbols("x0:80", positive=True)
+        denominator = sp.Symbol("Y_146", positive=True)
+        term = sp.Mul(*symbols) / denominator
+
+        def fail_simplify(expr):
+            raise AssertionError("monomial term should not call sp.simplify")
+
+        monkeypatch.setattr(algorithms.sp, "simplify", fail_simplify)
+
+        coeff, exps = term_to_coeff_exps(term, set(symbols) | {denominator})
+
+        assert coeff == 1
+        assert exps[denominator] == -1.0
+        assert all(exps[symbol] == 1.0 for symbol in symbols)
+
     def test_product_expr_simple(self):
         """Test building product expression."""
         x = sp.Symbol("x", positive=True)
@@ -224,6 +251,88 @@ class TestCoefficientAnalysis:
 
 class TestRecastingAlgorithmBranches:
     """Focused tests for recasting safety checks and canonicalization helpers."""
+
+    def test_bounded_direct_recast_terms_keeps_small_expansion(self):
+        X, Y = sp.symbols("X Y", positive=True)
+
+        terms = _bounded_direct_recast_terms(
+            (X + Y) * (X - Y),
+            expression_label="X",
+            state_vars={X, Y},
+        )
+
+        assert set(terms) == {X**2, -(Y**2)}
+
+    def test_bounded_direct_recast_terms_skips_large_safe_add_expand(self, monkeypatch):
+        import ssys._recaster.algorithms as algorithms
+
+        symbols = sp.symbols("x0:1600", positive=True)
+        large_add = sum(symbols)
+
+        def fail_expand_to_terms(expr):
+            raise AssertionError("large safe direct-recast Add should not expand globally")
+
+        monkeypatch.setattr(algorithms, "expand_to_terms", fail_expand_to_terms)
+
+        terms = _bounded_direct_recast_terms(
+            large_add,
+            expression_label="X",
+            state_vars=set(symbols),
+        )
+
+        assert set(terms) == set(symbols)
+
+    def test_bounded_direct_recast_terms_fails_closed_for_unsafe_large_add(self):
+        X, Y, Z = sp.symbols("X Y Z", positive=True)
+        params = sp.symbols("k0:70", positive=True)
+        unsafe_large_add = sum(params) + Z * (X + Y)
+
+        with pytest.raises(RecastComplexityError) as exc_info:
+            _bounded_direct_recast_terms(
+                unsafe_large_add,
+                expression_label="X",
+                state_vars={X, Y, Z},
+            )
+
+        err = exc_info.value
+        assert err.stage == "direct_ssystem_recast"
+        assert err.operation == "sympy_expand"
+        assert err.expression_label == "X"
+        assert err.free_symbol_count > err.max_free_symbols
+
+    def test_bounded_direct_recast_terms_allows_sixty_six_free_symbols(self):
+        X, Y, Z = sp.symbols("X Y Z", positive=True)
+        params = sp.symbols("k0:63", positive=True)
+        boundary_expr = sum(params) + Z * (X + Y)
+
+        terms = _bounded_direct_recast_terms(
+            boundary_expr,
+            expression_label="X",
+            state_vars={X, Y, Z},
+        )
+
+        assert len(boundary_expr.free_symbols) == 66
+        assert set(terms) == {*params, X * Z, Y * Z}
+
+    def test_direct_recast_fails_closed_for_large_unsafe_expansion(self):
+        X, Y, Z = sp.symbols("X Y Z", positive=True)
+        params = sp.symbols("k0:70", positive=True)
+        sym = SymSystem(
+            vars=[X, Y, Z],
+            params={str(param): 1.0 for param in params},
+            odes={
+                X: sum(params) + Z * (X + Y),
+                Y: -Y,
+                Z: -Z,
+            },
+            initials={X: 1.0, Y: 1.0, Z: 1.0},
+        )
+
+        with pytest.raises(RecastComplexityError) as exc_info:
+            _direct_ssystem_recast(sym, {X, Y, Z})
+
+        assert "recast_complexity" in str(exc_info.value)
+        assert exc_info.value.expression_label == "X"
 
     def test_canonicalize_aux_names_remaps_coefficients_by_name_and_factor_map(self):
         X = sp.Symbol("X", positive=True)
@@ -332,6 +441,124 @@ class TestRecastingAlgorithmBranches:
 
         assert _validate_pool_result(valid) == (True, None)
 
+    def test_product_exactness_guard_uses_source_rhs_not_transformed_rhs(self):
+        X, A, k, d = sp.symbols("X A k d", positive=True)
+        source = SymSystem(
+            vars=[X],
+            params={"A": 2.0, "k": 3.0, "d": 0.5},
+            odes={X: k / (A + 1) - d * X},
+            initials={X: 1.0},
+        )
+        transformed = SymSystem(
+            vars=[X],
+            params={"A": 2.0, "k": 3.0, "d": 0.5},
+            odes={X: k - d * X},
+            initials={X: 1.0},
+        )
+        result = _pool_ssystem_recast(transformed)
+
+        assert _validate_pool_result(result, transformed) == (True, None)
+
+        valid, reason = _validate_pool_result(result, source)
+
+        assert valid is False
+        assert reason is not None
+        assert reason.startswith("unsupported_product_factorization")
+        assert _pool_product_exactness_failure(source, result) == reason
+
+    def test_product_exactness_guard_handles_sbml_relational_assignment_rules(self):
+        X, gate, k = sp.symbols("X gate k", positive=True)
+        Z1, Z2 = sp.symbols("Z1 Z2", positive=True)
+        source = SymSystem(
+            vars=[X],
+            params={"k": 1.0},
+            odes={X: k * gate},
+            initials={X: 1.0},
+            assignment_rules={"gate": "piecewise(1, geq(X, 1), X)"},
+        )
+        result = RecastResult(
+            status=RecastStatus.CANONICAL_SSYSTEM,
+            equations=[
+                SSysEquation(Z1, (sp.Integer(0), {}), (sp.Integer(0), {})),
+                SSysEquation(Z2, (sp.Integer(0), {}), (sp.Integer(0), {})),
+            ],
+            initials={Z1: 1.0, Z2: 1.0},
+            variables=[Z1, Z2],
+            factor_map={X: [Z1, Z2]},
+            params={"k": 1.0},
+        )
+
+        valid, reason = _validate_pool_result(result, source)
+
+        assert valid is False
+        assert reason is not None
+        assert reason.startswith("unsupported_product_factorization")
+
+    def test_recast_to_ssystem_refuses_product_mapping_against_preserved_source(
+        self,
+        monkeypatch,
+    ):
+        import ssys._recaster.algorithms as algorithms
+
+        X, A, k, d = sp.symbols("X A k d", positive=True)
+        source = SymSystem(
+            vars=[X],
+            params={"A": 2.0, "k": 3.0, "d": 0.5},
+            odes={X: k / (A + 1) - d * X},
+            initials={X: 1.0},
+        )
+        transformed = SymSystem(
+            vars=[X],
+            params={"A": 2.0, "k": 3.0, "d": 0.5},
+            odes={X: k - d * X},
+            initials={X: 1.0},
+        )
+
+        monkeypatch.setattr(
+            algorithms,
+            "lift_time_functions_to_autonomous",
+            lambda current: (current, {}, {}),
+        )
+        monkeypatch.setattr(
+            algorithms,
+            "lift_composite_functions",
+            lambda current: (current, {}),
+        )
+        monkeypatch.setattr(
+            algorithms,
+            "lift_rational_functions",
+            lambda current, composite_aux_defs=None: (transformed, {}),
+        )
+
+        result = algorithms.recast_to_ssystem(source)
+
+        assert result.status == RecastStatus.GMA
+        assert result.canonical_refusal_reason is not None
+        assert result.canonical_refusal_reason.startswith("unsupported_product_factorization")
+
+        gma_rhs = sp.Integer(0)
+        for coeff, exps in result.gma_equations[0].production:
+            gma_rhs += product_expr(coeff, exps)
+        for coeff, exps in result.gma_equations[0].degradation:
+            gma_rhs -= product_expr(coeff, exps)
+        assert sp.simplify(gma_rhs - source.odes[X]) == 0
+
+    def test_recast_to_ssystem_keeps_exact_product_mapping_accepted(self):
+        X, a, b = sp.symbols("X a b", positive=True)
+        sym = SymSystem(
+            vars=[X],
+            params={"a": 1.0, "b": 0.5},
+            odes={X: a * X - b * X**2},
+            initials={X: 1.0},
+        )
+
+        result = recast_to_ssystem(sym)
+
+        assert result.status == RecastStatus.CANONICAL_SSYSTEM
+        assert result.canonical_refusal_reason is None
+        assert len(result.factor_map[X]) == 2
+        assert _validate_pool_result(result, sym) == (True, None)
+
     def test_requires_gma_detects_incompatible_growth_and_decay_terms(self):
         X, a, b = sp.symbols("X a b", positive=True)
 
@@ -433,7 +660,7 @@ class TestRecastingAlgorithmBranches:
         monkeypatch.setattr(
             algorithms,
             "_validate_pool_result",
-            lambda result: (False, "forced validation refusal"),
+            lambda result, sym=None: (False, "forced validation refusal"),
         )
 
         refused = algorithms.recast_to_ssystem(normal)
@@ -593,6 +820,95 @@ class TestLiftingInternalBranches:
         assert lifted.initials[aux] == 3.0
         assert aux in lifted.odes[X].free_symbols
         assert sp.Float(1 / 3) in lifted.odes[X].atoms(sp.Float)
+
+    def test_bounded_rational_lift_simplify_skips_large_expressions(self, monkeypatch):
+        symbols = sp.symbols("x0:600")
+        large_expr = sum(symbols)
+
+        def fail_simplify(expr):
+            raise AssertionError("large rational-lift expression should not simplify")
+
+        monkeypatch.setattr("ssys._recaster.lifting.sp.simplify", fail_simplify)
+
+        assert _bounded_rational_lift_simplify(large_expr) == large_expr
+
+    def test_bounded_rational_lift_simplify_skips_compound_symbolic_powers(
+        self, monkeypatch
+    ):
+        X, Y, n, k = sp.symbols("X Y n k", positive=True)
+        expr = k * (X + Y) ** (n - 1) * (X - Y)
+
+        def fail_simplify(expr):
+            raise AssertionError("compound symbolic powers should not simplify")
+
+        monkeypatch.setattr("ssys._recaster.lifting.sp.simplify", fail_simplify)
+
+        assert _bounded_rational_lift_simplify(expr) == expr
+
+    def test_bounded_composite_lift_simplify_simplifies_small_expressions(self):
+        X = sp.Symbol("X", positive=True)
+        expr = sp.Add(X, X, evaluate=False)
+
+        assert _bounded_composite_lift_simplify(expr) == 2 * X
+
+    def test_bounded_composite_lift_simplify_skips_large_expressions(self, monkeypatch):
+        symbols = sp.symbols("x0:600")
+        large_expr = sum(symbols)
+
+        def fail_simplify(expr):
+            raise AssertionError("large composite-lift expression should not simplify")
+
+        monkeypatch.setattr("ssys._recaster.lifting.sp.simplify", fail_simplify)
+
+        assert _bounded_composite_lift_simplify(large_expr) == large_expr
+
+    def test_bounded_composite_lift_simplify_skips_compound_symbolic_powers(
+        self, monkeypatch
+    ):
+        X, Y, n, k = sp.symbols("X Y n k", positive=True)
+        expr = k * (X + Y) ** (n - 1) * (X - Y)
+
+        def fail_simplify(expr):
+            raise AssertionError("compound symbolic powers should not simplify")
+
+        monkeypatch.setattr("ssys._recaster.lifting.sp.simplify", fail_simplify)
+
+        assert _bounded_composite_lift_simplify(expr) == expr
+
+    def test_bounded_composite_substitute_uses_full_subs_for_small_expressions(self):
+        X, Z = sp.symbols("X Z", positive=True)
+
+        assert _bounded_composite_substitute(sp.exp(2 * X), {sp.exp(X): Z}) == Z**2
+
+    def test_bounded_composite_substitute_skips_full_subs_for_large_expressions(
+        self, monkeypatch
+    ):
+        X, Z = sp.symbols("X Z", positive=True)
+        symbols = sp.symbols("x0:600")
+        large_expr = sum(symbols) + sp.exp(X)
+
+        def fail_subs(self, *args, **kwargs):
+            raise AssertionError("large composite-lift expression should not call subs")
+
+        monkeypatch.setattr(sp.Basic, "subs", fail_subs)
+
+        assert _bounded_composite_substitute(large_expr, {sp.exp(X): Z}) == sum(symbols) + Z
+
+    def test_lift_rational_functions_preserves_assignment_rule_denominators(self):
+        X, A, k = sp.symbols("X A k", positive=True)
+        sym = SymSystem(
+            vars=[X],
+            params={"A": 0.0, "k": 2.0},
+            odes={X: k * A / (A + 1)},
+            initials={X: 1.0},
+            assignment_rules={"A": "X/(X + 1)"},
+        )
+
+        lifted, aux_defs = lift_rational_functions(sym)
+
+        assert aux_defs == {}
+        assert sp.simplify(lifted.odes[X] - k * A / (A + 1)) == 0
+        assert not sp.simplify(lifted.odes[X] - k * A) == 0
 
     def test_lift_rational_functions_covers_skip_and_fallback_paths(self):
         X, k, missing = sp.symbols("X k missing", positive=True)
@@ -918,6 +1234,77 @@ class TestLiftingInternalBranches:
         assert lifted.initials[aux] == 1.0
         assert aux in lifted.odes[aux].free_symbols
 
+    def test_lift_composite_functions_refuses_floor_derivative_printer(self):
+        X, T, phase = sp.symbols("X T phase", positive=True)
+        sym = SymSystem(
+            vars=[X, T],
+            params={"phase": 0.25},
+            odes={X: sp.floor(T + phase), T: sp.Integer(1)},
+            initials={X: 1.0, T: 0.0},
+        )
+
+        with pytest.raises(UnsupportedCompositeDerivativeError) as exc_info:
+            lift_composite_functions(sym)
+
+        message = str(exc_info.value)
+        assert "unsupported_generated_output" in message
+        assert "floor" in message
+        assert "Derivative/Subs" in message
+
+    def test_recast_to_ssystem_refuses_floor_derivative_before_formatting(self):
+        X, T, phase = sp.symbols("X T phase", positive=True)
+        sym = SymSystem(
+            vars=[X, T],
+            params={"phase": 0.25},
+            odes={X: sp.floor(T + phase), T: sp.Integer(1)},
+            initials={X: 1.0, T: 0.0},
+        )
+
+        with pytest.raises(UnsupportedCompositeDerivativeError) as exc_info:
+            recast_to_ssystem(sym)
+
+        message = str(exc_info.value)
+        assert "unsupported_generated_output" in message
+        assert "floor" in message
+        assert "Subs(Derivative" in message
+
+    def test_lift_composite_functions_differentiates_assignment_rule_dependencies(self):
+        A, c, fbp = sp.symbols("A c fbp", positive=True)
+        fback, k, r1, alpha, r, y = sp.symbols("fback k r1 alpha r y", positive=True)
+        composite = sp.exp(fback * (1 - c / r1))
+        sym = SymSystem(
+            vars=[A, c, fbp],
+            params={"alpha": 0.5, "k": 2.0, "r": 0.25, "r1": 3.0},
+            odes={
+                A: composite,
+                c: -c,
+                fbp: k * fbp,
+            },
+            initials={A: 1.0, c: 4.0, fbp: 5.0},
+            assignment_rules={
+                "fback": "r + y",
+                "y": "alpha * fbp",
+            },
+        )
+
+        lifted, aux_defs = lift_composite_functions(sym)
+
+        aux = next(
+            aux
+            for aux, definition in aux_defs.items()
+            if sp.simplify(definition - composite) == 0
+        )
+        expected_fback = r + alpha * fbp
+        expected = aux * (
+            alpha * k * fbp * (1 - c / r1)
+            + expected_fback * c / r1
+        )
+
+        assert sp.simplify(lifted.odes[aux] - expected) == 0
+        assert lifted.initials[aux] == pytest.approx(
+            float(sp.exp((0.25 + 0.5 * 5.0) * (1 - 4.0 / 3.0)))
+        )
+
 
 class TestLiftRationalFunctions:
     """Tests for lift_rational_functions."""
@@ -1173,6 +1560,19 @@ class TestIntegrationLiftingChain:
         # Should add auxiliaries for log(X) and exp(...)
         assert len(lifted.vars) >= 2
         assert len(aux_defs) >= 1
+
+        exp_aux = next(
+            aux
+            for aux, definition in aux_defs.items()
+            if sp.simplify(definition - sp.exp(sp.log(X) ** 2)) == 0
+        )
+        log_aux = next(
+            aux
+            for aux, definition in aux_defs.items()
+            if sp.simplify(definition - sp.log(X)) == 0
+        )
+        expected_exp_aux_ode = 2 * exp_aux**2 * log_aux / X
+        assert sp.simplify(lifted.odes[exp_aux] - expected_exp_aux_ode) == 0
 
 
 if __name__ == "__main__":

@@ -54,12 +54,7 @@ def _expand_function_calls(
         start, end, func_name, args = call
         params, body = function_templates[func_name]
 
-        # Perform substitution: replace each param with corresponding arg
-        expanded = body
-        for param, arg in zip(params, args, strict=False):
-            # Use word boundary replacement to avoid partial matches
-            # e.g., replacing 'x' shouldn't affect 'x1' or 'exp'
-            expanded = _substitute_param(expanded, param, arg)
+        expanded = _substitute_template_params(body, params, args)
 
         # Wrap in parentheses to preserve operator precedence
         expanded = f"({expanded})"
@@ -162,6 +157,27 @@ def _substitute_param(body: str, param: str, arg: str) -> str:
     # Use negative lookbehind and lookahead for alphanumerics and underscore
     pattern = r"(?<![A-Za-z_\d])" + re.escape(param) + r"(?![A-Za-z_\d])"
     return re.sub(pattern, replacement, body)
+
+
+def _substitute_template_params(body: str, params: list[str], args: list[str]) -> str:
+    """Substitute template parameters simultaneously.
+
+    Function definitions can contain parameter names that are prefixes of later
+    arguments, for example ``kdsic_`` and ``kdsic``. Sequential substitution can
+    rewrite an argument that was just inserted; a single regex pass avoids that.
+    """
+    replacements: dict[str, str] = {}
+    for param, arg in zip(params, args, strict=False):
+        # Some BioModels SBML FunctionDefinition lambdas contain duplicate
+        # parameter IDs. Keep the first binding; the body cannot distinguish
+        # later duplicates, and first-wins matches the Antimony-normalized path.
+        replacements.setdefault(param, _format_function_argument_for_substitution(arg))
+    if not replacements:
+        return body
+
+    escaped = sorted((re.escape(param) for param in replacements), key=len, reverse=True)
+    pattern = r"(?<![A-Za-z_\d])(" + "|".join(escaped) + r")(?![A-Za-z_\d])"
+    return re.sub(pattern, lambda match: replacements[match.group(1)], body)
 
 
 def _format_function_argument_for_substitution(arg: str) -> str:
