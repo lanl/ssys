@@ -27,10 +27,18 @@ header-includes:
 `ssys` is a Python toolkit for exact algebraic transformation of ordinary differential equation (ODE) models into canonical S-system or Generalized Mass Action (GMA) form. Given a model in Antimony format, or an SBML file parsed with `ssys.parse_sbml`, `ssys` produces a mathematically equivalent representation where each equation has one of the following forms:
 
 **S-system form** (difference of two monomials):
-$$\frac{dX_i}{dt} = \alpha_i \prod_j X_j^{g_{ij}} - \beta_i \prod_j X_j^{h_{ij}}$$
+\begin{equation}
+\dot X_i = \alpha_i \prod_j X_j^{g_{ij}} - \beta_i \prod_j X_j^{h_{ij}}, \quad \alpha_i,\beta_i \geq 0 .
+\label{eq:ssystem}
+\end{equation}
+
+Equation \ref{eq:ssystem} applies for all equations \(i\) and is a relaxed S-system form that permits zero production or degradation coefficients; canonical S-system form requires both coefficients in every equation to be strictly positive.
 
 **GMA form** (sum of monomials):
-$$\frac{dX_i}{dt} = \sum_k \gamma_{ik} \prod_j X_j^{f_{ijk}}$$
+\begin{equation}
+\frac{dX_i}{dt} = \sum_k \gamma_{ik} \prod_j X_j^{f_{ijk}} .
+\label{eq:gma}
+\end{equation}
 
 The transformation introduces auxiliary variables as needed to decompose a broad class of nonlinearities---including rational functions, exponentials, logarithms, and trigonometric functions---into products of power-law terms. The recast is exact: the original and transformed systems have identical dynamics on the invariant constraint manifold defined by auxiliary variable definitions, given consistent initial conditions.
 
@@ -63,7 +71,7 @@ Antimony is a human-readable modeling language for systems biology [@Smith2009An
 
 # Quality control
 
-The package includes 712 pytest-collected test cases covering parsing, recasting, validation, and CLI functionality. Of these, 11 are integration-marked test cases, including 8 slow manifest tests that entail transformation and validation of 117 models across two output modes.
+The package includes 712 pytest-collected test cases covering parsing, recasting, validation, and CLI functionality. Of these, 11 are integration-marked test cases, including 8 slow manifest tests that entail transformation and validation of 117 handwritten Antimony models across two output modes. Most of these models are drawn from published recasting examples: the complete Savageau & Voit example set [@SavageauVoit1987], additional S-system and reductive-recasting examples [@Voit1988Recasting; @Irvine1988SSystemSolution; @Savageau1988IntroSSystems; @Voit1988NewMethodologies; @RustVoit1990; @Voit1990Endemic; @Voit1992Symmetries; @Voit1993ChaoticInput; @Savageau1993Roots], GMA and power-law recastings [@MarinSanguino2007; @Pozo2011; @Daniels2015b], and quasipolynomial or polynomial recasting studies [@HernandezBermejo1998; @PapachristodoulouPrajna2005; @Anghel2013Lyapunov; @Anguelov2017Gompertz; @Zhang2022PLL].
 
 # BioModels database benchmark
 
