@@ -24,7 +24,7 @@ header-includes:
 
 # Summary
 
-`ssys` is a Python toolkit for exact algebraic transformation of ordinary differential equation (ODE) models into canonical S-system or Generalized Mass Action (GMA) form. Given a model in Antimony format, or an SBML file parsed with `ssys.parse_sbml`, `ssys` produces a mathematically equivalent representation where each equation has one of the following forms:
+`ssys` is a Python toolkit for exact algebraic transformation of ordinary differential equation (ODE) models into canonical S-system or Generalized Mass Action (GMA) form. Given a model in Antimony format [@Smith2009Antimony; @Heydarabadipour2026Antimony], or an SBML file [@Keating2020SBML] parsed with `ssys.parse_sbml`, `ssys` produces a mathematically equivalent representation where each equation has one of the following forms:
 
 **S-system form** (difference of two monomials):
 \begin{equation}
@@ -32,7 +32,7 @@ header-includes:
 \label{eq:ssystem}
 \end{equation}
 
-Equation \ref{eq:ssystem} applies for all equations \(i\) and is a relaxed S-system form that permits zero production or degradation coefficients; canonical S-system form requires both coefficients in every equation to be strictly positive.
+Equation \ref{eq:ssystem} is a relaxed S-system form that permits zero-valued right-hand-side terms; canonical S-system form requires both constant coefficients in every equation to be strictly positive.
 
 **GMA form** (sum of monomials):
 \begin{equation}
@@ -42,7 +42,7 @@ Equation \ref{eq:ssystem} applies for all equations \(i\) and is a relaxed S-sys
 
 The transformation introduces auxiliary variables as needed to decompose a broad class of nonlinearities---including rational functions, exponentials, logarithms, and trigonometric functions---into products of power-law terms. The recast is exact: the original and transformed systems have identical dynamics on the invariant constraint manifold defined by auxiliary variable definitions, given consistent initial conditions.
 
-The software provides a command-line interface for batch processing Antimony models, a three-test validation suite (symbolic, numerical, trajectory), and generates Jupyter notebooks with LaTeX renderings and trajectory comparisons. It converts Antimony models to SBML with the Antimony library, parses the resulting SBML with libSBML [@Bornstein2008libSBML], and exposes direct SBML-file parsing through `ssys.parse_sbml`.
+The software provides a command-line interface for batch processing Antimony models, a three-test validation suite (symbolic, numerical, trajectory), and generates Jupyter notebooks [@Kluyver2016Jupyter] with LaTeX renderings and trajectory comparisons. It converts Antimony models to SBML with the Antimony library [@Smith2009Antimony], parses the resulting SBML with libSBML [@Bornstein2008libSBML], and exposes direct SBML-file parsing through `ssys.parse_sbml`.
 
 # Statement of need
 
@@ -59,7 +59,7 @@ The package enables researchers to convert published models into canonical form 
 
 # State of the field
 
-Antimony is a human-readable modeling language for systems biology [@Smith2009Antimony; @Heydarabadipour2026Antimony], with transparent interoperability with SBML [@Keating2020SBML]. The S-system and GMA formalisms are classical [@Savageau1976; @SavageauVoit1987; @VoitKemp2025], but existing software support has focused on analysis, construction, or approximation rather than exact general-purpose recasting. Classical BST computational-analysis workflows focus on systems already expressed in S-system or GMA form [@Voit2000ComputationalAnalysis]. PLMaddon [@Vera2007PLMaddon] can generate power-law approximations via Taylor expansion, but such local approximations differ fundamentally from exact recasting with auxiliary variables. More recently, BSTModelKit.jl [@Vadhin2026BSTModelKit] provides Julia tools for constructing and analyzing BST models, though it emphasizes model construction and analysis from declarative specifications rather than recasting arbitrary ODE/SBML/Antimony models. To the best of our knowledge, no existing open-source tool performs exact algebraic recasting from arbitrary SBML/Antimony ODEs to S-system or GMA form with explicit constraint-manifold handling and validation certificates.
+Antimony is a human-readable modeling language for systems biology, with transparent interoperability with SBML. The S-system and GMA formalisms are classical [@Savageau1976; @SavageauVoit1987; @VoitKemp2025], but existing software support has focused on analysis, construction, or approximation rather than exact general-purpose recasting. Classical BST computational-analysis workflows focus on systems already expressed in S-system or GMA form [@Voit2000ComputationalAnalysis]. PLMaddon [@Vera2007PLMaddon] can generate power-law approximations via Taylor expansion, but such local approximations differ fundamentally from exact recasting with auxiliary variables. More recently, BSTModelKit.jl [@Vadhin2026BSTModelKit] provides Julia tools for constructing and analyzing BST models, though it emphasizes model construction and analysis from declarative specifications rather than recasting arbitrary ODE/SBML/Antimony models. To the best of our knowledge, no existing open-source tool performs exact algebraic recasting from arbitrary SBML/Antimony ODEs to S-system or GMA form with explicit constraint-manifold handling and validation certificates.
 
 # Functionality
 
@@ -75,11 +75,11 @@ The package includes 712 pytest-collected test cases covering parsing, recasting
 
 # BioModels database benchmark
 
-To assess applicability to real-world models, we applied `ssys` to ODE models from the BioModels database [@Malik2020]. The benchmark suite (included in the repository under `biomodels_batch/`) operates in three phases: (1) fetch SBML models from BioModels, filtering for ODE-based models; (2) identify transformation candidates by excluding models with unsupported features or more than 100 dynamic species, 200 reactions, or 500 parameters; and (3) batch transform the candidates. After filtering 1,644 ODE models from BioModels, 978 candidates remained. Of these, the transformation algorithm completed for 848 (86.7%), and numerical validation confirmed mathematical equivalence for 738 transformed models. Among the validated models, 365 achieved meaningful structural canonization: 281 models in general form were converted to GMA, 77 models in GMA form were converted to S-system form, and 7 models in general form were converted to S-system (zero terms allowed but otherwise canonical) or canonical S-system form. The remaining validated models were already in GMA, S-system, or canonical S-system form, or retained general form after exact rewriting. Unsuccessful cases were mostly due to unsupported model features, parsing or loading errors, complexity limits, or timeouts. Benchmark scripts and the tracked summary are in `biomodels_batch/`; rerunning the benchmark writes detailed outputs under `biomodels_batch/results/`.
+To assess applicability to real-world models, we applied `ssys` to ODE models from the BioModels database [@Malik2020]. The benchmark suite (included in the repository under `biomodels_batch/`) operates in three phases: (1) fetch SBML models from BioModels, filtering for ODE-based models; (2) identify transformation candidates by excluding models with unsupported features or more than 100 dynamic species, 200 reactions, or 500 parameters; and (3) batch transform the candidates. After filtering 1,644 ODE models from BioModels, 978 candidates remained. Of these, the transformation algorithm completed for 848 (86.7%), and numerical validation confirmed mathematical equivalence for 738 transformed models. Among the validated models, 365 achieved meaningful structural canonization: 281 models in general form were converted to GMA, 77 models in GMA form were converted to relaxed S-system form, and 7 models in general form were converted to relaxed S-system form (zero terms allowed but otherwise canonical). The remaining validated models were already in GMA or S-system form, or retained general form after exact rewriting. Unsuccessful cases were mostly due to unsupported model features, parsing or loading errors, complexity limits, or timeouts. Benchmark scripts and the tracked summary are in `biomodels_batch/`; rerunning the benchmark writes detailed outputs under `biomodels_batch/results/`.
 
 # Availability
 
-`ssys` is available on GitHub at https://github.com/lanl/ssys. Installation requires Python >= 3.10, SymPy, NumPy, libRoadRunner, and the Antimony library. The repository includes comprehensive documentation: theoretical background and recasting rules (`RECASTING.md`), test model descriptions (`TEST_MODELS.md`), and usage instructions (`README.md`).
+`ssys` is available on GitHub at https://github.com/lanl/ssys. Installation requires Python >= 3.10, SymPy, NumPy [@Harris2020NumPy], libRoadRunner, and the Antimony library. The repository includes comprehensive documentation: theoretical background and recasting rules (`RECASTING.md`), test model descriptions (`TEST_MODELS.md`), and usage instructions (`README.md`).
 
 Installation: `uv pip install -e ".[dev]"`. For a working example, run `python recast_models.py test_models1` to recast and validate 29 test-suite models.
 
