@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import sys
 from importlib import util as importlib_util
 from pathlib import Path
@@ -1454,7 +1455,7 @@ def test_main_artifact_mode_records_isolated_environment(
     assert exit_code == 0
     assert captured["benchmark_dir"] == benchmark_dir
     assert [prefix for prefix, _ in captured["commands"]] == ["benchmark", "report"]
-    assert captured["env"]["PATH"].split(":")[0] == str(python_exe.parent)
+    assert captured["env"]["PATH"].split(os.pathsep)[0] == str(python_exe.parent)
     assert "PYTHONPATH" not in captured["env"]
     payload = json.loads((evidence_dir / "summary.json").read_text(encoding="utf-8"))
     assert payload["artifact_environment"] == {"artifact": str(artifact), "python": str(python_exe)}

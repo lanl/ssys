@@ -31,6 +31,24 @@ LEGACY_PARSER_DEPRECATION = (
 TROUBLESHOOTING_HINT = "See README.md#troubleshooting for local failure guidance."
 
 
+def _ensure_utf8_streams() -> None:
+    """Force stdout/stderr to UTF-8 so Unicode output survives on any locale.
+
+    ssys prints characters like ``✓``, Greek letters, and arrows. On Windows the
+    console (or a captured pipe) defaults to the locale code page (cp1252), which
+    raises UnicodeEncodeError on those characters. Reconfiguring to UTF-8 keeps
+    the CLI working regardless of platform locale.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (ValueError, OSError):
+            pass
+
+
 def _print_troubleshooting_hint() -> None:
     print(TROUBLESHOOTING_HINT, file=sys.stderr)
 
@@ -385,6 +403,7 @@ def _exit_on_validation_failures(
 
 def main():
     """Main CLI entry point."""
+    _ensure_utf8_streams()
     parser = argparse.ArgumentParser(
         description="Recast Antimony models to canonical S-system form.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
