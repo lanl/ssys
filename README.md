@@ -1,11 +1,19 @@
 # ODE → GMA or S‑System Recast (Antimony → Antimony, with SBML library support)
 *Source: README.md | v0.6.0 | 2026-07-04*
 
+[![PyPI version](https://img.shields.io/pypi/v/ssys.svg)](https://pypi.org/project/ssys/)
+[![Python versions](https://img.shields.io/pypi/pyversions/ssys.svg)](https://pypi.org/project/ssys/)
+[![License: MIT](https://img.shields.io/pypi/l/ssys.svg)](LICENSE)
+
+```bash
+pip install ssys
+```
+
 This toolkit converts ordinary differential equation (ODE) models into **S‑System** or **GMA** form and writes the result back to Antimony. The command-line interface batch-processes **Antimony** models and generates **Jupyter notebook** verification reports; the Python library can also parse SBML files directly.
 
 **Release maturity:** ssys is alpha software. ssys supports Python 3.10, 3.11, and 3.12. Python 3.13 and NumPy 2.x are not advertised for this release because the RoadRunner-backed validation stack currently requires NumPy 1.x. Treat the APIs, generated Antimony details, and validation-report format as subject to change until the release gates in `RELEASE_CHECKLIST.md` are closed.
 
-**Scope:** current release work is local-first. Local artifact builds, local validation reports, local benchmark evidence, and local release-evidence directories are the source of truth. Hosted documentation, hosted CI, public issue links, and release uploads are deferred until public project infrastructure exists.
+**Scope:** current release work is local-first. Local artifact builds, local validation reports, local benchmark evidence, and local release-evidence directories are the source of truth. Hosted documentation and public issue triage are deferred until public project infrastructure exists.
 
 **Trust boundary:** ssys treats Antimony and SBML inputs as trusted local scientific model files, not as safe untrusted uploads. Do not expose the CLI or parser directly to arbitrary user-submitted model text in a multi-tenant or security-sensitive service.
 
