@@ -56,11 +56,17 @@ uv run python step6_report.py --figures
 
 ## Generated Artifacts
 
-The checked-in SBML files under `data/sbml_downloads/` and `data/sbml_candidates/` are an intentional benchmark snapshot. New downloads, filtered candidates, validation results, figures, logs, coverage files, and cache directories are ignored so local benchmark runs do not add repository noise.
+The benchmark operates on SBML models downloaded from the BioModels database. Those
+downloads (`data/sbml_downloads/`, `data/sbml_candidates/`) and all derived outputs
+(filtered candidates, validation results, figures, logs, coverage files, and cache
+directories) are gitignored: they are **not** redistributed with ssys and are
+regenerated locally from the tracked scripts. The BioModels models retain their own
+upstream licenses.
 
-To regenerate the batch outputs from the tracked scripts and snapshot, run:
+To regenerate the full benchmark from scratch, run:
 
 ```bash
+uv run python step1_fetch.py --target-total 1680 --strategy sequential
 uv run python step2_filter.py
 uv run python step3_recast.py --mode simplified --timeout 120
 uv run python step4_validate.py --numerical-only --timeout 30 --workers 4

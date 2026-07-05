@@ -80,8 +80,8 @@ claim:
   optional IDA/SUNDIALS backend is unavailable.
 
 Current tests already cover several structured parser diagnostics, but the
-negative corpus task in `dev/punchlist3.md` remains open until unsupported
-SBML/Antimony feature fixtures are comprehensive.
+negative corpus task remains open until unsupported SBML/Antimony feature
+fixtures are comprehensive.
 
 ## Output Classes
 
@@ -471,5 +471,5 @@ Before a stable local release claim:
 - Unsupported input classes must have negative fixtures and structured
   diagnostics.
 - Validation profiles must remain named, documented, and fail-closed.
-- The local release artifact smoke and full model validation gates in
-  `dev/punchlist3.md` must pass from fresh artifacts.
+- The release artifact smoke and full model validation gates in
+  `RELEASE_CHECKLIST.md` must pass from fresh artifacts.

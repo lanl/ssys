@@ -49,7 +49,7 @@ testing.
 - No memory, CPU, recursion-depth, subprocess, or file-system sandbox is
   provided by ssys parsers.
 - No hosted service, upload endpoint, or public documentation site is part of
-  this local release punchlist.
+  this local release.
 
 ## Local Audit Evidence
 

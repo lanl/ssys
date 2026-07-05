@@ -300,13 +300,13 @@ def validate_recast_wrapper(model_id: str, mode: str) -> dict | None:
 
 ## Issue Tracking
 
-Notable deferred feature requests are tracked in the remote repository:
+Notable deferred feature requests:
 
 - **GMA→S-System Condensation** - BST-style aggregation for approximate S-systems
 - **Piecewise Function Support** - Smooth sigmoid approximations for SBML piecewise
 - **Handling Zero Initial Conditions** - Alternative approaches
 
-See: https://lisdi-git.lanl.gov/hlavacek/ssys/-/issues
+See the project issue tracker at https://github.com/lanl/ssys/issues.
 
 ---
 

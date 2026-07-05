@@ -3,7 +3,7 @@
 
 This toolkit converts ordinary differential equation (ODE) models into **S‑System** or **GMA** form and writes the result back to Antimony. The command-line interface batch-processes **Antimony** models and generates **Jupyter notebook** verification reports; the Python library can also parse SBML files directly.
 
-**Release maturity:** ssys is alpha software. ssys supports Python 3.10, 3.11, and 3.12. Python 3.13 and NumPy 2.x are not advertised for this release because the RoadRunner-backed validation stack currently requires NumPy 1.x. Treat the APIs, generated Antimony details, and validation-report format as subject to change until the local release gates in `dev/punchlist3.md` and `RELEASE_CHECKLIST.md` are closed.
+**Release maturity:** ssys is alpha software. ssys supports Python 3.10, 3.11, and 3.12. Python 3.13 and NumPy 2.x are not advertised for this release because the RoadRunner-backed validation stack currently requires NumPy 1.x. Treat the APIs, generated Antimony details, and validation-report format as subject to change until the release gates in `RELEASE_CHECKLIST.md` are closed.
 
 **Scope:** current release work is local-first. Local artifact builds, local validation reports, local benchmark evidence, and local release-evidence directories are the source of truth. Hosted documentation, hosted CI, public issue links, and release uploads are deferred until public project infrastructure exists.
 
