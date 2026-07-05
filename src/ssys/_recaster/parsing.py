@@ -484,16 +484,33 @@ def _parse_sbml_document(
         sid = sp_obj.getId()
         _validate_sbml_identifier(sid, kind="species", source=source)
         bc = sp_obj.getBoundaryCondition()
+        # A hasOnlySubstanceUnits=true species is denoted by its *amount* in every
+        # rate law, rule, and initial value; the SBML default (false) means it is
+        # denoted by its *concentration* (amount / compartment size). STEP 3a and
+        # STEP 5a use these to reconcile initial values and scale ODEs by volume.
+        hosu = sp_obj.getHasOnlySubstanceUnits()
+        compartment = sp_obj.getCompartment()
 
-        # Get initial value (prefer amount over concentration)
+        # Record the initial value together with the unit it was supplied in so
+        # STEP 3a can convert it to the species-symbol convention once compartment
+        # sizes are known.
         if sp_obj.isSetInitialAmount():
             init = sp_obj.getInitialAmount()
+            init_kind = "amount"
         elif sp_obj.isSetInitialConcentration():
             init = sp_obj.getInitialConcentration()
+            init_kind = "concentration"
         else:
             init = 0.0
+            init_kind = "none"
 
-        species_info[sid] = {"bc": bc, "init": init}
+        species_info[sid] = {
+            "bc": bc,
+            "init": init,
+            "init_kind": init_kind,
+            "hosu": hosu,
+            "compartment": compartment,
+        }
         if bc:
             boundary_species.add(sid)
 
@@ -552,6 +569,25 @@ def _parse_sbml_document(
             compartments[cid] = c.getSize()
         else:
             compartments[cid] = 1.0
+
+    # ========================================================================
+    # STEP 3a: Reconcile species initial values to the symbol's unit
+    # ========================================================================
+    # A hasOnlySubstanceUnits=false species symbol denotes concentration; a
+    # hasOnlySubstanceUnits=true species symbol denotes amount. When the model
+    # supplies the initial value in the other unit, convert it with the owning
+    # compartment size so initial-assignment evaluation, ODE assembly, and the
+    # reported initial conditions all speak the same unit as the symbol.
+    # (No-op at compartment size 1, where amount == concentration. This uses the
+    # declared compartment size, before any InitialAssignment resizes it.)
+    for info in species_info.values():
+        vol = compartments.get(info["compartment"], 1.0)
+        if vol == 1.0:
+            continue
+        if info["init_kind"] == "amount" and not info["hosu"]:
+            info["init"] = info["init"] / vol
+        elif info["init_kind"] == "concentration" and info["hosu"]:
+            info["init"] = info["init"] * vol
 
     # ========================================================================
     # STEP 4: Build SymPy symbol dictionary
@@ -633,6 +669,30 @@ def _parse_sbml_document(
             if sid in species_info and not species_info[sid]["bc"]:
                 var_sym = all_syms[sid]
                 odes[var_sym] += stoich * rate_expr
+
+    # ------------------------------------------------------------------------
+    # STEP 5a: Scale reaction-derived amount rates into the species' unit
+    # ------------------------------------------------------------------------
+    # The accumulation above is dAmount/dt = Σ stoich·kineticLaw, since an SBML
+    # kinetic law is an extent (amount) rate. A hasOnlySubstanceUnits=false
+    # species symbol denotes concentration, so its ODE is that amount rate
+    # divided by the owning compartment size: d[S]/dt = (1/V)·Σ stoich·K.
+    # hasOnlySubstanceUnits=true species are amounts already and are not scaled.
+    # Division uses the compartment *symbol* (a positive parameter carrying V),
+    # which cancels exactly in the common ``compartment·k·A·B`` idiom and tracks
+    # the live value when the compartment has an assignment rule. Skipped at
+    # V == 1 so unit-volume models keep their exact current form. This runs before
+    # STEP 6 rate rules, which state d(symbol)/dt directly and are never scaled.
+    for sid, info in species_info.items():
+        if info["bc"] or info["hosu"]:
+            continue
+        if compartments.get(info["compartment"], 1.0) == 1.0:
+            continue
+        var_sym = all_syms.get(sid)
+        comp_sym = all_syms.get(info["compartment"])
+        if var_sym is None or comp_sym is None or var_sym not in odes:
+            continue
+        odes[var_sym] = odes[var_sym] / comp_sym
 
     # ========================================================================
     # STEP 6: Handle rate rules (explicit ODEs defined in SBML)

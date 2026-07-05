@@ -1656,6 +1656,167 @@ class TestSbmlParserIcHandling:
             f"Z_2 IC wrong: got {result.initials[Z_2]}, expected {Z_2_expected}"
 
 
+class TestSbmlCompartmentVolumeScaling:
+    """Non-unit compartment volumes must scale reaction ODEs and initial values.
+
+    Regression for a silent-wrong-answer bug: reaction-derived ODEs were assembled
+    as ``d(species)/dt = Σ stoich·kineticLaw`` (an amount rate) while the species
+    symbol denotes concentration (hasOnlySubstanceUnits=false). The correct
+    concentration ODE divides by the owning compartment size, and initial values
+    supplied as amounts must be divided by that size. Both were omitted, so any
+    model with a compartment size != 1 produced ODEs off by the compartment size.
+    """
+
+    _COMP_SIZE_2 = """
+    <listOfCompartments>
+      <compartment id="cell" spatialDimensions="3" size="2" units="litre" constant="true"/>
+    </listOfCompartments>"""
+
+    def test_compartment_factor_idiom_cancels_and_initials_reconcile(self):
+        """``compartment·k·A`` amount-rate / V gives the exact concentration ODE."""
+        from ssys.recaster import parse_sbml_from_string
+
+        species = """
+      <species id="A" compartment="cell" initialAmount="4" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="B" compartment="cell" initialAmount="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        parameters = """
+    <listOfParameters>
+      <parameter id="k" value="0.5" constant="true"/>
+    </listOfParameters>"""
+        reactions = """
+    <listOfReactions>
+      <reaction id="J0" reversible="false">
+        <listOfReactants>
+          <speciesReference species="A" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="B" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><times/><ci> cell </ci><ci> k </ci><ci> A </ci></apply>
+          </math>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>"""
+        sbml = _minimal_sbml(
+            species=species,
+            compartments=self._COMP_SIZE_2,
+            parameters=parameters,
+            reactions=reactions,
+        )
+
+        sym = parse_sbml_from_string(sbml)
+        A = sp.Symbol("A", positive=True)
+        B = sp.Symbol("B", positive=True)
+        k = sp.Symbol("k", positive=True)
+
+        # d[A]/dt = -(cell·k·A)/cell = -k·A ; the compartment factor cancels.
+        assert sp.simplify(sym.odes[A] + k * A) == 0
+        assert sp.simplify(sym.odes[B] - k * A) == 0
+
+        # initialAmount=4 in a size-2 compartment ⇒ concentration 2.0.
+        assert sym.initials[A] == 2.0
+        assert sym.initials[B] == 0.0
+        assert sym.compartments["cell"] == 2.0
+
+    def test_bare_amount_rate_law_is_divided_by_volume(self):
+        """A kinetic law without a compartment factor is an amount rate ÷ V."""
+        from ssys.recaster import parse_sbml_from_string
+
+        species = """
+      <species id="A" compartment="cell" initialConcentration="3" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="B" compartment="cell" initialAmount="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        parameters = """
+    <listOfParameters>
+      <parameter id="k" value="0.5" constant="true"/>
+    </listOfParameters>"""
+        reactions = """
+    <listOfReactions>
+      <reaction id="J0" reversible="false">
+        <listOfReactants>
+          <speciesReference species="A" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="B" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><times/><ci> k </ci><ci> A </ci></apply>
+          </math>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>"""
+        sbml = _minimal_sbml(
+            species=species,
+            compartments=self._COMP_SIZE_2,
+            parameters=parameters,
+            reactions=reactions,
+        )
+
+        sym = parse_sbml_from_string(sbml)
+        A = sp.Symbol("A", positive=True)
+        B = sp.Symbol("B", positive=True)
+        k = sp.Symbol("k", positive=True)
+        cell = sp.Symbol("cell", positive=True)
+
+        # No compartment factor in the law ⇒ ODE carries an explicit 1/V.
+        assert sp.simplify(sym.odes[A] + k * A / cell) == 0
+        assert sp.simplify(sym.odes[B] - k * A / cell) == 0
+        # Numerically, with cell = 2: d[A]/dt = -k·A/2.
+        subs = {cell: sym.params["cell"]}
+        assert sp.simplify(sym.odes[A].subs(subs) + k * A / 2) == 0
+
+        # initialConcentration is already in the symbol's unit: unchanged by V.
+        assert sym.initials[A] == 3.0
+
+    def test_substance_units_species_are_amounts_and_not_scaled(self):
+        """hasOnlySubstanceUnits=true species stay amount-valued (no 1/V)."""
+        from ssys.recaster import parse_sbml_from_string
+
+        species = """
+      <species id="A" compartment="cell" initialConcentration="1" hasOnlySubstanceUnits="true" boundaryCondition="false" constant="false"/>
+      <species id="B" compartment="cell" initialAmount="0" hasOnlySubstanceUnits="true" boundaryCondition="false" constant="false"/>"""
+        parameters = """
+    <listOfParameters>
+      <parameter id="k" value="0.5" constant="true"/>
+    </listOfParameters>"""
+        reactions = """
+    <listOfReactions>
+      <reaction id="J0" reversible="false">
+        <listOfReactants>
+          <speciesReference species="A" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="B" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><times/><ci> k </ci><ci> A </ci></apply>
+          </math>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>"""
+        sbml = _minimal_sbml(
+            species=species,
+            compartments=self._COMP_SIZE_2,
+            parameters=parameters,
+            reactions=reactions,
+        )
+
+        sym = parse_sbml_from_string(sbml)
+        A = sp.Symbol("A", positive=True)
+        B = sp.Symbol("B", positive=True)
+        k = sp.Symbol("k", positive=True)
+
+        # Amount-valued species: dAmount/dt = -k·A, no compartment division.
+        assert sp.simplify(sym.odes[A] + k * A) == 0
+        assert sp.simplify(sym.odes[B] - k * A) == 0
+        # initialConcentration=1 in a size-2 compartment ⇒ amount 2.0.
+        assert sym.initials[A] == 2.0
+        assert sym.initials[B] == 0.0
+
+
 class TestSqrtSumIcComputation:
     """Tests for sqrt(sum) auxiliary IC computation.
 

@@ -135,6 +135,13 @@ Postconditions:
 
 - Floating species become `SymSystem.vars`.
 - Reaction stoichiometry and rate rules become `SymSystem.odes`.
+- Reaction-derived ODEs and initial values are reconciled to each species'
+  reporting unit: a `hasOnlySubstanceUnits=false` species is denoted by its
+  concentration, so its ODE is the amount rate `Σ stoich·kineticLaw` divided by
+  its compartment size and an `initialAmount` is divided by that size; a
+  `hasOnlySubstanceUnits=true` species is denoted by its amount and is not
+  volume-scaled. SBML rate rules state the derivative of the species symbol
+  directly and are never volume-scaled.
 - Assignment rules and algebraic rules are preserved separately from ODEs.
 - Parameter, compartment, simulation, and solver metadata are propagated.
 - SBML parsing avoids global simplification that would merge rational
@@ -143,6 +150,7 @@ Postconditions:
 Representative tests:
 
 - `tests/test_recaster.py::TestSbmlParserIcHandling`
+- `tests/test_recaster.py::TestSbmlCompartmentVolumeScaling`
 - `tests/test_recaster.py::test_same_named_local_parameters_are_scoped_by_reaction`
 - `tests/test_recaster.py::test_unknown_formula_identifier_raises_structured_error`
 - `tests/test_recaster.py::test_unknown_formula_function_raises_structured_error`
