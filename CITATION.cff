@@ -4,7 +4,7 @@ type: software
 title: "ssys: Exact algebraic recasting of ODEs to canonical S-system form"
 version: 0.5.5
 date-released: 2025-12-31
-license: BSD-3-Clause
+license: MIT
 authors:
   - family-names: "Hlavacek"
     given-names: "William S."

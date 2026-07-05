@@ -216,14 +216,16 @@ def _check_project_metadata(root: Path) -> list[str]:
         r'^license\s*=\s*\{text\s*=\s*"([^"]+)"\}', pyproject, "project license"
     )
     classifiers = set(_parse_quoted_list(pyproject, "classifiers"))
-    if pyproject_license != "BSD License":
-        errors.append("pyproject.toml license text must remain BSD License")
-    if "License :: OSI Approved :: BSD License" not in classifiers:
-        errors.append("pyproject.toml must include the BSD license classifier")
-    if citation.get("license") != "BSD-3-Clause":
-        errors.append("CITATION.cff license must be BSD-3-Clause")
-    if "BSD-3" not in license_text and "BSD 3-Clause" not in license_text:
-        errors.append("LICENSE must contain BSD-3/BSD 3-Clause text")
+    if pyproject_license != "MIT License":
+        errors.append("pyproject.toml license text must remain MIT License")
+    if "License :: OSI Approved :: MIT License" not in classifiers:
+        errors.append("pyproject.toml must include the MIT license classifier")
+    if citation.get("license") != "MIT":
+        errors.append("CITATION.cff license must be MIT")
+    if "Permission is hereby granted" not in license_text:
+        errors.append("LICENSE must contain the MIT permission grant text")
+    if "Triad National Security" not in license_text:
+        errors.append("LICENSE must retain the Triad National Security copyright notice")
 
     return errors
 

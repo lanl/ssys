@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- Relicensed the project from BSD-3-Clause to the MIT License, adding the Triad
+  National Security, LLC / U.S. Government copyright notice for the LANL open-source
+  release (LANL reference O5066). Updated `LICENSE`, `pyproject.toml`, `CITATION.cff`,
+  the README license section, and the release-metadata gate accordingly.
 - Narrowed supported Python metadata from Python 3.10+ to Python 3.10-3.12
   while the package depends on NumPy 1.x and RoadRunner 2.7.x.
 - Documented the trusted-input boundary for Antimony and SBML model files.

@@ -812,7 +812,15 @@ See `CONTRIBUTING.md` for guidelines.
 
 ## License
 
-See `LICENSE` file.
+ssys is open-source software distributed under the **MIT License**. See the `LICENSE`
+file for the full license text and the accompanying Triad National Security, LLC /
+U.S. Government copyright notice.
+
+This software was produced at Los Alamos National Laboratory (LANL) under U.S.
+Government contract 89233218CNA000001 and is released under LANL reference number
+**O# (O5066)**.
+
+© 2026. Triad National Security, LLC. All rights reserved.
 
 ## Citation
 
