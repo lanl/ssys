@@ -65,7 +65,7 @@ Antimony is a human-readable modeling language for systems biology, with transpa
 
 `ssys` is organized as a parser, symbolic transformation engine, formatter, and validation layer. Antimony models are converted to SBML with the Antimony library and then parsed with libSBML; SBML files can be parsed directly with `ssys.parse_sbml`. Both paths produce SymPy [@Meurer2017SymPy] symbolic expressions, which serve as the internal representation for exact algebraic rewriting.
 
-The recaster applies local exact transformations: composite functions (exp, log, sin, cos, etc.) and rational denominators are lifted to auxiliary variables with chain-rule-derived ODEs, and sums of monomials are factored into products via pool-auxiliary construction. The simplified output mode keeps structural zeros visible, while canonical mode rewrites equations to the strict two-term S-system convention. Correctness is checked by three independent validators: symbolic Jacobian chain-rule verification, pointwise numerical sampling, and trajectory comparison via libRoadRunner simulation [@Somogyi2015libRoadRunner; @Welsh2023libRoadRunner].
+The recaster applies local exact transformations: composite functions (exp, log, sin, cos, etc.) and rational denominators are lifted to auxiliary variables with chain-rule-derived ODEs, and sums of monomials are factored into products via pool-auxiliary construction. The simplified output mode allows for relaxed S-system form, whereas the canonical mode rewrites equations to a strict two-term S-system form. Correctness is checked by three independent validators: symbolic Jacobian chain-rule verification, pointwise numerical sampling, and trajectory comparison via libRoadRunner simulation [@Somogyi2015libRoadRunner; @Welsh2023libRoadRunner].
 
 # Quality control
 
@@ -77,7 +77,7 @@ To assess applicability to real-world models, we applied `ssys` to ODE models fr
 
 # Research impact statement
 
-`ssys` makes the Savageau and Voit recasting construction available as a practical tool for SBML and Antimony models. The curated handwritten examples provide regression tests with known recasting targets, while the BioModels benchmark demonstrates that exact recasting can be applied at repository scale to hundreds of published ODE models. The package therefore supports both direct BST analysis of existing models and construction of validated ground-truth benchmarks for methods that infer dynamical equations from data.
+`ssys` makes recasting construction [@SavageauVoit1987] available as a practical tool for SBML and Antimony models. The curated handwritten examples provide regression tests with known recasting targets, while the BioModels benchmark demonstrates that exact recasting can be applied at repository scale to hundreds of published ODE models.
 
 # Availability
 
