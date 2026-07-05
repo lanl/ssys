@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- SBML parser now rejects, at the trust boundary with a structured
+  `unsupported_feature` error, two input classes that were previously accepted
+  but silently mis-integrated: variable reaction stoichiometry (a non-constant
+  `<stoichiometryMath>`, or a `speciesReference` id driven by a
+  rule/`InitialAssignment`) and time-varying compartment volume (a rate-rule
+  compartment, or an assignment-rule compartment that does not fold to a
+  constant, that owns a concentration species whose `-[S]·(dV/dt)/V` dilution
+  term is unmodeled). Constant volumes, including assignment rules that fold to a
+  constant, remain supported.
+
+### Fixed
+- SBML L3 `conversionFactor` (a species' own or the Model default) is now applied
+  to reaction-derived ODEs, `d(amount_S)/dt = cf_S·Σ stoich·kineticLaw`, composing
+  with compartment-volume scaling. It was previously referenced nowhere in the
+  parser, so any model declaring one integrated the unscaled rate. Verified
+  against libRoadRunner.
+- Constant reaction stoichiometry supplied through an L2 `<stoichiometryMath>` is
+  now constant-folded over parameters and compartment sizes and used exactly.
+  Previously only the static `getStoichiometry()` attribute was read (reported as
+  1.0 when a `<stoichiometryMath>` was present), silently mis-integrating the
+  reaction.
+
 ## [0.6.0] - 2026-07-04
 
 ### Release Policy
