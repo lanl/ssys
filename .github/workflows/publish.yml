@@ -1,0 +1,82 @@
+name: Publish
+
+# Publishes ssys to PyPI using PyPI Trusted Publishing (OIDC) — no API tokens
+# or stored secrets are required. See RELEASE_CHECKLIST.md ("Publish to PyPI")
+# for the one-time trusted-publisher registration and the release procedure.
+#
+#   * workflow_dispatch  -> uploads to TestPyPI (repeatable dry run)
+#   * published release  -> uploads to PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build sdist and wheel
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    - name: Build source and wheel distributions
+      run: uv run --with build python -m build
+
+    - name: Verify distribution metadata renders
+      run: uv run --with twine twine check dist/*
+
+    - name: Upload distributions
+      uses: actions/upload-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+  testpypi:
+    name: Publish to TestPyPI (dry run)
+    needs: build
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/ssys/
+    permissions:
+      id-token: write  # OIDC token for trusted publishing
+    steps:
+    - name: Download distributions
+      uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+    - name: Publish to TestPyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        repository-url: https://test.pypi.org/legacy/
+
+  pypi:
+    name: Publish to PyPI
+    needs: build
+    if: github.event_name == 'release'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/ssys/
+    permissions:
+      id-token: write  # OIDC token for trusted publishing
+    steps:
+    - name: Download distributions
+      uses: actions/download-artifact@v4
+      with:
+        name: dist
+        path: dist/
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
