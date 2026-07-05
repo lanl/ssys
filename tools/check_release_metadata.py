@@ -190,27 +190,11 @@ def _check_maturity_support_and_trust(root: Path) -> list[str]:
 def _check_project_metadata(root: Path) -> list[str]:
     errors: list[str] = []
     pyproject = _read(root, "pyproject.toml")
-    readme = _read(root, "README.md")
-    changelog = _read(root, "CHANGELOG.md")
-    release_notes = _read(root, "RELEASE_NOTES.md")
-    citation_text = _read(root, "CITATION.cff")
     citation = _parse_citation(_read(root, "CITATION.cff"))
     license_text = _read(root, "LICENSE")
 
-    if re.search(r"(?m)^\[project\.urls\]", pyproject):
-        errors.append("[project.urls] should be omitted until public project URLs exist")
-    for citation_key in ("url", "repository-code"):
-        if citation.get(citation_key):
-            errors.append(f"CITATION.cff {citation_key!r} should be omitted until public URLs exist")
-    for relpath, text in {
-        "pyproject.toml": pyproject,
-        "README.md": readme,
-        "CHANGELOG.md": changelog,
-        "RELEASE_NOTES.md": release_notes,
-        "CITATION.cff": citation_text,
-    }.items():
-        if "github.com" in text.lower():
-            errors.append(f"{relpath} must not contain GitHub URLs until public URLs exist")
+    # ssys is now public on GitHub and PyPI, so public project URLs (including
+    # GitHub links and [project.urls]) are expected rather than prohibited.
 
     pyproject_license = _match(
         r'^license\s*=\s*\{text\s*=\s*"([^"]+)"\}', pyproject, "project license"

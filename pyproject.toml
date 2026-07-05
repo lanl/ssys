@@ -80,6 +80,12 @@ trust-boundary = "trusted local Antimony/SBML scientific model files; not safe f
 [project.scripts]
 ssys-recast = "ssys.cli:main"
 
+[project.urls]
+Homepage = "https://github.com/lanl/ssys"
+Repository = "https://github.com/lanl/ssys"
+Changelog = "https://github.com/lanl/ssys/blob/main/CHANGELOG.md"
+Issues = "https://github.com/lanl/ssys/issues"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/ssys"]
 
