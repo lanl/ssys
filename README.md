@@ -103,6 +103,7 @@ release-critical dependency.
 ## Requirements And Limits
 
 - Python 3.10, 3.11, and 3.12
+- Supported platforms: Linux and macOS (Windows is not tested or supported)
 - sympy ≥1.12 (symbolic math)
 - numpy ≥1.24,<2 (RoadRunner 2.7.x compatibility)
 - scipy ≥1.10

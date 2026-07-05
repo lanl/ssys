@@ -104,7 +104,10 @@ def test_safe_extract_sdist_uses_explicit_data_filter(
 
     assert extracted == tmp_path / "extract" / "ssys-0.5.5"
     assert (extracted / "README.md").read_text(encoding="utf-8") == "# ssys\n"
-    assert captured_kwargs["filter"] == "data"
+    if "filter" in inspect.signature(tarfile.TarFile.extractall).parameters:
+        assert captured_kwargs["filter"] == "data"
+    else:
+        assert "filter" not in captured_kwargs
 
 
 def test_safe_extract_sdist_rejects_path_traversal_member(tmp_path: Path):

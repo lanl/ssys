@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12"]
 
     steps:
@@ -107,7 +107,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-latest]
         python-version: ["3.10", "3.11", "3.12"]
     steps:
     - name: Download built packages
@@ -131,7 +131,7 @@ jobs:
         import pathlib
         import subprocess
 
-        venv = pathlib.Path(".wheel-smoke")
+        venv = pathlib.Path(".wheel-smoke").resolve()
         python_exe = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
         wheels = glob.glob("dist/*.whl")
@@ -150,7 +150,7 @@ jobs:
         import subprocess
         import tempfile
 
-        venv = pathlib.Path(".wheel-smoke")
+        venv = pathlib.Path(".wheel-smoke").resolve()
         python_exe = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         recast = venv / ("Scripts/ssys-recast.exe" if os.name == "nt" else "bin/ssys-recast")
         tmpdir = pathlib.Path(tempfile.mkdtemp())
@@ -250,7 +250,7 @@ jobs:
         import pathlib
         import subprocess
 
-        venv = pathlib.Path(".sdist-smoke")
+        venv = pathlib.Path(".sdist-smoke").resolve()
         python_exe = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
         sdists = glob.glob("dist/*.tar.gz")
@@ -269,7 +269,7 @@ jobs:
         import subprocess
         import tempfile
 
-        venv = pathlib.Path(".sdist-smoke")
+        venv = pathlib.Path(".sdist-smoke").resolve()
         python_exe = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         recast = venv / ("Scripts/ssys-recast.exe" if os.name == "nt" else "bin/ssys-recast")
         tmpdir = pathlib.Path(tempfile.mkdtemp())
@@ -395,7 +395,7 @@ jobs:
         if model_count != 117:
             raise SystemExit(f"expected 117 committed test models in sdist, found {model_count}")
 
-        venv = pathlib.Path(".sdist-unpack-tests")
+        venv = pathlib.Path(".sdist-unpack-tests").resolve()
         subprocess.check_call([sys.executable, "-m", "venv", str(venv)])
         python_exe = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         subprocess.check_call([str(python_exe), "-m", "pip", "install", "--upgrade", "pip"])
