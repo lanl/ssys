@@ -3,6 +3,8 @@
 import functools
 import logging
 import signal
+import threading
+import time
 from collections.abc import Callable
 from contextlib import contextmanager
 from typing import Any
@@ -10,11 +12,51 @@ from typing import Any
 # Set up logging
 logger = logging.getLogger(__name__)
 
+# signal.alarm/SIGALRM are Unix-only. Where they are unavailable (e.g. Windows)
+# we fall back to a worker-thread timeout. Signals give a hard interrupt of even
+# CPU-bound code; the thread fallback cannot kill a runaway worker, so it lets the
+# worker keep running as a daemon while returning control (and a TimeoutError) to
+# the caller. Both paths preserve in-place mutation of shared arguments made
+# before the timeout, since the worker shares the caller's memory.
+_HAS_SIGALRM = hasattr(signal, "SIGALRM") and hasattr(signal, "alarm")
+
 
 class TimeoutError(Exception):
     """Raised when a function times out."""
 
     pass
+
+
+def _run_with_thread_timeout(
+    func: Callable,
+    args: tuple,
+    kwargs: dict,
+    seconds: int,
+    message: str,
+) -> Any:
+    """Run ``func`` in a daemon thread and enforce a wall-clock timeout.
+
+    Used on platforms without ``signal.alarm``. Raises :class:`TimeoutError` if
+    the worker does not finish within ``seconds``; otherwise returns the worker's
+    result or re-raises the exception it raised.
+    """
+    result: list[Any] = []
+    error: list[BaseException] = []
+
+    def target() -> None:
+        try:
+            result.append(func(*args, **kwargs))
+        except BaseException as exc:  # noqa: BLE001 - propagated to the caller
+            error.append(exc)
+
+    worker = threading.Thread(target=target, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    if worker.is_alive():
+        raise TimeoutError(message)
+    if error:
+        raise error[0]
+    return result[0]
 
 
 def timeout(seconds: int):
@@ -30,8 +72,13 @@ def timeout(seconds: int):
     def decorator(func: Callable) -> Callable:
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
+            message = f"Function {func.__name__} timed out after {seconds}s"
+
+            if not _HAS_SIGALRM:
+                return _run_with_thread_timeout(func, args, kwargs, seconds, message)
+
             def handler(signum, frame):
-                raise TimeoutError(f"Function {func.__name__} timed out after {seconds}s")
+                raise TimeoutError(message)
 
             # Set the signal handler and alarm
             old_handler = signal.signal(signal.SIGALRM, handler)
@@ -59,10 +106,23 @@ def timeout_context(seconds: int):
     Usage:
         with timeout_context(30):
             slow_operation()
+
+    On platforms without ``signal.alarm`` the protected block cannot be
+    interrupted mid-execution; instead the elapsed time is checked on exit and
+    :class:`TimeoutError` is raised if it exceeded ``seconds``. Use
+    :func:`safe_execute` for a hard timeout that also works on Windows.
     """
+    message = f"Operation timed out after {seconds}s"
+
+    if not _HAS_SIGALRM:
+        start = time.monotonic()
+        yield
+        if time.monotonic() - start > seconds:
+            raise TimeoutError(message)
+        return
 
     def handler(signum, frame):
-        raise TimeoutError(f"Operation timed out after {seconds}s")
+        raise TimeoutError(message)
 
     old_handler = signal.signal(signal.SIGALRM, handler)
     signal.alarm(seconds)
@@ -92,8 +152,17 @@ def safe_execute(
     """
     try:
         if timeout_sec:
-            with timeout_context(timeout_sec):
-                result = func(*args, **kwargs)
+            if _HAS_SIGALRM:
+                with timeout_context(timeout_sec):
+                    result = func(*args, **kwargs)
+            else:
+                result = _run_with_thread_timeout(
+                    func,
+                    args,
+                    kwargs,
+                    timeout_sec,
+                    f"Operation timed out after {timeout_sec}s",
+                )
         else:
             result = func(*args, **kwargs)
         return True, result, None

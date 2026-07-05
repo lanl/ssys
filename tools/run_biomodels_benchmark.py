@@ -1294,7 +1294,9 @@ def main(argv: list[str] | None = None) -> int:
             python_executable=args.artifact_python,
         )
         benchmark_env = os.environ.copy()
-        benchmark_env["PATH"] = f"{benchmark_python.parent}:{benchmark_env.get('PATH', '')}"
+        benchmark_env["PATH"] = (
+            f"{benchmark_python.parent}{os.pathsep}{benchmark_env.get('PATH', '')}"
+        )
         benchmark_env.pop("PYTHONPATH", None)
 
     benchmark_env = _benchmark_env(

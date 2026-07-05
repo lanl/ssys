@@ -16,7 +16,9 @@ from tools.archive_release_evidence import (
 def test_collect_file_records_hashes_evidence_files(tmp_path: Path) -> None:
     evidence = tmp_path / "evidence"
     evidence.mkdir()
-    (evidence / "log.txt").write_text("local evidence\n", encoding="utf-8")
+    # newline="\n" prevents Windows from translating "\n" to "\r\n" on write,
+    # so the on-disk byte size matches len("local evidence\n") on every platform.
+    (evidence / "log.txt").write_text("local evidence\n", encoding="utf-8", newline="\n")
     output = evidence / "evidence-manifest.json"
 
     records = collect_file_records(evidence, output_path=output)

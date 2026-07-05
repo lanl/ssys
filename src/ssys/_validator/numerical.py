@@ -1203,7 +1203,11 @@ class NumericalValidationMixin(ValidatorState):
                 if sample_evaluation_timeout is None:
                     return
                 elapsed = time.monotonic() - sample_evaluation_started_at
-                if elapsed <= sample_evaluation_timeout:
+                # Use a strict comparison so a zero-second budget always trips,
+                # even where time.monotonic() has coarse resolution (Windows)
+                # and reports elapsed == 0.0 at the first check. Fail-closed at
+                # the exact tie matches the complexity-budget philosophy.
+                if elapsed < sample_evaluation_timeout:
                     return
                 raise NumericalDiagnosticError(
                     "Numerical sample evaluation exceeded complexity budget",
