@@ -654,7 +654,11 @@ def process_model(
     # Attempt recast with timeout
     import time
 
-    start_time = time.time()
+    # perf_counter (not time.time) matches the phase timing inside attempt_recast
+    # and gives high-resolution, monotonic durations. time.time() is coarse on
+    # Windows (~15 ms), which can report a 0.0 elapsed for a fast recast and
+    # suppress the open-phase interval used to attribute timeouts.
+    start_time = time.perf_counter()
     recast_timing: dict = {}
 
     success, result_tuple, error = utils.safe_execute(
@@ -666,7 +670,7 @@ def process_model(
         default=(False, None, "Timeout"),
     )
 
-    result["recast_time"] = time.time() - start_time
+    result["recast_time"] = time.perf_counter() - start_time
     if recast_timing:
         _apply_recast_timing(
             result,
