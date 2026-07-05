@@ -784,7 +784,7 @@ def validate_recast_pair(
         )
 
     if output_json:
-        with open(output_json, "w") as f:
+        with open(output_json, "w", encoding="utf-8") as f:
             json.dump(report.to_dict(), f, indent=2)
 
     return report

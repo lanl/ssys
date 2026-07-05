@@ -182,7 +182,7 @@ def recast_file(
     # and includes EPS_INIT information when relevant.
 
     out_path = os.path.join(out_dir, f"{name}_recast.ant")
-    with open(out_path, "w") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         f.write(out_text)
 
     validation_json_path = None
@@ -210,7 +210,7 @@ def recast_file(
                 validation_profile,
             )
             try:
-                with open(validation_json_path, "w") as f:
+                with open(validation_json_path, "w", encoding="utf-8") as f:
                     json.dump(failure_report.to_dict(), f, indent=2)
             except OSError as write_error:
                 print(
@@ -281,7 +281,7 @@ N_STEPS = 100     # Number of time steps (default: 100)
         nb.cells.append(new_code_cell(call))
 
     out_nb = os.path.join(out_dir, "recast_report.ipynb")
-    with open(out_nb, "w") as f:
+    with open(out_nb, "w", encoding="utf-8") as f:
         nbformat.write(nb, f)
     return out_nb
 
