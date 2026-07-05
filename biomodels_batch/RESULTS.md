@@ -1,6 +1,6 @@
 # BioModels Batch Transformation Results
 
-*Auto-generated on 2026-06-15 14:52*
+*Auto-generated on 2026-07-05 15:37*
 
 ## Pipeline Summary
 
@@ -10,22 +10,22 @@
 | Filtered out | 666 | No ODEs, events, delays, etc. |
 | **Transformation candidates** | **978** | Passed heuristic filters |
 | Successful transformations | 848 | 86.7% success rate |
-| Failed (error) | 131 | Various errors |
-| **Validated models** | **738** | Numerical validation passed |
+| Failed (error) | 130 | Various errors |
+| **Validated models** | **739** | Numerical validation passed |
 
 ## Transformation Achievements
 
 | Transformation | Count | Significance |
 |----------------|-------|--------------|
 | General → S-system | 2 | Full simplification achieved |
-| General → GMA | 281 | Functional lifting to GMA form |
+| General → GMA | 282 | Functional lifting to GMA form |
 | GMA → S-system | 77 | Sum-to-product reduction |
 | GMA → GMA | 182 | Already in GMA form |
 | S-system → S-system | 4 | Already in S-system form |
 | Canonical S-system → Canonical S-system | 8 | - |
 | General → Canonical S-system | 5 | - |
 | General → General | 179 | - |
-| **Total validated** | **738** | |
+| **Total validated** | **739** | |
 
 ## Sample Validated Models
 
@@ -42,7 +42,7 @@
 | MODEL1204280003 | General | GMA | 2.98e-16 |
 | MODEL1204280004 | General | GMA | 2.47e-16 |
 
-Rerunning the benchmark writes the complete validated manifest to `results/validated/manifest.csv` (738 models).
+Rerunning the benchmark writes the complete validated manifest to `results/validated/manifest.csv` (739 models).
 
 ## Reproducing Results
 
