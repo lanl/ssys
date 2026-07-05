@@ -159,6 +159,106 @@ NEGATIVE_SBML_CASES = [
         expected_kind="ambiguous_model",
         expected_message="multiple rate rules for variable S",
     ),
+    # GH #237: a speciesReference stoichiometry driven by a rule is time-varying
+    # and not power-law-recastable; reject rather than freeze it at its load value.
+    NegativeSbmlCase(
+        name="variable_stoichiometry_rule",
+        sbml="""<?xml version="1.0" encoding="UTF-8"?>
+<sbml xmlns="http://www.sbml.org/sbml/level3/version2/core" level="3" version="2">
+  <model id="m" substanceUnits="mole" timeUnits="second" extentUnits="mole">
+    <listOfCompartments><compartment id="cell" size="1" constant="true"/></listOfCompartments>
+    <listOfSpecies>
+      <species id="A" compartment="cell" initialConcentration="1" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="B" compartment="cell" initialConcentration="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+    </listOfSpecies>
+    <listOfParameters><parameter id="k" value="0.5" constant="true"/></listOfParameters>
+    <listOfRules>
+      <assignmentRule variable="sA">
+        <math xmlns="http://www.w3.org/1998/Math/MathML"><apply><plus/><cn>1</cn><csymbol encoding="text" definitionURL="http://www.sbml.org/sbml/symbols/time">t</csymbol></apply></math>
+      </assignmentRule>
+    </listOfRules>
+    <listOfReactions>
+      <reaction id="J0" reversible="false">
+        <listOfReactants><speciesReference id="sA" species="A" stoichiometry="1" constant="false"/></listOfReactants>
+        <listOfProducts><speciesReference species="B" stoichiometry="1" constant="true"/></listOfProducts>
+        <kineticLaw><math xmlns="http://www.w3.org/1998/Math/MathML"><apply><times/><ci>k</ci><ci>A</ci></apply></math></kineticLaw>
+      </reaction>
+    </listOfReactions>
+  </model>
+</sbml>""",
+        expected_kind="unsupported_feature",
+        expected_message="variable stoichiometry",
+    ),
+    # GH #237: an L2 <stoichiometryMath> that reads a species does not constant-fold.
+    NegativeSbmlCase(
+        name="variable_stoichiometry_math",
+        sbml="""<?xml version="1.0" encoding="UTF-8"?>
+<sbml xmlns="http://www.sbml.org/sbml/level2/version4" level="2" version="4">
+  <model id="m">
+    <listOfCompartments><compartment id="cell" size="1"/></listOfCompartments>
+    <listOfSpecies>
+      <species id="A" compartment="cell" initialConcentration="2" boundaryCondition="false"/>
+      <species id="B" compartment="cell" initialConcentration="0" boundaryCondition="false"/>
+    </listOfSpecies>
+    <listOfParameters><parameter id="k" value="0.3"/></listOfParameters>
+    <listOfReactions>
+      <reaction id="J0" reversible="false">
+        <listOfReactants>
+          <speciesReference species="A">
+            <stoichiometryMath><math xmlns="http://www.w3.org/1998/Math/MathML"><ci>B</ci></math></stoichiometryMath>
+          </speciesReference>
+        </listOfReactants>
+        <listOfProducts><speciesReference species="B" stoichiometry="1"/></listOfProducts>
+        <kineticLaw><math xmlns="http://www.w3.org/1998/Math/MathML"><apply><times/><ci>k</ci><ci>A</ci></apply></math></kineticLaw>
+      </reaction>
+    </listOfReactions>
+  </model>
+</sbml>""",
+        expected_kind="unsupported_feature",
+        expected_message="variable stoichiometry",
+    ),
+    # GH #231: a compartment driven by a rate rule has a time-varying volume; the
+    # concentration ODE of a species it owns is missing the -[S]·(dV/dt)/V dilution
+    # term, so it is rejected rather than silently mis-integrated.
+    NegativeSbmlCase(
+        name="rate_rule_compartment_volume",
+        sbml="""<?xml version="1.0" encoding="UTF-8"?>
+<sbml xmlns="http://www.sbml.org/sbml/level3/version2/core" level="3" version="2">
+  <model id="m" substanceUnits="mole" timeUnits="second" extentUnits="mole">
+    <listOfCompartments><compartment id="cell" size="1" spatialDimensions="3" constant="false"/></listOfCompartments>
+    <listOfSpecies>
+      <species id="A" compartment="cell" initialConcentration="1" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+    </listOfSpecies>
+    <listOfParameters><parameter id="k" value="0.5" constant="true"/></listOfParameters>
+    <listOfRules>
+      <rateRule variable="cell"><math xmlns="http://www.w3.org/1998/Math/MathML"><ci>k</ci></math></rateRule>
+    </listOfRules>
+  </model>
+</sbml>""",
+        expected_kind="unsupported_feature",
+        expected_message="time-varying compartment volume",
+    ),
+    # GH #231: an assignment-rule compartment whose RHS reads time is time-varying.
+    NegativeSbmlCase(
+        name="assignment_rule_compartment_volume",
+        sbml="""<?xml version="1.0" encoding="UTF-8"?>
+<sbml xmlns="http://www.sbml.org/sbml/level3/version2/core" level="3" version="2">
+  <model id="m" substanceUnits="mole" timeUnits="second" extentUnits="mole">
+    <listOfCompartments><compartment id="cell" size="1" spatialDimensions="3" constant="false"/></listOfCompartments>
+    <listOfSpecies>
+      <species id="A" compartment="cell" initialConcentration="1" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+    </listOfSpecies>
+    <listOfParameters><parameter id="k" value="0.5" constant="true"/></listOfParameters>
+    <listOfRules>
+      <assignmentRule variable="cell"><math xmlns="http://www.w3.org/1998/Math/MathML">
+        <apply><plus/><cn>1</cn><csymbol encoding="text" definitionURL="http://www.sbml.org/sbml/symbols/time">t</csymbol></apply>
+      </math></assignmentRule>
+    </listOfRules>
+  </model>
+</sbml>""",
+        expected_kind="unsupported_feature",
+        expected_message="time-varying compartment volume",
+    ),
 ]
 
 

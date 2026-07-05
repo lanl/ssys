@@ -1817,6 +1817,344 @@ class TestSbmlCompartmentVolumeScaling:
         assert sym.initials[B] == 0.0
 
 
+def _max_trajectory_error_vs_roadrunner(sbml, *, t_end, n=11, amount_species=frozenset()):
+    """Integrate ssys's parsed ODEs and compare to RoadRunner on the ORIGINAL SBML.
+
+    ssys's own validators are common-mode blind to parser misinterpretation: they
+    compare two systems that both flow from this parser. The independent ground
+    truth is libRoadRunner loading the same SBML directly. This integrates the
+    ODEs ssys parsed (params substituted) with scipy and returns the worst
+    per-species absolute trajectory error against RoadRunner. Concentration
+    species are read as ``[S]``; ``amount_species`` names are read as amounts.
+    """
+    rr = pytest.importorskip("roadrunner", reason="requires libRoadRunner")
+    solve_ivp = pytest.importorskip("scipy.integrate", reason="requires scipy").solve_ivp
+    import numpy as np
+
+    from ssys.recaster import parse_sbml_from_string
+
+    sym = parse_sbml_from_string(sbml)
+    state = list(sym.vars)
+    param_subs = {sp.Symbol(name, positive=True): val for name, val in sym.params.items()}
+    rhs = [sp.sympify(sym.odes[s]).subs(param_subs) for s in state]
+    free = set()
+    for expr in rhs:
+        free |= expr.free_symbols
+    leftover = free - set(state)
+    assert not leftover, f"parsed ODEs still reference non-state symbols: {leftover}"
+
+    f = sp.lambdify(state, rhs, modules="numpy")
+    y0 = [float(sym.initials[s]) for s in state]
+    t_eval = np.linspace(0.0, t_end, n)
+    sol = solve_ivp(
+        lambda t, y: f(*y), (0.0, t_end), y0, t_eval=t_eval, rtol=1e-10, atol=1e-12
+    )
+    assert sol.success
+
+    r = rr.RoadRunner(sbml)
+    selections = [
+        (s.name if s.name in amount_species else f"[{s.name}]") for s in state
+    ]
+    r.selections = ["time"] + selections
+    result = r.simulate(0.0, t_end, n)
+    cols = list(result.colnames)
+    worst = 0.0
+    for i, s in enumerate(state):
+        col = s.name if s.name in amount_species else f"[{s.name}]"
+        worst = max(worst, float(np.max(np.abs(sol.y[i] - result[:, cols.index(col)]))))
+    return worst
+
+
+class TestSbmlConversionFactor:
+    """SBML L3 conversionFactor must scale each species' reaction-derived rate.
+
+    Regression for a silent-wrong-answer bug: a species' (or the model's default)
+    ``conversionFactor`` scales how its amount changes per unit reaction extent,
+    ``d(amount_S)/dt = cf_S·Σ stoich·kineticLaw``, and was referenced nowhere in
+    the parser. Any model declaring one integrated the unscaled rate. The factor
+    is a per-species scalar, so it multiplies the whole reaction-derived ODE and
+    composes with the STEP 5a compartment-volume division. Cross-checked against
+    libRoadRunner on the original SBML.
+    """
+
+    _COMP_SIZE_2 = """
+    <listOfCompartments>
+      <compartment id="cell" spatialDimensions="3" size="2" units="litre" constant="true"/>
+    </listOfCompartments>"""
+
+    def test_species_conversion_factor_scales_ode_and_composes_with_volume(self):
+        """cf multiplies the amount rate; the compartment factor still cancels."""
+        from ssys.recaster import parse_sbml_from_string
+
+        species = """
+      <species id="A" compartment="cell" initialAmount="4" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false" conversionFactor="cf"/>
+      <species id="B" compartment="cell" initialAmount="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false" conversionFactor="cf"/>"""
+        parameters = """
+    <listOfParameters>
+      <parameter id="k" value="0.5" constant="true"/>
+      <parameter id="cf" value="3" constant="true"/>
+    </listOfParameters>"""
+        reactions = """
+    <listOfReactions>
+      <reaction id="J0" reversible="false">
+        <listOfReactants>
+          <speciesReference species="A" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="B" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><times/><ci> cell </ci><ci> k </ci><ci> A </ci></apply>
+          </math>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>"""
+        sbml = _minimal_sbml(
+            species=species,
+            compartments=self._COMP_SIZE_2,
+            parameters=parameters,
+            reactions=reactions,
+        )
+
+        sym = parse_sbml_from_string(sbml)
+        A = sp.Symbol("A", positive=True)
+        B = sp.Symbol("B", positive=True)
+        k = sp.Symbol("k", positive=True)
+        cf = sp.Symbol("cf", positive=True)
+
+        # d[A]/dt = cf·(-cell·k·A)/cell = -cf·k·A ; cell cancels, cf survives.
+        assert sp.simplify(sym.odes[A] + cf * k * A) == 0
+        assert sp.simplify(sym.odes[B] - cf * k * A) == 0
+        assert sym.initials[A] == 2.0
+        assert sym.params["cf"] == 3.0
+
+        assert _max_trajectory_error_vs_roadrunner(sbml, t_end=4.0) < 1e-4
+
+    def test_model_default_conversion_factor_with_per_species_override(self):
+        """Model default applies to species without their own; per-species wins."""
+        from ssys.recaster import parse_sbml_from_string
+
+        # Model default cfM=4 applies to B; A overrides with cfA=2. Unit volume so
+        # the factor is isolated from volume scaling.
+        sbml = """<?xml version="1.0" encoding="UTF-8"?>
+<sbml xmlns="http://www.sbml.org/sbml/level3/version2/core" level="3" version="2">
+  <model id="m" substanceUnits="mole" timeUnits="second" extentUnits="mole" conversionFactor="cfM">
+    <listOfCompartments>
+      <compartment id="cell" spatialDimensions="3" size="1" constant="true"/>
+    </listOfCompartments>
+    <listOfSpecies>
+      <species id="A" compartment="cell" initialConcentration="5" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false" conversionFactor="cfA"/>
+      <species id="B" compartment="cell" initialConcentration="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+    </listOfSpecies>
+    <listOfParameters>
+      <parameter id="k" value="0.7" constant="true"/>
+      <parameter id="cfA" value="2" constant="true"/>
+      <parameter id="cfM" value="4" constant="true"/>
+    </listOfParameters>
+    <listOfReactions>
+      <reaction id="J0" reversible="false">
+        <listOfReactants>
+          <speciesReference species="A" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="B" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><times/><ci> k </ci><ci> A </ci></apply>
+          </math>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>
+  </model>
+</sbml>"""
+
+        sym = parse_sbml_from_string(sbml)
+        A = sp.Symbol("A", positive=True)
+        B = sp.Symbol("B", positive=True)
+        k = sp.Symbol("k", positive=True)
+        cfA = sp.Symbol("cfA", positive=True)
+        cfM = sp.Symbol("cfM", positive=True)
+
+        # A carries its own cfA; B inherits the model default cfM.
+        assert sp.simplify(sym.odes[A] + cfA * k * A) == 0
+        assert sp.simplify(sym.odes[B] - cfM * k * A) == 0
+
+        assert _max_trajectory_error_vs_roadrunner(sbml, t_end=4.0) < 1e-4
+
+    def test_substance_units_species_conversion_factor_is_not_volume_scaled(self):
+        """hosu=true species: cf applies to the amount rate, no compartment division."""
+        from ssys.recaster import parse_sbml_from_string
+
+        species = """
+      <species id="A" compartment="cell" initialAmount="6" hasOnlySubstanceUnits="true" boundaryCondition="false" constant="false" conversionFactor="cf"/>
+      <species id="B" compartment="cell" initialAmount="0" hasOnlySubstanceUnits="true" boundaryCondition="false" constant="false" conversionFactor="cf"/>"""
+        parameters = """
+    <listOfParameters>
+      <parameter id="k" value="0.4" constant="true"/>
+      <parameter id="cf" value="3" constant="true"/>
+    </listOfParameters>"""
+        reactions = """
+    <listOfReactions>
+      <reaction id="J0" reversible="false">
+        <listOfReactants>
+          <speciesReference species="A" stoichiometry="1" constant="true"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="B" stoichiometry="1" constant="true"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><times/><ci> k </ci><ci> A </ci></apply>
+          </math>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>"""
+        sbml = _minimal_sbml(
+            species=species,
+            compartments=self._COMP_SIZE_2,
+            parameters=parameters,
+            reactions=reactions,
+        )
+
+        sym = parse_sbml_from_string(sbml)
+        A = sp.Symbol("A", positive=True)
+        B = sp.Symbol("B", positive=True)
+        k = sp.Symbol("k", positive=True)
+        cf = sp.Symbol("cf", positive=True)
+
+        # Amount-valued: dAmount/dt = -cf·k·A, no 1/V; initial amount unchanged.
+        assert sp.simplify(sym.odes[A] + cf * k * A) == 0
+        assert sp.simplify(sym.odes[B] - cf * k * A) == 0
+        assert sym.initials[A] == 6.0
+
+        assert (
+            _max_trajectory_error_vs_roadrunner(
+                sbml, t_end=4.0, amount_species=frozenset({"A", "B"})
+            )
+            < 1e-4
+        )
+
+
+class TestSbmlStoichiometry:
+    """Constant stoichiometryMath and non-constant SpeciesReferences.
+
+    Regression for a silent-wrong-answer bug: STEP 5 read only the static
+    ``getStoichiometry()`` attribute and ignored L2 ``<stoichiometryMath>`` (which
+    ``getStoichiometry()`` reports as 1.0). A stoichiometry that constant-folds is
+    now used exactly; a genuinely variable one is rejected at the trust boundary
+    (see tests/test_negative_corpus.py). Cross-checked against libRoadRunner.
+    """
+
+    @staticmethod
+    def _l2_reaction_sbml(reactant_ref: str, product_ref: str, extra_params: str = "") -> str:
+        return f"""<?xml version="1.0" encoding="UTF-8"?>
+<sbml xmlns="http://www.sbml.org/sbml/level2/version4" level="2" version="4">
+  <model id="m">
+    <listOfCompartments><compartment id="cell" size="1"/></listOfCompartments>
+    <listOfSpecies>
+      <species id="A" compartment="cell" initialConcentration="2" boundaryCondition="false"/>
+      <species id="B" compartment="cell" initialConcentration="0" boundaryCondition="false"/>
+    </listOfSpecies>
+    <listOfParameters><parameter id="k" value="0.3"/>{extra_params}</listOfParameters>
+    <listOfReactions>
+      <reaction id="J0" reversible="false">
+        <listOfReactants>{reactant_ref}</listOfReactants>
+        <listOfProducts>{product_ref}</listOfProducts>
+        <kineticLaw><math xmlns="http://www.w3.org/1998/Math/MathML">
+          <apply><times/><ci>k</ci><ci>A</ci></apply>
+        </math></kineticLaw>
+      </reaction>
+    </listOfReactions>
+  </model>
+</sbml>"""
+
+    def test_constant_stoichiometry_math_is_folded(self):
+        """A numeric <stoichiometryMath> (=2) is used instead of the 1.0 default."""
+        from ssys.recaster import parse_sbml_from_string
+
+        reactant = """
+          <speciesReference species="A">
+            <stoichiometryMath><math xmlns="http://www.w3.org/1998/Math/MathML"><cn>2</cn></math></stoichiometryMath>
+          </speciesReference>"""
+        product = """<speciesReference species="B" stoichiometry="3"/>"""
+        sbml = self._l2_reaction_sbml(reactant, product)
+
+        sym = parse_sbml_from_string(sbml)
+        A = sp.Symbol("A", positive=True)
+        B = sp.Symbol("B", positive=True)
+        k = sp.Symbol("k", positive=True)
+
+        assert sp.simplify(sym.odes[A] + 2 * k * A) == 0
+        assert sp.simplify(sym.odes[B] - 3 * k * A) == 0
+        assert _max_trajectory_error_vs_roadrunner(sbml, t_end=2.0) < 1e-4
+
+    def test_constant_stoichiometry_math_over_parameter_is_folded(self):
+        """<stoichiometryMath> = 2*sc constant-folds over parameter sc=2 to 4."""
+        from ssys.recaster import parse_sbml_from_string
+
+        reactant = """
+          <speciesReference species="A">
+            <stoichiometryMath><math xmlns="http://www.w3.org/1998/Math/MathML">
+              <apply><times/><cn>2</cn><ci>sc</ci></apply>
+            </math></stoichiometryMath>
+          </speciesReference>"""
+        product = """<speciesReference species="B" stoichiometry="1"/>"""
+        sbml = self._l2_reaction_sbml(
+            reactant, product, extra_params="""<parameter id="sc" value="2"/>"""
+        )
+
+        sym = parse_sbml_from_string(sbml)
+        A = sp.Symbol("A", positive=True)
+        k = sp.Symbol("k", positive=True)
+
+        assert sp.simplify(sym.odes[A] + 4 * k * A) == 0
+        assert _max_trajectory_error_vs_roadrunner(sbml, t_end=1.0) < 1e-4
+
+    def test_non_constant_flagged_but_rule_free_stoichiometry_is_kept(self):
+        """An L3 constant=false SpeciesReference with no rule folds to its attribute.
+
+        Only a stoichiometry that a rule/initialAssignment actually drives is
+        variable; merely marking it mutable does not, so it stays supported.
+        """
+        from ssys.recaster import parse_sbml_from_string
+
+        species = """
+      <species id="A" compartment="cell" initialConcentration="2" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>
+      <species id="B" compartment="cell" initialConcentration="0" hasOnlySubstanceUnits="false" boundaryCondition="false" constant="false"/>"""
+        parameters = """
+    <listOfParameters>
+      <parameter id="k" value="0.3" constant="true"/>
+    </listOfParameters>"""
+        reactions = """
+    <listOfReactions>
+      <reaction id="J0" reversible="false">
+        <listOfReactants>
+          <speciesReference species="A" stoichiometry="2" constant="false"/>
+        </listOfReactants>
+        <listOfProducts>
+          <speciesReference species="B" stoichiometry="1" constant="false"/>
+        </listOfProducts>
+        <kineticLaw>
+          <math xmlns="http://www.w3.org/1998/Math/MathML">
+            <apply><times/><ci> k </ci><ci> A </ci></apply>
+          </math>
+        </kineticLaw>
+      </reaction>
+    </listOfReactions>"""
+        sbml = _minimal_sbml(species=species, parameters=parameters, reactions=reactions)
+
+        sym = parse_sbml_from_string(sbml)
+        A = sp.Symbol("A", positive=True)
+        B = sp.Symbol("B", positive=True)
+        k = sp.Symbol("k", positive=True)
+
+        assert sp.simplify(sym.odes[A] + 2 * k * A) == 0
+        assert sp.simplify(sym.odes[B] - k * A) == 0
+        assert _max_trajectory_error_vs_roadrunner(sbml, t_end=2.0) < 1e-4
+
+
 class TestSqrtSumIcComputation:
     """Tests for sqrt(sum) auxiliary IC computation.
 

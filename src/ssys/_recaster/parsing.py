@@ -479,6 +479,14 @@ def _parse_sbml_document(
     species_info: dict[str, dict] = {}
     boundary_species: set[str] = set()
 
+    # An L3 Model may declare a default conversionFactor that applies to every
+    # species without its own. STEP 5b multiplies each species' reaction-derived
+    # amount rate by this factor (species' own factor takes precedence). No-op
+    # when unset. See STEP 5b for the semantics (GH #232).
+    model_conversion_factor = (
+        model.getConversionFactor() if model.isSetConversionFactor() else None
+    )
+
     for i in range(model.getNumSpecies()):
         sp_obj = model.getSpecies(i)
         sid = sp_obj.getId()
@@ -490,6 +498,12 @@ def _parse_sbml_document(
         # STEP 5a use these to reconcile initial values and scale ODEs by volume.
         hosu = sp_obj.getHasOnlySubstanceUnits()
         compartment = sp_obj.getCompartment()
+        # A species' conversionFactor (a constant Parameter) scales its
+        # reaction-derived amount rate in STEP 5b (GH #232). None falls back to the
+        # model default recorded above.
+        conversion_factor = (
+            sp_obj.getConversionFactor() if sp_obj.isSetConversionFactor() else None
+        )
 
         # Record the initial value together with the unit it was supplied in so
         # STEP 3a can convert it to the species-symbol convention once compartment
@@ -510,6 +524,7 @@ def _parse_sbml_document(
             "init_kind": init_kind,
             "hosu": hosu,
             "compartment": compartment,
+            "conversion_factor": conversion_factor,
         }
         if bc:
             boundary_species.add(sid)
@@ -621,6 +636,45 @@ def _parse_sbml_document(
         if not info["bc"]:
             odes[all_syms[sid]] = sp.Integer(0)
 
+    # A speciesReference's stoichiometry is folded to a constant coefficient. A
+    # plain attribute is used directly; an L2 <stoichiometryMath> is constant-
+    # folded over parameters and compartment sizes. Genuinely variable
+    # stoichiometry (time/species/rule-driven) is rejected in _checked_sbml_model
+    # before we reach here, so anything surviving must fold to a number (GH #237).
+    stoich_numeric_values = {**params, **compartments}
+
+    def _reference_stoichiometry(ref, rxn) -> float:
+        if hasattr(ref, "isSetStoichiometryMath") and ref.isSetStoichiometryMath():
+            stoich_math = ref.getStoichiometryMath()
+            math = stoich_math.getMath() if stoich_math is not None else None
+            formula_str = libsbml.formulaToString(math) if math is not None else None
+            expr = _sympify_sbml_formula(
+                formula_str,
+                all_syms,
+                source=source,
+                kind="stoichiometry",
+                reaction_id=rxn.getId() or None,
+                reaction_name=rxn.getName() or None,
+            )
+            subs = {
+                all_syms[name]: value
+                for name, value in stoich_numeric_values.items()
+                if name in all_syms
+            }
+            expr = expr.subs(subs)
+            if expr.free_symbols:
+                unresolved = ", ".join(sorted(s.name for s in expr.free_symbols))
+                raise SBMLParseError(
+                    "stoichiometry",
+                    formula_str,
+                    f"non-constant stoichiometry: {unresolved}",
+                    source=source,
+                    reaction_id=rxn.getId() or None,
+                    reaction_name=rxn.getName() or None,
+                )
+            return float(expr)
+        return float(ref.getStoichiometry())
+
     # Process each reaction
     for i in range(model.getNumReactions()):
         rxn = model.getReaction(i)
@@ -654,7 +708,7 @@ def _parse_sbml_document(
         for j in range(rxn.getNumReactants()):
             ref = rxn.getReactant(j)
             sid = ref.getSpecies()
-            stoich = ref.getStoichiometry()
+            stoich = _reference_stoichiometry(ref, rxn)
 
             if sid in species_info and not species_info[sid]["bc"]:
                 var_sym = all_syms[sid]
@@ -664,7 +718,7 @@ def _parse_sbml_document(
         for j in range(rxn.getNumProducts()):
             ref = rxn.getProduct(j)
             sid = ref.getSpecies()
-            stoich = ref.getStoichiometry()
+            stoich = _reference_stoichiometry(ref, rxn)
 
             if sid in species_info and not species_info[sid]["bc"]:
                 var_sym = all_syms[sid]
@@ -693,6 +747,39 @@ def _parse_sbml_document(
         if var_sym is None or comp_sym is None or var_sym not in odes:
             continue
         odes[var_sym] = odes[var_sym] / comp_sym
+
+    # ------------------------------------------------------------------------
+    # STEP 5b: Scale reaction-derived rates by each species' conversionFactor
+    # ------------------------------------------------------------------------
+    # An SBML L3 species may declare a conversionFactor (a constant Parameter),
+    # or inherit the Model default, that scales how its amount changes per unit
+    # reaction extent: d(amount_S)/dt = cf_S·Σ stoich·kineticLaw, without altering
+    # how S appears in any rate law. Because cf_S is a per-species scalar it
+    # factors out of the accumulated sum, so multiplying the whole reaction-
+    # derived ODE by the conversionFactor *symbol* is exact — for both amount and
+    # concentration species — and commutes with the STEP 5a volume division
+    # ((cf/V)·Σ = (1/V)·cf·Σ). The symbol (a positive constant parameter) is used
+    # so it stays visible to recasting, mirroring the compartment symbol. No-op
+    # when neither the species nor the model sets a conversionFactor (GH #232).
+    for sid, info in species_info.items():
+        if info["bc"]:
+            continue
+        cf_id = info["conversion_factor"] or model_conversion_factor
+        if cf_id is None:
+            continue
+        var_sym = all_syms.get(sid)
+        if var_sym is None or var_sym not in odes:
+            continue
+        cf_sym = all_syms.get(cf_id)
+        if cf_sym is None:
+            raise SBMLParseError(
+                "conversion_factor",
+                None,
+                f"conversionFactor '{cf_id}' is not a declared parameter",
+                source=source,
+                variable=cf_id,
+            )
+        odes[var_sym] = cf_sym * odes[var_sym]
 
     # ========================================================================
     # STEP 6: Handle rate rules (explicit ODEs defined in SBML)

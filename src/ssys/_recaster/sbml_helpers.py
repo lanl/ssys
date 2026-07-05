@@ -336,6 +336,157 @@ def _validate_sbml_identifier(identifier: str, *, kind: str, source: str) -> Non
     )
 
 
+def _sbml_rule_target_sets(model, libsbml):
+    """Return (rate_rule_targets, assignment_rule_targets, assignment_rule_math)."""
+    rate_targets: set[str] = set()
+    assignment_targets: set[str] = set()
+    assignment_math: dict[str, object] = {}
+    for i in range(model.getNumRules()):
+        rule = model.getRule(i)
+        type_code = rule.getTypeCode()
+        if type_code == libsbml.SBML_RATE_RULE:
+            rate_targets.add(rule.getVariable())
+        elif type_code == libsbml.SBML_ASSIGNMENT_RULE:
+            var_id = rule.getVariable()
+            assignment_targets.add(var_id)
+            assignment_math[var_id] = rule.getMath()
+    return rate_targets, assignment_targets, assignment_math
+
+
+def _sbml_species_ids(model) -> set[str]:
+    return {model.getSpecies(i).getId() for i in range(model.getNumSpecies())}
+
+
+def _ast_references_time_varying(node, libsbml, *, species_ids: set[str], varying_ids: set[str]) -> bool:
+    """True when an SBML math AST reads a quantity that changes in time.
+
+    A leaf that is the ``time`` csymbol, a species, or a rule-driven identifier
+    makes the expression non-constant. An expression over only numbers and
+    constant parameters/compartments constant-folds and returns False.
+    """
+    if node is None:
+        return False
+    if node.getType() == libsbml.AST_NAME_TIME:
+        return True
+    name = node.getName()
+    if name and (name in species_ids or name in varying_ids or name in {"time", "t"}):
+        return True
+    for i in range(node.getNumChildren()):
+        if _ast_references_time_varying(
+            node.getChild(i), libsbml, species_ids=species_ids, varying_ids=varying_ids
+        ):
+            return True
+    return False
+
+
+def _iter_reaction_species_references(rxn):
+    for j in range(rxn.getNumReactants()):
+        yield rxn.getReactant(j)
+    for j in range(rxn.getNumProducts()):
+        yield rxn.getProduct(j)
+
+
+def _reject_variable_stoichiometry(model, libsbml, *, source: str) -> None:
+    """Refuse reactions whose stoichiometry is not a compile-time constant.
+
+    ssys folds each reactant/product to a constant coefficient and builds a
+    power-law contribution ``stoich·rate``. A time-varying coefficient — an L2
+    ``<stoichiometryMath>`` that reads time/a species/a rule-driven parameter, or
+    an L3 speciesReference id that is a rule or initialAssignment target — is not
+    power-law-recastable, so it is rejected before any artifact is produced rather
+    than silently frozen at its load-time value (GH #237). Constant
+    stoichiometryMath and plain constant coefficients fold in STEP 5 as usual.
+    """
+    rate_targets, assignment_targets, _ = _sbml_rule_target_sets(model, libsbml)
+    ia_targets = {
+        model.getInitialAssignment(i).getSymbol()
+        for i in range(model.getNumInitialAssignments())
+    }
+    species_ids = _sbml_species_ids(model)
+    varying_ids = rate_targets | assignment_targets
+    rule_or_ia = rate_targets | assignment_targets | ia_targets
+    for ri in range(model.getNumReactions()):
+        rxn = model.getReaction(ri)
+        rid = rxn.getId() or f"reaction_{ri + 1}"
+        for ref in _iter_reaction_species_references(rxn):
+            if hasattr(ref, "isSetStoichiometryMath") and ref.isSetStoichiometryMath():
+                stoich_math = ref.getStoichiometryMath()
+                math = stoich_math.getMath() if stoich_math is not None else None
+                if math is None or _ast_references_time_varying(
+                    math, libsbml, species_ids=species_ids, varying_ids=varying_ids
+                ):
+                    _raise_unsupported_sbml_feature(
+                        "variable stoichiometry",
+                        source=source,
+                        detail=(
+                            f"reaction '{rid}' species reference to "
+                            f"'{ref.getSpecies()}' has a non-constant stoichiometryMath"
+                        ),
+                    )
+            ref_id = ref.getId() if hasattr(ref, "getId") else ""
+            if ref_id and ref_id in rule_or_ia:
+                _raise_unsupported_sbml_feature(
+                    "variable stoichiometry",
+                    source=source,
+                    detail=(
+                        f"reaction '{rid}' species reference '{ref_id}' is a rule "
+                        f"or initialAssignment target"
+                    ),
+                )
+
+
+def _reject_time_varying_compartments(model, libsbml, *, source: str) -> None:
+    """Refuse compartments whose volume changes in time under a concentration species.
+
+    The volume scaling in STEP 5a divides a concentration species' amount rate by
+    its compartment symbol, which is exact for a constant volume but omits the
+    dilution term ``-[S]·(dV/dt)/V`` when the volume itself varies in time. A
+    compartment that is a rate-rule target, or an assignment-rule target whose RHS
+    does not constant-fold, therefore produces a silently wrong concentration ODE
+    for any non-boundary ``hasOnlySubstanceUnits=false`` species it owns and is
+    rejected here (GH #231). Constant volumes — including assignment rules that
+    fold to a constant — are unaffected.
+    """
+    rate_targets, assignment_targets, assignment_math = _sbml_rule_target_sets(model, libsbml)
+    species_ids = _sbml_species_ids(model)
+    varying_ids = rate_targets | assignment_targets
+
+    # Only compartments owning a concentration-valued state species carry the
+    # missing dilution term; a time-varying volume over amount-only, boundary, or
+    # constant species introduces no error and stays supported.
+    concentration_compartments: set[str] = set()
+    for i in range(model.getNumSpecies()):
+        sp_obj = model.getSpecies(i)
+        if sp_obj.getBoundaryCondition() or sp_obj.getConstant():
+            continue
+        if sp_obj.getHasOnlySubstanceUnits():
+            continue
+        concentration_compartments.add(sp_obj.getCompartment())
+
+    for i in range(model.getNumCompartments()):
+        cid = model.getCompartment(i).getId()
+        if cid not in concentration_compartments:
+            continue
+        if cid in rate_targets:
+            varies = True
+        elif cid in assignment_targets:
+            math = assignment_math.get(cid)
+            varies = math is None or _ast_references_time_varying(
+                math, libsbml, species_ids=species_ids, varying_ids=varying_ids
+            )
+        else:
+            varies = False
+        if varies:
+            _raise_unsupported_sbml_feature(
+                "time-varying compartment volume",
+                source=source,
+                detail=(
+                    f"compartment '{cid}' size varies in time and owns a "
+                    f"concentration-valued species; the dilution term is not modeled"
+                ),
+            )
+
+
 def _checked_sbml_model(doc, libsbml, *, source: str):
     if doc.getNumErrors() > 0:
         errors = []
@@ -378,6 +529,9 @@ def _checked_sbml_model(doc, libsbml, *, source: str):
             source=source,
             detail=f"found {model.getNumConstraints()} constraint(s)",
         )
+
+    _reject_variable_stoichiometry(model, libsbml, source=source)
+    _reject_time_varying_compartments(model, libsbml, source=source)
 
     return model
 

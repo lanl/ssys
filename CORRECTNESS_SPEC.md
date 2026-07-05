@@ -68,6 +68,16 @@ claim:
 
 - Events, triggers, resets, delays, stochastic/hybrid semantics, and discrete
   state changes.
+- Variable reaction stoichiometry: an L2 `<stoichiometryMath>` that reads time,
+  a species, or a rule-driven parameter, or an L3 `speciesReference` whose id is
+  a rule or `InitialAssignment` target. Only stoichiometry that folds to a
+  constant is recast; a time-varying coefficient is rejected.
+- Time-varying compartment volume: a compartment that is a rate-rule target, or
+  an assignment-rule target whose right-hand side does not constant-fold, when it
+  owns a concentration-valued (`hasOnlySubstanceUnits=false`) state species. The
+  concentration ODE would need the dilution term `-[S]·(dV/dt)/V`, which is not
+  modeled, so the model is rejected. Constant volumes — including assignment
+  rules that fold to a constant — remain supported.
 - Unknown formula identifiers or unknown functions.
 - Initial assignments that cannot be evaluated to finite numeric values in the
   supported parameter/compartment/species context.
@@ -142,6 +152,14 @@ Postconditions:
   `hasOnlySubstanceUnits=true` species is denoted by its amount and is not
   volume-scaled. SBML rate rules state the derivative of the species symbol
   directly and are never volume-scaled.
+- A species' (or the Model's default) `conversionFactor` scales its
+  reaction-derived amount rate: `d(amount_S)/dt = cf_S·Σ stoich·kineticLaw`. The
+  factor multiplies that species' whole reaction-derived ODE and composes with
+  the compartment-volume division. It is a no-op when unset.
+- Each reactant/product stoichiometry is folded to a constant coefficient: a
+  plain attribute is used directly and an L2 `<stoichiometryMath>` is
+  constant-folded over parameters and compartment sizes. Stoichiometry that
+  varies in time is not power-law-recastable and is rejected (see below).
 - Assignment rules and algebraic rules are preserved separately from ODEs.
 - Parameter, compartment, simulation, and solver metadata are propagated.
 - SBML parsing avoids global simplification that would merge rational
@@ -151,6 +169,9 @@ Representative tests:
 
 - `tests/test_recaster.py::TestSbmlParserIcHandling`
 - `tests/test_recaster.py::TestSbmlCompartmentVolumeScaling`
+- `tests/test_recaster.py::TestSbmlConversionFactor`
+- `tests/test_recaster.py::TestSbmlStoichiometry`
+- `tests/test_negative_corpus.py::test_negative_sbml_corpus_rejects_before_recast_artifact`
 - `tests/test_recaster.py::test_same_named_local_parameters_are_scoped_by_reaction`
 - `tests/test_recaster.py::test_unknown_formula_identifier_raises_structured_error`
 - `tests/test_recaster.py::test_unknown_formula_function_raises_structured_error`
