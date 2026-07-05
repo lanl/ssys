@@ -558,18 +558,20 @@ def load_and_report(
     ant_text = open(ant_path).read()
     rec_text = open(recast_path).read()
 
-    # Parse original model using SBML-based parser (same as CLI)
-    # This ensures consistent ODE extraction across CLI and notebook
+    # Parse original model using SBML-based parser (same as CLI).
+    # parse_antimony_via_sbml caches the original Antimony text and the @SIM
+    # metadata on the returned SymSystem, so the same object drives both the
+    # display/analysis and the RoadRunner simulation below. The deprecated legacy
+    # parser (ssys.parse_antimony) is intentionally NOT used here: it fails closed
+    # on non-unit compartment volume / conversionFactor models that RoadRunner
+    # simulates correctly straight from the cached Antimony text.
     sym = parse_antimony_via_sbml(ant_text)
+    sym.antimony_text = ant_text  # RoadRunner re-simulates the original text
 
-    # Also parse with hand-rolled parser for simulation (ModelIR needed by simulate_ode)
-    ir = ssys.parse_antimony(ant_text)
-
-    # Extract simulation metadata from hand-rolled parser (ir has @SIM data)
-    # SBML doesn't have @SIM concept, so we get it from the Antimony parser
-    sim_t_start = ir.sim_t_start
-    sim_t_end = ir.sim_t_end
-    sim_n_steps = ir.sim_n_steps
+    # @SIM metadata rides on the SymSystem (extracted before SBML conversion).
+    sim_t_start = sym.sim_t_start
+    sim_t_end = sym.sim_t_end
+    sim_n_steps = sym.sim_n_steps
 
     # Model @SIM values take PRECEDENCE over function parameters
     # This ensures per-model simulation settings are respected
@@ -715,8 +717,11 @@ def load_and_report(
     # Use ODE backend abstraction
     from ssys.ode_backends import simulate_ode
 
-    # Simulate original model
-    result_orig = simulate_ode(ir, T_start, T, steps + 1)
+    # Simulate original model (RoadRunner backend reads sym.antimony_text and
+    # re-simulates the original Antimony → SBML, interpreting volume correctly).
+    # The backend duck-types on antimony_text/initials, so a SymSystem is accepted
+    # in place of a ModelIR here (same seam the validator crosses).
+    result_orig = simulate_ode(sym, T_start, T, steps + 1)  # type: ignore[arg-type]
     if not result_orig["success"]:
         display(
             Markdown(
@@ -731,9 +736,10 @@ def load_and_report(
         # Get state names from simulation result for correct column mapping
         orig_state_names = result_orig.get("state_names", [])
 
-    # Build recast IR for simulation
-    recast_ir = ssys.parse_antimony(rec_text)
-    result_rec = simulate_ode(recast_ir, T_start, T, steps + 1)
+    # Simulate the recast system. rec_sym was parsed via SBML above; it carries
+    # rec_text as its cached Antimony source for the RoadRunner backend.
+    rec_sym.antimony_text = rec_text
+    result_rec = simulate_ode(rec_sym, T_start, T, steps + 1)  # type: ignore[arg-type]
     if not result_rec["success"]:
         display(
             Markdown(f"**❌ Recast simulation failed:** {result_rec['message']}")

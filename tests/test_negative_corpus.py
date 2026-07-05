@@ -6,6 +6,7 @@ import pytest
 
 from ssys.recaster import (
     SBMLParseError,
+    parse_antimony,
     parse_antimony_via_sbml,
     parse_sbml_from_string,
     recast_to_ssystem,
@@ -289,3 +290,105 @@ def test_malformed_antimony_rejects_before_recast_artifact():
         sym = parse_antimony_via_sbml(text)
         result = recast_to_ssystem(sym)
         ssystem_to_antimony(result)
+
+
+@dataclass(frozen=True)
+class LegacyRejectCase:
+    name: str
+    antimony: str
+    expected_message: str
+
+
+# The legacy subset parser (parse_antimony) never modelled compartments,
+# conversionFactors, or variable stoichiometry: it would silently produce wrong
+# ODEs for these constructs the way the SBML path did before a171b9b/cc932e4. It
+# now fails closed on them with the same structured diagnostic instead.
+LEGACY_UNSUPPORTED_ANTIMONY_CASES = [
+    LegacyRejectCase(
+        name="non_unit_compartment",
+        antimony=(
+            "model nonunit()\n"
+            "  compartment cell = 2;\n"
+            "  species A in cell, B in cell;\n"
+            "  A = 1; B = 0; k = 0.5;\n"
+            "  J0: A -> B; cell*k*A;\n"
+            "end\n"
+        ),
+        expected_message="non-unit compartment volume",
+    ),
+    LegacyRejectCase(
+        name="non_unit_compartment_split_initialization",
+        antimony=(
+            "model nonunit()\n"
+            "  compartment cell;\n"
+            "  species A in cell;\n"
+            "  cell = 3;\n"
+            "  A = 1; k = 0.5;\n"
+            "  A -> ; k*A;\n"
+            "end\n"
+        ),
+        expected_message="non-unit compartment volume",
+    ),
+    LegacyRejectCase(
+        name="multiple_compartments",
+        antimony=(
+            "model twocomp()\n"
+            "  compartment cell = 1, nucleus = 1;\n"
+            "  A = 1;\n"
+            "end\n"
+        ),
+        expected_message="multiple compartments",
+    ),
+    LegacyRejectCase(
+        name="conversion_factor",
+        antimony=(
+            "model cf()\n"
+            "  compartment cell = 1;\n"
+            "  species A in cell;\n"
+            "  A = 1; k = 0.5;\n"
+            "  conversionFactor = 2;\n"
+            "  A -> ; k*A;\n"
+            "end\n"
+        ),
+        expected_message="conversionFactor",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "case",
+    LEGACY_UNSUPPORTED_ANTIMONY_CASES,
+    ids=[case.name for case in LEGACY_UNSUPPORTED_ANTIMONY_CASES],
+)
+def test_legacy_parser_fails_closed_on_unsupported_features(case: LegacyRejectCase):
+    """parse_antimony rejects features the simplified subset cannot interpret."""
+    with pytest.raises(SBMLParseError) as exc_info:
+        parse_antimony(case.antimony)
+
+    err = exc_info.value
+    assert err.kind == "unsupported_feature"
+    assert case.expected_message in err.message
+
+
+def test_legacy_parser_accepts_trivial_unit_compartment():
+    """A single unit compartment (what libAntimony emits) still parses unchanged."""
+    text = (
+        "model unit()\n"
+        "  compartment cell = 1;\n"
+        "  species A in cell, B in cell;\n"
+        "  A = 1; B = 0; k = 0.5;\n"
+        "  J0: A -> B; k*A;\n"
+        "end\n"
+    )
+
+    ir = parse_antimony(text)
+
+    assert "A" in ir.species
+    assert "B" in ir.species
+    assert len(ir.reactions) == 1
+
+
+def test_parse_antimony_emits_deprecation_warning():
+    """Direct callers of the legacy parser get a DeprecationWarning."""
+    with pytest.warns(DeprecationWarning, match="legacy Antimony parser"):
+        parse_antimony("X' = -k*X\nk = 0.5\nX = 1.0\n")

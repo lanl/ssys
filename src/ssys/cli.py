@@ -12,6 +12,7 @@ from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
 import ssys
 from ssys import build_sym_system, parse_antimony, recast_to_ssystem, ssystem_to_antimony
+from ssys._recaster.parsing import LEGACY_PARSER_DEPRECATION
 from ssys.metadata import _extract_sim_metadata
 from ssys.parsing import parse_antimony_via_sbml
 from ssys.validator import (
@@ -24,10 +25,6 @@ from ssys.validator import (
 CaseRecord = tuple[str, str, str, str | None]
 FailureRecord = tuple[str, str]
 
-LEGACY_PARSER_DEPRECATION = (
-    "The legacy Antimony parser mode is compatibility-only and may be removed "
-    "after a future stable parser-mode policy is published; use parser='sbml'."
-)
 TROUBLESHOOTING_HINT = "See README.md#troubleshooting for local failure guidance."
 
 

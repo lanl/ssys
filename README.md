@@ -166,7 +166,12 @@ see [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for the procedure.
 - **Parser errors.** The default `--parser sbml` path parses Antimony through the
   reference implementation and SBML/libSBML; unsupported features (events, delays,
   unknown functions, malformed input) are rejected before any artifact is written.
-  `--parser legacy` is compatibility‑only and deprecated.
+  `--parser legacy` (and a direct `ssys.parse_antimony(...)` call) is
+  compatibility‑only and deprecated: it reads a simplified single‑unit‑compartment
+  subset and now **rejects** — rather than silently mis‑integrates — a non‑unit or
+  multiple compartment, a `conversionFactor`, and variable stoichiometry, with the
+  same structured `unsupported_feature` error. Use the supported `sbml` parser for
+  those models.
 - **Numerical sampling failures.** `invalid_sampling_domain` means the model
   metadata gave no usable finite positive domain; `nonfinite_sample` means a
   sampled point hit a singular surface. Reports record the seed, sampled ranges,

@@ -17,6 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constant, that owns a concentration species whose `-[S]·(dV/dt)/V` dilution
   term is unmodeled). Constant volumes, including assignment rules that fold to a
   constant, remain supported.
+- Legacy Antimony parser (`ssys.parse_antimony` / `--parser legacy`) now fails
+  closed at its trust boundary, with the same structured `unsupported_feature`
+  error, on constructs its simplified single-unit-compartment subset cannot
+  correctly interpret — a non-unit or multiple compartment, a `conversionFactor`,
+  or a variable stoichiometric coefficient — instead of silently emitting wrong
+  ODEs (the legacy-path companion to the SBML fixes in this release). A trivial
+  unit `compartment cell = 1;` is still accepted, so every existing model is
+  unaffected. `ssys.parse_antimony` also now emits a `DeprecationWarning` on
+  direct use, and `build_sym_system` defensively rejects an incoming IR carrying a
+  non-unit compartment size.
+- Recast notebook report no longer routes simulation through the legacy parser:
+  it re-simulates the original and recast Antimony through the SBML path, so a
+  non-unit-volume model still renders a correct simulation section rather than
+  inheriting the legacy fail-close.
 
 ### Fixed
 - SBML L3 `conversionFactor` (a species' own or the Model default) is now applied

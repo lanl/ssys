@@ -153,9 +153,14 @@ CLI output contracts:
 
 ## Deprecated Or Compatibility-Only Behavior
 
-- `ssys-recast --parser legacy` and `ssys.cli.recast_file(..., parser="legacy")`
-  are compatibility-only. They emit `DeprecationWarning` in Python helper use
-  and may be removed after a future stable parser-mode policy is published.
+- `ssys-recast --parser legacy`, `ssys.cli.recast_file(..., parser="legacy")`,
+  and a direct `ssys.parse_antimony(...)` call are compatibility-only. They emit
+  `DeprecationWarning` and may be removed after a future stable parser-mode policy
+  is published. `ssys.parse_antimony` reads a simplified single-unit-compartment
+  subset and now fails closed with a structured `unsupported_feature`
+  `SBMLParseError` on a non-unit or multiple compartment, a `conversionFactor`, or
+  a variable stoichiometric coefficient — constructs it cannot correctly interpret
+  and previously mis-integrated. Use the default `sbml` parser for those models.
 - `ssys.recaster` broad re-exports are compatibility-only. New code should use
   top-level `ssys` imports or focused public modules.
 - Legacy validation boolean flags are compatibility-only when a named validation

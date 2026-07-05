@@ -1,6 +1,7 @@
 """Antimony and SBML parsing plus symbolic-system construction."""
 
 import re
+import warnings
 from collections.abc import Callable
 
 import sympy as sp
@@ -11,6 +12,7 @@ from ssys._recaster.sbml_helpers import (
     _checked_sbml_model,
     _extract_sbml_function_templates,
     _iter_kinetic_law_local_parameters,
+    _raise_unsupported_sbml_feature,
     _reaction_scope_name,
     _replace_formula_identifiers,
     _sanitize_sbml_identifier,
@@ -96,10 +98,200 @@ def _sympy_to_antimony_syntax(expr_str: str) -> str:
     return result
 
 
+# Message shared with cli.recast_file so both the CLI legacy mode and direct
+# ssys.parse_antimony() callers emit the same deprecation signal.
+LEGACY_PARSER_DEPRECATION = (
+    "The legacy Antimony parser mode is compatibility-only and may be removed "
+    "after a future stable parser-mode policy is published; use parser='sbml'."
+)
+
+# A compartment declaration: `compartment <list>` where each list item is a
+# compartment name with an optional inline `= size`. libAntimony also emits the
+# size on a separate `name = value;` initialization line, which the caller
+# resolves via the model's scalar assignments.
+_COMPARTMENT_DECL_RE = re.compile(r"^compartment\b(?P<body>.*)$")
+# A species-to-compartment binding: `species A in cell` (also `A in cell` inside
+# a comma-separated species declaration). Only scanned on `species` statements.
+_SPECIES_IN_RE = re.compile(r"\b([A-Za-z_]\w*)\s+in\s+([A-Za-z_]\w*)")
+# A conversionFactor reference. libAntimony cannot round-trip an SBML
+# conversionFactor into Antimony text (it is silently dropped), so this only
+# fires on a hand-authored token; matched as a whole word, comments stripped.
+_CONVERSION_FACTOR_RE = re.compile(r"\bconversionFactor\b", re.IGNORECASE)
+
+
+def _size_token_is_unit(token: str | None) -> bool:
+    """True when a compartment size token is absent (defaults to 1) or folds to 1.
+
+    A missing size (a bare ``compartment cell;``) defaults to unit volume. A token
+    that does not constant-fold to exactly 1 — a non-unit literal or any symbolic
+    reference the legacy subset cannot evaluate — is treated as non-unit so the
+    guard fails closed.
+    """
+    if token is None or token == "":
+        return True
+    try:
+        return float(sp.sympify(token)) == 1.0
+    except (TypeError, ValueError, sp.SympifyError):
+        return False
+
+
+def _iter_antimony_statements(raw_lines: list[str]):
+    """Yield ``(kind, text)`` for each comment-stripped Antimony statement.
+
+    Mirrors the statement splitting in :func:`parse_antimony`: reaction lines are
+    kept whole (``kind == "reaction"``); every other line is split on ``;`` into
+    individual statements (``kind == "stmt"``). ``model``/``end`` lines are skipped.
+    """
+    for raw in raw_lines:
+        line = raw.split("//", 1)[0].strip()
+        if not line:
+            continue
+        low = line.lower()
+        if low.startswith("model ") or low == "end":
+            continue
+        if ("->" in line) or ("<->" in line):
+            yield "reaction", line
+            continue
+        for stmt in (seg.strip() for seg in line.split(";") if seg.strip()):
+            yield "stmt", stmt
+
+
+def _reaction_has_variable_stoichiometry(reaction_line: str) -> bool:
+    """True when a reaction encodes a non-constant stoichiometric coefficient.
+
+    The legacy subset reads stoichiometry as a leading integer coefficient; a
+    coefficient token that does not fold to a number (a parameter or species name)
+    is silently swallowed into the species name instead of scaling the term, so it
+    is rejected rather than mis-parsed.
+    """
+    before_rate = reaction_line.split(";", 1)[0]
+    stoich = before_rate.split(":", 1)[1] if ":" in before_rate else before_rate
+    arrow = arrow_pat.search(stoich)
+    if not arrow:
+        return False
+    both_sides = f"{stoich[: arrow.start()]} + {stoich[arrow.end() :]}"
+    for term in both_sides.split("+"):
+        term = term.strip()
+        if term.startswith("$"):
+            term = term[1:].strip()
+        toks = term.split()
+        if len(toks) >= 2:
+            try:
+                float(sp.sympify(toks[0]))
+            except (TypeError, ValueError, sp.SympifyError):
+                return True
+    return False
+
+
+def _reject_legacy_unsupported_antimony(raw_lines: list[str]) -> None:
+    """Fail closed on Antimony constructs the legacy subset silently mis-handles.
+
+    :func:`parse_antimony` reads a simplified Antimony subset that never models
+    compartments (a ``compartment`` line is swallowed as a junk parameter and a
+    ``species X in comp`` line is dropped), never applies a conversionFactor, and
+    reads only static integer stoichiometry. For a single unit-volume compartment
+    with constant stoichiometry that loss is harmless — amount and concentration
+    coincide and every corpus model round-trips unchanged. For anything else it
+    would produce numerically wrong ODEs with no error, the same failure class the
+    SBML path was fixed for in a171b9b/cc932e4. Those inputs are rejected here, at
+    the parser's trust boundary, with the same structured diagnostic the SBML path
+    raises (``SBMLParseError`` kind ``"unsupported_feature"``).
+    """
+    source = "<antimony-legacy>"
+    compartment_sizes: dict[str, str | None] = {}
+    compartment_order: list[str] = []
+    scalar_assignments: dict[str, str] = {}
+    species_bindings: list[tuple[str, str]] = []
+
+    for kind, content in _iter_antimony_statements(raw_lines):
+        if _CONVERSION_FACTOR_RE.search(content):
+            _raise_unsupported_sbml_feature(
+                "conversionFactor",
+                source=source,
+                detail="the legacy parser cannot apply a species or model conversionFactor",
+            )
+        if kind == "reaction":
+            if _reaction_has_variable_stoichiometry(content):
+                _raise_unsupported_sbml_feature(
+                    "variable stoichiometry",
+                    source=source,
+                    detail=f"non-constant stoichiometric coefficient in reaction {content!r}",
+                )
+            continue
+
+        comp_match = _COMPARTMENT_DECL_RE.match(content)
+        if comp_match:
+            for item in comp_match.group("body").split(","):
+                item = item.strip()
+                if not item:
+                    continue
+                if "=" in item:
+                    name, _, size = item.partition("=")
+                    name, size = name.strip(), size.strip()
+                else:
+                    tokens = item.split()
+                    name, size = (tokens[0] if tokens else ""), None
+                if not name:
+                    continue
+                if name not in compartment_sizes:
+                    compartment_order.append(name)
+                compartment_sizes[name] = size
+            continue
+
+        if content.lower().startswith("species "):
+            species_bindings.extend(_SPECIES_IN_RE.findall(content[len("species ") :]))
+
+        if "=" in content and ":=" not in content:
+            left, _, right = content.partition("=")
+            scalar_assignments[left.strip()] = right.strip()
+
+    if not compartment_sizes:
+        return
+
+    def resolved_size(name: str) -> str | None:
+        inline = compartment_sizes.get(name)
+        return inline if inline is not None else scalar_assignments.get(name)
+
+    if len(compartment_order) > 1:
+        _raise_unsupported_sbml_feature(
+            "multiple compartments",
+            source=source,
+            detail=(
+                f"the legacy parser tracks no compartments; found "
+                f"{len(compartment_order)}: {', '.join(compartment_order)}"
+            ),
+        )
+
+    for name in compartment_order:
+        if not _size_token_is_unit(resolved_size(name)):
+            _raise_unsupported_sbml_feature(
+                "non-unit compartment volume",
+                source=source,
+                detail=f"compartment {name!r} has a non-unit size (={resolved_size(name)})",
+            )
+
+    for species, compartment in species_bindings:
+        if compartment in compartment_sizes and not _size_token_is_unit(
+            resolved_size(compartment)
+        ):
+            _raise_unsupported_sbml_feature(
+                "non-unit compartment volume",
+                source=source,
+                detail=(
+                    f"species {species!r} is placed in non-unit compartment "
+                    f"{compartment!r}"
+                ),
+            )
+
+
 def parse_antimony(text: str) -> ModelIR:
+    warnings.warn(LEGACY_PARSER_DEPRECATION, DeprecationWarning, stacklevel=2)
     ir = ModelIR()
     ir.antimony_text = text  # Cache original text for RoadRunner
     ir.raw_lines = [ln.rstrip() for ln in text.splitlines()]
+    # Fail closed on features the simplified subset cannot correctly interpret
+    # BEFORE the line loop below silently mangles them into junk parameters.
+    _reject_legacy_unsupported_antimony(ir.raw_lines)
     ir.solver_requirement = _extract_solver_requirement_metadata(text) or SolverRequirement.ODE_ONLY
 
     (
@@ -979,6 +1171,22 @@ def _resolve_parameter_dependencies(ir: ModelIR) -> None:
 
 
 def build_sym_system(ir: ModelIR) -> SymSystem:
+    # Defensive fail-close: parse_antimony never populates ir.compartments, but an
+    # IR assembled elsewhere might. The ODE assembly below applies no volume
+    # scaling, so a non-unit compartment would yield silently wrong ODEs; reject it
+    # here as the SBML path does rather than emit an incorrect system.
+    for name, size in getattr(ir, "compartments", {}).items():
+        try:
+            is_unit = float(size) == 1.0
+        except (TypeError, ValueError):
+            is_unit = False
+        if not is_unit:
+            _raise_unsupported_sbml_feature(
+                "non-unit compartment volume",
+                source="<antimony-legacy>",
+                detail=f"compartment {name!r} has non-unit size {size!r}",
+            )
+
     var_syms: dict[str, sp.Symbol] = {
         nm: sp.symbols(nm, positive=True) for nm in sorted(ir.species)
     }
