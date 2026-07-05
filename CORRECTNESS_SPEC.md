@@ -1,6 +1,6 @@
 # ssys Correctness Specification
 
-*Source: CORRECTNESS_SPEC.md | v0.6.0 | 2026-07-04*
+*Source: CORRECTNESS_SPEC.md | v0.6.1 | 2026-07-05*
 
 This document is the local correctness contract for the current `ssys`
 implementation. It defines what the package claims to transform, what the
@@ -398,7 +398,7 @@ Validation is fail-closed:
 - Solver failures cannot be counted as a pass.
 - Reports record the selected profile, required test groups, and a
   machine-readable reason for every non-pass test result.
-- Reports include `schema_version`; v0.6.0 emits schema version `1.0`.
+- Reports include `schema_version`; v0.6.1 emits schema version `1.0`.
 - The packaged JSON Schema is available through
   `ssys.load_validation_report_schema()` and is validated against emitted
   pass/failure reports in local tests.

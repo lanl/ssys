@@ -1,11 +1,11 @@
-# ssys 0.6.0 Release Notes
-*Version: 0.6.0 | Release date: 2026-07-04*
+# ssys 0.6.1 Release Notes
+*Version: 0.6.1 | Release date: 2026-07-05*
 
 ## Release Status
 
 Release maturity: alpha.
 
-ssys 0.6.0 is supported on Python 3.10, 3.11, and 3.12. Python 3.13 is not advertised while ssys depends on the current NumPy 1.x and RoadRunner 2.7.x compatibility range. Platform matrix automation is deferred until hosted project infrastructure exists.
+ssys 0.6.1 is supported on Python 3.10, 3.11, and 3.12. Python 3.13 is not advertised while ssys depends on the current NumPy 1.x and RoadRunner 2.7.x compatibility range. Platform matrix automation is deferred until hosted project infrastructure exists.
 
 Input trust boundary: ssys treats Antimony and SBML inputs as trusted local scientific model files, not as safe untrusted uploads for multi-tenant or security-sensitive services.
 
@@ -22,8 +22,7 @@ Input trust boundary: ssys treats Antimony and SBML inputs as trusted local scie
 
 ## User-Visible Changes
 
-- Added BioModels benchmark reporting for 289 validated models from 978 candidates.
-- Reorganized the BioModels batch workflow scripts into sequential `stepN_` commands.
-- Consolidated BioModels report generation in `biomodels_batch/step6_report.py`.
-- Fixed reserved-keyword sanitization and validation file pattern matching in benchmark reports.
-- Added named validation profiles: `strict`, `structural`, `symbolic`, `numerical`, and `trajectory`.
+- SBML parsing now interprets compartment volume, a species/model `conversionFactor`, and constant `stoichiometryMath` correctly, fixing silently wrong ODEs for models that use them (verified against libRoadRunner).
+- The SBML parser fails closed with a structured `unsupported_feature` error on variable reaction stoichiometry and time-varying compartment volume, which are not power-law-recastable, instead of mis-integrating them.
+- The deprecated legacy Antimony parser (`ssys.parse_antimony` / `--parser legacy`) now fails closed on the same constructs and emits a `DeprecationWarning`; the recast notebook no longer depends on it.
+- Refreshed the BioModels benchmark: 848 transformations (86.7%) and 739 numerically validated models across 978 candidates.

@@ -1,5 +1,5 @@
 # ssys — recast ODEs into canonical S‑system (or GMA) form
-*Source: README.md | v0.6.0 | 2026-07-04*
+*Source: README.md | v0.6.1 | 2026-07-05*
 
 [![PyPI version](https://img.shields.io/pypi/v/ssys.svg)](https://pypi.org/project/ssys/)
 [![Python versions](https://img.shields.io/pypi/pyversions/ssys.svg)](https://pypi.org/project/ssys/)

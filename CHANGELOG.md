@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-07-05
+
+### Release Policy
+- Release maturity: alpha.
+- Supported on Python 3.10, 3.11, and 3.12. Platform matrix automation is deferred until hosted project infrastructure exists.
+- Input trust boundary: Antimony and SBML inputs are trusted local scientific model files, not safe untrusted uploads for multi-tenant or security-sensitive services.
+
 ### Changed
 - SBML parser now rejects, at the trust boundary with a structured
   `unsupported_feature` error, two input classes that were previously accepted
