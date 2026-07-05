@@ -111,3 +111,57 @@ Run this checklist before tagging a public release.
 - Archive dependency versions, command logs, validation reports, benchmark
   summaries, performance reports, and artifact hashes under the local
   `release-evidence/` directory.
+
+## Publish to PyPI
+
+Publishing is automated by `.github/workflows/publish.yml` using PyPI
+[Trusted Publishing](https://docs.pypi.org/trusted-publishers/) (OIDC). No API
+tokens or repository secrets are involved.
+
+### One-time setup (per index)
+
+Register the repository as a trusted publisher on **both** TestPyPI and PyPI.
+For a project that does not exist yet, use the "pending publisher" form
+(Account → Publishing) with these values:
+
+| Field | Value |
+| --- | --- |
+| PyPI Project Name | `ssys` |
+| Owner | `lanl` |
+| Repository name | `ssys` |
+| Workflow name | `publish.yml` |
+| Environment name | `testpypi` (on TestPyPI) / `pypi` (on PyPI) |
+
+- TestPyPI form: <https://test.pypi.org/manage/account/publishing/>
+- PyPI form: <https://pypi.org/manage/account/publishing/>
+
+Optionally add the matching GitHub Environments (`testpypi`, `pypi`) under the
+repository settings to gate publishing behind required reviewers.
+
+### Dry run on TestPyPI
+
+1. Confirm `version` in `pyproject.toml` is the intended release (a version can
+   never be re-uploaded to an index).
+2. Actions → **Publish** → **Run workflow** on the release commit. This builds,
+   runs `twine check`, and uploads to TestPyPI.
+3. Verify a clean install. TestPyPI does not mirror the scientific
+   dependencies, so pull those from PyPI:
+
+   ```bash
+   python -m venv /tmp/ssys-testpypi && . /tmp/ssys-testpypi/bin/activate
+   pip install --index-url https://test.pypi.org/simple/ \
+       --extra-index-url https://pypi.org/simple/ ssys
+   ssys-recast --version
+   ```
+
+### Publish to PyPI
+
+1. Tag the release commit `vX.Y.Z` (matching `pyproject.toml`) and create a
+   GitHub Release from that tag. Publishing the release triggers the `pypi` job.
+2. Confirm the release on <https://pypi.org/project/ssys/> and smoke-test the
+   real install in a clean venv:
+
+   ```bash
+   python -m venv /tmp/ssys-pypi && . /tmp/ssys-pypi/bin/activate
+   pip install ssys && ssys-recast --version
+   ```
