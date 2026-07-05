@@ -1,11 +1,11 @@
-# ssys 0.5.5 Release Notes
-*Version: 0.5.5 | Release date: 2025-12-31*
+# ssys 0.6.0 Release Notes
+*Version: 0.6.0 | Release date: 2026-07-04*
 
 ## Release Status
 
 Release maturity: alpha.
 
-ssys 0.5.5 is supported on Python 3.10, 3.11, and 3.12. Python 3.13 is not advertised while ssys depends on the current NumPy 1.x and RoadRunner 2.7.x compatibility range. Platform matrix automation is deferred until hosted project infrastructure exists.
+ssys 0.6.0 is supported on Python 3.10, 3.11, and 3.12. Python 3.13 is not advertised while ssys depends on the current NumPy 1.x and RoadRunner 2.7.x compatibility range. Platform matrix automation is deferred until hosted project infrastructure exists.
 
 Input trust boundary: ssys treats Antimony and SBML inputs as trusted local scientific model files, not as safe untrusted uploads for multi-tenant or security-sensitive services.
 

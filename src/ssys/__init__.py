@@ -36,8 +36,8 @@ from ssys.validation_schema import (
 )
 from ssys.validator import ValidationProfile, validation_profile_choices
 
-__version__ = "0.5.5"
-__release_date__ = "2025-12-31"
+__version__ = "0.6.0"
+__release_date__ = "2026-07-04"
 __release_maturity__ = "alpha"
 
 __all__ = [

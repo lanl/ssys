@@ -1,6 +1,6 @@
 # ssys Public API
 
-This document defines the intended local public API for the v0.5.5 alpha
+This document defines the intended local public API for the v0.6.0 alpha
 release. Anything not listed here may change without compatibility guarantees
 until the package leaves alpha.
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ssys"
-version = "0.5.5"
+version = "0.6.0"
 description = "Exact algebraic recasting of ODEs to canonical S-system form"
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
@@ -69,7 +69,7 @@ jax = [
 ]
 
 [tool.ssys.release]
-date = "2025-12-31"
+date = "2026-07-04"
 maturity = "alpha"
 support = "Python 3.10, 3.11, and 3.12; platform matrix deferred until hosted automation exists"
 trust-boundary = "trusted local Antimony/SBML scientific model files; not safe for untrusted uploads"

@@ -1,5 +1,5 @@
 # ODE → GMA or S‑System Recast (Antimony → Antimony, with SBML library support)
-*Source: README.md | v0.5.5 | 2025-12-31*
+*Source: README.md | v0.6.0 | 2026-07-04*
 
 This toolkit converts ordinary differential equation (ODE) models into **S‑System** or **GMA** form and writes the result back to Antimony. The command-line interface batch-processes **Antimony** models and generates **Jupyter notebook** verification reports; the Python library can also parse SBML files directly.
 
@@ -429,7 +429,7 @@ with the wheel path recorded in `release-evidence/artifact-smoke/summary.json`:
 
 ```bash
 uv run python tools/run_biomodels_benchmark.py \
-  --artifact release-evidence/artifact-smoke/dist/ssys-0.5.5-py3-none-any.whl \
+  --artifact release-evidence/artifact-smoke/dist/ssys-0.6.0-py3-none-any.whl \
   --evidence-dir release-evidence/biomodels \
   --from-stage filter \
   --force \

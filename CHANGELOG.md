@@ -7,7 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-04
+
+### Release Policy
+- Release maturity: alpha.
+- Supported on Python 3.10, 3.11, and 3.12. Platform matrix automation is deferred until hosted project infrastructure exists.
+- Input trust boundary: Antimony and SBML inputs are trusted local scientific model files, not safe untrusted uploads for multi-tenant or security-sensitive services.
+
 ### Changed
+- Stopped redistributing the third-party BioModels benchmark SBML corpus;
+  `biomodels_batch/data/` is now gitignored and regenerated locally via
+  `step1_fetch.py`.
+- Removed internal-only references (release punchlist notes and an internal
+  issue-tracker URL) from public documentation ahead of the open-source release.
 - Relicensed the project from BSD-3-Clause to the MIT License, adding the Triad
   National Security, LLC / U.S. Government copyright notice for the LANL open-source
   release (LANL reference O5066). Updated `LICENSE`, `pyproject.toml`, `CITATION.cff`,
