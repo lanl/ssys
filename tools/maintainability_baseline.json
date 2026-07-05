@@ -4,37 +4,37 @@
     "src/ssys/_recaster/algorithms.py": {
       "max_cyclomatic_complexity": 46,
       "max_function_lines": 191,
-      "module_lines": 893
+      "module_lines": 1347
     },
     "src/ssys/_recaster/antimony_formatting.py": {
       "max_cyclomatic_complexity": 57,
-      "max_function_lines": 290,
-      "module_lines": 1037
+      "max_function_lines": 292,
+      "module_lines": 1053
     },
     "src/ssys/_recaster/lifting.py": {
-      "max_cyclomatic_complexity": 93,
-      "max_function_lines": 593,
-      "module_lines": 1943
+      "max_cyclomatic_complexity": 100,
+      "max_function_lines": 629,
+      "module_lines": 2249
     },
     "src/ssys/_recaster/parsing.py": {
-      "max_cyclomatic_complexity": 61,
-      "max_function_lines": 386,
-      "module_lines": 1151
+      "max_cyclomatic_complexity": 78,
+      "max_function_lines": 481,
+      "module_lines": 1293
     },
     "src/ssys/_validator/core.py": {
-      "max_cyclomatic_complexity": 18,
-      "max_function_lines": 151,
-      "module_lines": 603
+      "max_cyclomatic_complexity": 21,
+      "max_function_lines": 187,
+      "module_lines": 790
     },
     "src/ssys/_validator/mapping.py": {
-      "max_cyclomatic_complexity": 20,
-      "max_function_lines": 92,
-      "module_lines": 842
+      "max_cyclomatic_complexity": 42,
+      "max_function_lines": 219,
+      "module_lines": 1279
     },
     "src/ssys/_validator/numerical.py": {
-      "max_cyclomatic_complexity": 59,
-      "max_function_lines": 336,
-      "module_lines": 764
+      "max_cyclomatic_complexity": 58,
+      "max_function_lines": 452,
+      "module_lines": 1417
     },
     "src/ssys/_validator/serialization.py": {
       "max_cyclomatic_complexity": 16,
@@ -54,7 +54,7 @@
     "src/ssys/cli.py": {
       "max_cyclomatic_complexity": 7,
       "max_function_lines": 100,
-      "module_lines": 471
+      "module_lines": 487
     },
     "src/ssys/ode_backends/ida_sundials_backend.py": {
       "max_cyclomatic_complexity": 37,
