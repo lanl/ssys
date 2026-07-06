@@ -29,8 +29,9 @@ cat > "$MANUSCRIPT" <<'EOF'
 ---
 title: 'ssys: Exact algebraic recasting of ODE models into S-system or GMA form'
 author: 'William S. Hlavacek'
-date: '2026-07-02'
+date: '2026-07-06'
 bibliography: '../paper.bib'
+csl: '../apa.csl'
 link-citations: true
 geometry: margin=1in
 fontsize: 11pt
