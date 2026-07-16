@@ -5,14 +5,12 @@ import argparse
 import json
 import os
 import sys
-import warnings
 
 import nbformat
 from nbformat.v4 import new_code_cell, new_markdown_cell, new_notebook
 
 import ssys
-from ssys import build_sym_system, parse_antimony, recast_to_ssystem, ssystem_to_antimony
-from ssys._recaster.parsing import LEGACY_PARSER_DEPRECATION
+from ssys import recast_to_ssystem, ssystem_to_antimony
 from ssys.metadata import _extract_sim_metadata
 from ssys.parsing import parse_antimony_via_sbml
 from ssys.validator import (
@@ -142,7 +140,6 @@ def recast_file(
     out_dir: str,
     mode: str = "simplified",
     validate: bool = False,
-    parser: str = "sbml",
     validation_profile: str = "strict",
 ) -> tuple[str, str, str, str | None]:
     """
@@ -153,9 +150,6 @@ def recast_file(
         out_dir: Output directory for recast file
         mode: Output mode ('simplified' or 'canonical')
         validate: Whether to run validation tests
-        parser: Parser to use ('sbml' or 'legacy')
-            - 'sbml': RoadRunner → SBML → libSBML (reference Antimony parser)
-            - 'legacy': Hand-rolled regex parser retained for explicit compatibility use
         validation_profile: Named validation profile to use when validate=True
 
     Returns:
@@ -163,23 +157,14 @@ def recast_file(
         validation_json_path is None if validate=False
     """
     name = os.path.splitext(os.path.basename(ant_path))[0]
-    if parser == "legacy":
-        warnings.warn(LEGACY_PARSER_DEPRECATION, DeprecationWarning, stacklevel=2)
 
     txt = open(ant_path).read()
 
     # Extract @SIM metadata FIRST (before any parsing)
-    # This works for both parser modes
     t_start, t_end, n_steps, eps_init, eps_slack = _extract_sim_metadata(txt)
 
-    # Parse based on selected parser
-    if parser == "sbml":
-        # SBML-first: RoadRunner parses Antimony → SBML → libSBML extracts ODEs
-        sym = parse_antimony_via_sbml(txt)
-    else:
-        # Legacy: Hand-rolled regex parser
-        ir = parse_antimony(txt)
-        sym = build_sym_system(ir)
+    # SBML-first: libAntimony parses Antimony → SBML → libSBML extracts ODEs
+    sym = parse_antimony_via_sbml(txt)
 
     # Set @SIM metadata on sym so recast_to_ssystem can propagate it
     # This ensures the recast output includes proper simulation parameters
@@ -211,7 +196,6 @@ def recast_file(
                 out_path,
                 mode=mode,
                 output_json=validation_json_path,
-                parser=parser,
                 profile=validation_profile,
             )
             if not report.overall_pass:
@@ -328,7 +312,6 @@ def _recast_manifest_models(args: argparse.Namespace, ant_files: list[str]) -> l
                     args.outdir,
                     mode=args.mode,
                     validate=args.validate,
-                    parser=args.parser,
                     validation_profile=args.validation_profile,
                 )
             )
@@ -447,12 +430,6 @@ def main():
             "Keep best-effort batch behavior when --validate reports failures. "
             "By default validation failures make the CLI exit nonzero."
         ),
-    )
-    parser.add_argument(
-        "--parser",
-        choices=["legacy", "sbml"],
-        default="sbml",
-        help="Antimony parser: 'sbml' (RoadRunner reference, default) or 'legacy' (regex)",
     )
     parser.add_argument(
         "--version",

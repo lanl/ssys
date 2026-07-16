@@ -179,7 +179,7 @@ def _expand_parametric_functions(text: str) -> str:
     This is NOT standard Antimony syntax, but is commonly used in
     mathematical biology papers for readability.
 
-    Delegates to the parser-level implementation so legacy parsing and
+    Delegates to the parser-level implementation so Antimony parsing and
     RoadRunner preprocessing preserve the same function-substitution semantics.
     """
     return expand_antimony_function_templates(text)

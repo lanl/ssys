@@ -555,10 +555,6 @@ class TestProductExpr:
         assert result == 3
 
 
-def _forbid_legacy_parser(*_args, **_kwargs):
-    raise AssertionError("load_and_report must not call the deprecated legacy parser")
-
-
 class TestLoadAndReport:
     """Smoke tests for the rendered notebook report workflow."""
 
@@ -581,8 +577,6 @@ class TestLoadAndReport:
         monkeypatch.setattr(nh, "display", lambda obj: rendered.append(obj))
         monkeypatch.setattr(nh.plt, "show", lambda: None)
         monkeypatch.setattr(nh, "parse_antimony_via_sbml", lambda text: sym)
-        # Report simulation is driven by the SBML SymSystem, never the legacy parser.
-        monkeypatch.setattr(nh.ssys, "parse_antimony", _forbid_legacy_parser)
         monkeypatch.setattr(nh.ssys, "recast_to_ssystem", lambda parsed, mode="simplified": rec)
 
         def fake_simulate_ode(model_ir, t_start, t_end, n_points):
@@ -619,7 +613,6 @@ class TestLoadAndReport:
         rendered = []
         monkeypatch.setattr(nh, "display", lambda obj: rendered.append(obj))
         monkeypatch.setattr(nh, "parse_antimony_via_sbml", lambda text: sym)
-        monkeypatch.setattr(nh.ssys, "parse_antimony", _forbid_legacy_parser)
         monkeypatch.setattr(nh.ssys, "recast_to_ssystem", lambda parsed, mode="simplified": rec)
         monkeypatch.setattr(
             "ssys.ode_backends.simulate_ode",
@@ -636,12 +629,12 @@ class TestLoadAndReport:
 
         assert any("forced failure" in getattr(item, "data", str(item)) for item in rendered)
 
-    def test_load_and_report_simulates_non_unit_compartment_without_legacy(
+    def test_load_and_report_simulates_non_unit_compartment(
         self, tmp_path, monkeypatch
     ):
-        """A non-unit-compartment model — which the legacy parser now rejects —
-        still renders a full simulation section, because the report drives
-        RoadRunner from the SBML SymSystem's cached Antimony text."""
+        """A non-unit-compartment model still renders a full simulation section,
+        because the report drives RoadRunner from the SBML SymSystem's cached
+        Antimony text."""
         ant_text = (
             "model nonunit()\n"
             "  compartment cell = 2;\n"
@@ -659,19 +652,9 @@ class TestLoadAndReport:
         recast_path = tmp_path / "nonunit_recast.ant"
         recast_path.write_text(rec_text)
 
-        # Guard: the legacy parser would fail closed on this model, so the report
-        # must never touch it.
-        sanity_error = None
-        try:
-            nh.ssys.parse_antimony(ant_text)
-        except Exception as exc:  # noqa: BLE001 - record the fail-close for the assertion
-            sanity_error = exc
-        assert sanity_error is not None, "legacy parser was expected to reject this model"
-
         rendered = []
         monkeypatch.setattr(nh, "display", lambda obj: rendered.append(obj))
         monkeypatch.setattr(nh.plt, "show", lambda: None)
-        monkeypatch.setattr(nh.ssys, "parse_antimony", _forbid_legacy_parser)
 
         nh.load_and_report(str(ant_path), str(recast_path), T=2.0, steps=5)
 

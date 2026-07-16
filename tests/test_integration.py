@@ -64,8 +64,6 @@ def test_cli_recasts_tiny_manifest_as_subprocess(tmp_path: Path):
         str(outdir),
         "--mode",
         "simplified",
-        "--parser",
-        "legacy",
     ]
 
     result = subprocess.run(
@@ -137,7 +135,6 @@ def test_recast_all_models(test_dir: str, mode: str, tmp_path: Path):
         "--manifest", str(manifest),
         "--outdir", str(outdir),
         "--mode", mode,
-        "--parser", "sbml",
         "--validate"
     ]
 

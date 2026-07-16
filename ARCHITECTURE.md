@@ -30,15 +30,13 @@ Primary parser path:
    constraints, and solver requirements.
 4. SBML math is converted to SymPy expressions using explicit parser helpers
    and checked for unsupported or ambiguous features.
-5. `build_sym_system()` converts parsed data into the internal symbolic
-   representation.
+5. `_parse_sbml_document()` assembles the extracted data into the internal
+   `SymSystem` symbolic representation, ready for recasting.
 
-Legacy parser path:
-
-1. `parse_antimony()` provides a hand-rolled compatibility parser.
-2. The CLI exposes it only with `--parser legacy`.
-3. New release evidence should prefer the SBML-first parser unless a test is
-   specifically covering legacy compatibility.
+The SBML-first path is the only Antimony parser. The former hand-rolled
+`parse_antimony()`/`build_sym_system()` compatibility parser and the
+`--parser` flag were removed (see CHANGELOG); every code path uses the
+SBML-first parser.
 
 Unsupported input ownership:
 

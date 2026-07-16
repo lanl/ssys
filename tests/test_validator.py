@@ -1939,7 +1939,7 @@ class TestSolverAwareValidation:
             end
         """)
 
-        validator = RecastValidator(str(original), str(recast), parser="legacy")
+        validator = RecastValidator(str(original), str(recast))
         result = validator.check_numerical_pointwise(n_samples=8, threshold=1.0e-9)
 
         assert result.result == ValidationResult.FAIL
@@ -2847,7 +2847,7 @@ class TestRecastValidator:
         """Test validator initialization."""
         orig, recast = simple_model_paths
 
-        validator = RecastValidator(orig, recast, parser="legacy")
+        validator = RecastValidator(orig, recast)
 
         assert validator.original_file == orig
         assert validator.recast_file == recast
@@ -2859,7 +2859,7 @@ class TestRecastValidator:
         """Test symbolic equivalence check."""
         orig, recast = simple_model_paths
 
-        validator = RecastValidator(orig, recast, parser="legacy")
+        validator = RecastValidator(orig, recast)
         result = validator.check_symbolic_equivalence(timeout=5.0)
 
         assert result.name == "symbolic_equivalence"
@@ -3182,35 +3182,6 @@ class TestRecastValidatorAuxiliaryExtraction:
 
         validator._infer_auxiliary_definitions()
 
-    def test_extract_auxiliary_from_assignment(self, tmp_path):
-        """Test extracting auxiliary from assignment rules."""
-        original = tmp_path / "original.ant"
-        original.write_text("""
-            X' = -k*X
-            k = 0.5
-            X = 1.0
-        """)
-
-        recast = tmp_path / "recast.ant"
-        recast.write_text("""
-            // Original ODE for X: -k*X
-            // Auxiliary mapping: X -> [Z_1]
-            model recast
-                species Z_1;
-                Z_1 := X  // Assignment rule
-                Z_1' = -k * Z_1
-                k = 0.5
-                X = 1.0
-            end
-        """)
-
-        validator = RecastValidator(str(original), str(recast), parser="legacy")
-
-        assert validator.recast_ir.assignment_rules == {"Z_1": "X"}
-        assert validator.recast_odes[sp.Symbol("Z_1", positive=True)] == (
-            -sp.Symbol("Z_1", positive=True) * sp.Symbol("k", positive=True)
-        )
-
 
 class TestAuxiliaryIdentityValidation:
     """Tests for auxiliary and observable identity validation."""
@@ -3361,7 +3332,7 @@ class TestAuxiliaryIdentityValidation:
             end
         """)
 
-        validator = RecastValidator(str(original), str(recast), parser="legacy")
+        validator = RecastValidator(str(original), str(recast))
         report = validator.validate(
             run_symbolic=False,
             run_numerical=False,
@@ -3438,7 +3409,7 @@ class TestRecastValidatorEdgeCases:
             end
         """)
 
-        validator = RecastValidator(str(original), str(recast), parser="legacy")
+        validator = RecastValidator(str(original), str(recast))
 
         reason = validator._extract_refusal_reason(recast.read_text())
         assert reason == "Model contains unsupported features"
@@ -3462,7 +3433,7 @@ class TestRecastValidatorEdgeCases:
             end
         """)
 
-        validator = RecastValidator(str(original), str(recast), parser="legacy")
+        validator = RecastValidator(str(original), str(recast))
         result = validator.check_mapping_complete()
 
         assert result.result == ValidationResult.FAIL
@@ -3485,21 +3456,25 @@ class TestVariableICollisionWithSpI:
         original = tmp_path / "original.ant"
         original.write_text("""
             // Simple SIR-like model with variable I
-            S' = -beta*S*I
-            I' = beta*S*I - gamma*I
-            R' = gamma*I
+            model sir()
+                species S, I, R;
+                S' = -beta*S*I;
+                I' = beta*S*I - gamma_rate*I;
+                R' = gamma_rate*I;
 
-            beta = 0.3
-            gamma = 0.1
-            S = 0.99
-            I = 0.01
-            R = 0.0
+                beta = 0.3;
+                gamma_rate = 0.1;
+                S = 0.99;
+                I = 0.01;
+                R = 0.0;
+            end
         """)
 
         # Simplified recast (2 terms per ODE)
         recast = tmp_path / "recast.ant"
         recast.write_text("""
             model recast()
+            species Z_1, Z_2, Z_3, Z_4, Z_5;
             // ============================================================
             // AUXILIARY DEFINITIONS (for lifted variables)
             // ============================================================
@@ -3508,23 +3483,23 @@ class TestVariableICollisionWithSpI:
             // R -> [Z_5]
             // ============================================================
 
-            Z_1' = -beta * Z_1 * Z_2^-1 * Z_3 * Z_4
-            Z_2' = -beta * Z_2 * Z_1^-1 * Z_3 * Z_4
-            Z_3' = beta * Z_1 * Z_2 * Z_3^-1
-            Z_4' = -gamma * Z_4
-            Z_5' = gamma * Z_3 * Z_4 * Z_5^-1
+            Z_1' = -beta * Z_1 * Z_2^-1 * Z_3 * Z_4;
+            Z_2' = -beta * Z_2 * Z_1^-1 * Z_3 * Z_4;
+            Z_3' = beta * Z_1 * Z_2 * Z_3^-1;
+            Z_4' = -gamma_rate * Z_4;
+            Z_5' = gamma_rate * Z_3 * Z_4 * Z_5^-1;
 
-            beta = 0.3
-            gamma = 0.1
-            Z_1 = 0.99
-            Z_2 = 1.0
-            Z_3 = 0.01
-            Z_4 = 1.0
-            Z_5 = 1e-06
+            beta = 0.3;
+            gamma_rate = 0.1;
+            Z_1 = 0.99;
+            Z_2 = 1.0;
+            Z_3 = 0.01;
+            Z_4 = 1.0;
+            Z_5 = 1e-06;
             end
         """)
 
-        validator = RecastValidator(str(original), str(recast), parser="legacy")
+        validator = RecastValidator(str(original), str(recast))
         result = validator.check_symbolic_equivalence(timeout=10.0)
 
         assert result is not None
@@ -3618,7 +3593,7 @@ class TestTimeDependentValidation:
             end
         """)
 
-        validator = RecastValidator(str(original), str(recast), parser="legacy")
+        validator = RecastValidator(str(original), str(recast))
         result = validator.check_symbolic_equivalence(timeout=10.0)
 
         assert result is not None
@@ -3654,7 +3629,7 @@ class TestTimeDependentValidation:
             end
         """)
 
-        validator = RecastValidator(str(original), str(recast), parser="legacy")
+        validator = RecastValidator(str(original), str(recast))
         result = validator.check_numerical_pointwise(n_samples=100)
 
         assert result is not None

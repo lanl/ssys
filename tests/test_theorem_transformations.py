@@ -2,7 +2,7 @@
 
 import sympy as sp
 
-from ssys import SymSystem, build_sym_system, parse_antimony, recast_to_ssystem
+from ssys import SymSystem, parse_antimony_via_sbml, recast_to_ssystem
 from ssys._recaster.algorithms import _pool_ssystem_recast
 from ssys.formatting import ssystem_to_antimony
 from ssys.types import RecastResult, RecastStatus, SolverRequirement
@@ -130,7 +130,7 @@ def _assert_auxiliary_chain_rule(
 
 def _generated_system(rec: RecastResult, *, model_name: str, mode: str = "simplified") -> SymSystem:
     antimony = ssystem_to_antimony(rec, model_name=model_name, mode=mode)
-    return build_sym_system(parse_antimony(antimony))
+    return parse_antimony_via_sbml(antimony)
 
 
 def _ode_by_name(sym: SymSystem, name: str) -> sp.Expr:

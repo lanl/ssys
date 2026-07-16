@@ -9,8 +9,7 @@ import sympy as sp
 
 import ssys
 from ssys import (
-    build_sym_system,
-    parse_antimony,
+    parse_antimony_via_sbml,
     recast_to_ssystem,
     ssystem_to_antimony,
 )
@@ -54,62 +53,7 @@ def _minimal_sbml(
 
 
 class TestAntimonyParser:
-    """Tests for Antimony parsing."""
-
-    def test_parse_simple_reaction(self):
-        """Test parsing a simple reaction."""
-        text = """
-        model simple
-        A -> B; k*A
-        k = 0.1
-        A = 10
-        B = 0
-        end
-        """
-        ir = parse_antimony(text)
-        assert "A" in ir.species
-        assert "B" in ir.species
-        assert "k" in ir.params
-        assert len(ir.reactions) == 1
-
-    def test_parse_explicit_ode(self):
-        """Test parsing explicit ODE (X' = ...)."""
-        text = """
-        X' = -k*X
-        k = 0.5
-        X = 1.0
-        """
-        ir = parse_antimony(text)
-        assert "X" in ir.species
-        assert "X" in ir.explicit_rates
-        assert ir.explicit_rates["X"] == "-k*X"
-
-    def test_legacy_parser_records_boundary_const_algebraic_and_symbolic_initials(self):
-        """Small local parser constructs should preserve their diagnostic metadata."""
-        from ssys.recaster import SolverRequirement
-
-        text = """
-        model parser_edges()
-          J0: 2 S -> P; k*S
-          $S' = -k*S
-          const k = 0.5
-          $B = 2.0
-          0 = P - S
-          X = k + 1
-          obs := X + time
-        end
-        """
-
-        ir = parse_antimony(text)
-
-        assert ir.reactions[0].lhs == [(2, "S")]
-        assert ir.boundary == {"S", "B"}
-        assert ir.explicit_rates["S"] == "-k*S"
-        assert ir.params["k"] == 0.5
-        assert ir.algebraic_constraints == ["P - S"]
-        assert ir.solver_requirement == SolverRequirement.DAE_REQUIRED
-        assert ir.initial_exprs["X"] == "k + 1"
-        assert ir.assignment_rules == {"obs": "X + time"}
+    """Tests for Antimony parsing (SBML-first path) and shared parser helpers."""
 
     def test_parser_helper_branches_are_structured(self):
         """Tokenization, substitutions, and SBML helper branches have stable contracts."""
@@ -123,12 +67,6 @@ class TestAntimonyParser:
             _unique_identifier,
         )
         from ssys.recaster import SBMLParseError
-
-        assert parse_antimony("$A + two B").reactions == []
-        assert ssys.recaster.tokenize_species_side("$A + two B") == [
-            (1, "A"),
-            (1, "two B"),
-        ]
 
         X, k = sp.symbols("X k")
         assert _numeric_param_subs(X + k, {}) == X + k
@@ -269,38 +207,6 @@ class TestAntimonyParser:
         assert sp.simplify(sym.odes[S] + expected) == 0
         assert sp.simplify(sym.odes[P] - expected) == 0
 
-    def test_function_template_substitution_parenthesizes_expression_arguments(self):
-        """Regression: f(x+1) must not become X + 1/(X + 2)."""
-        text = """
-        f(x) := x/(1+x)
-        g(x) := f(x+1)
-        X' = g(X)
-        X = 1.0
-        """
-        ir = parse_antimony(text)
-        sym = build_sym_system(ir)
-
-        X = sp.Symbol("X", positive=True)
-        expected = (X + 1) / (X + 2)
-
-        assert sp.simplify(sym.odes[X] - expected) == 0
-
-    def test_nested_multi_argument_function_templates_still_expand(self):
-        """Nested calls and multi-argument templates use the shared expander."""
-        text = """
-        f(x, y) := x/(1+y)
-        g(x) := f(x+1, x*2)
-        X' = g(X)
-        X = 1.0
-        """
-        ir = parse_antimony(text)
-        sym = build_sym_system(ir)
-
-        X = sp.Symbol("X", positive=True)
-        expected = (X + 1) / (1 + 2 * X)
-
-        assert sp.simplify(sym.odes[X] - expected) == 0
-
     def test_roadrunner_preprocessor_uses_shared_function_expansion(self):
         """RoadRunner backend expands legacy templates before Antimony parsing."""
         import antimony
@@ -390,8 +296,7 @@ class TestSymbolicSystem:
         A = 10.0
         B = 0.0
         """
-        ir = parse_antimony(text)
-        sym = build_sym_system(ir)
+        sym = parse_antimony_via_sbml(text)
 
         assert len(sym.vars) == 2
         A = sp.Symbol("A", positive=True)
@@ -403,12 +308,12 @@ class TestSymbolicSystem:
     def test_exponential_decay(self):
         """Test exponential decay model."""
         text = """
+        species X
         X' = -k*X
         k = 0.5
         X = 1.0
         """
-        ir = parse_antimony(text)
-        sym = build_sym_system(ir)
+        sym = parse_antimony_via_sbml(text)
         X = sp.Symbol("X", positive=True)
         k = sp.Symbol("k", positive=True)
 
@@ -425,12 +330,12 @@ class TestRecasting:
     def test_recast_exponential_decay(self):
         """Test recasting exponential decay to S-system."""
         text = """
+        species X
         X' = -k*X
         k = 0.5
         X = 1.0
         """
-        ir = parse_antimony(text)
-        sym = build_sym_system(ir)
+        sym = parse_antimony_via_sbml(text)
         rec = recast_to_ssystem(sym)
 
         # Should have one original variable
@@ -446,13 +351,13 @@ class TestRecasting:
     def test_recast_two_term_ode(self):
         """Test that an already canonical S-system is preserved."""
         text = """
+        species X
         X' = a*X - b*X^2
         a = 1.0
         b = 0.1
         X = 0.5
         """
-        ir = parse_antimony(text)
-        sym = build_sym_system(ir)
+        sym = parse_antimony_via_sbml(text)
         rec = recast_to_ssystem(sym)
 
         X = sp.Symbol("X", positive=True)
@@ -464,12 +369,12 @@ class TestRecasting:
     def test_recast_preserves_initial_conditions(self):
         """Test that initial conditions are preserved in recasting."""
         text = """
+        species X
         X' = -k*X
         k = 0.5
         X = 2.5
         """
-        ir = parse_antimony(text)
-        sym = build_sym_system(ir)
+        sym = parse_antimony_via_sbml(text)
         rec = recast_to_ssystem(sym)
 
         X = sp.Symbol("X", positive=True)
@@ -483,14 +388,14 @@ class TestRecasting:
     def test_canonical_naming(self):
         """Test that auxiliaries are named canonically (Z_1, Z_2, ...)."""
         text = """
+        species A
         A' = k1*A + k3*A^3 - k2*A^2
         k1 = 1.0
         k2 = 0.5
         k3 = 0.2
         A = 1.0
         """
-        ir = parse_antimony(text)
-        sym = build_sym_system(ir)
+        sym = parse_antimony_via_sbml(text)
         rec = recast_to_ssystem(sym)
 
         # Check that auxiliary names follow Z_1, Z_2 pattern (Z prefix avoids collision)
@@ -505,12 +410,12 @@ class TestAntimonyExport:
     def test_export_simple_system(self):
         """Test exporting a simple recast system."""
         text = """
+        species X
         X' = -k*X
         k = 0.5
         X = 1.0
         """
-        ir = parse_antimony(text)
-        sym = build_sym_system(ir)
+        sym = parse_antimony_via_sbml(text)
         rec = recast_to_ssystem(sym)
         output = ssystem_to_antimony(rec, model_name="test_recast")
 
@@ -526,11 +431,11 @@ class TestEdgeCases:
     def test_zero_rhs(self):
         """Test handling of zero RHS (X' = 0)."""
         text = """
+        species X
         X' = 0
         X = 1.0
         """
-        ir = parse_antimony(text)
-        sym = build_sym_system(ir)
+        sym = parse_antimony_via_sbml(text)
         rec = recast_to_ssystem(sym)
 
         # Should still create auxiliary variables
@@ -541,11 +446,11 @@ class TestEdgeCases:
     def test_constant_term(self):
         """Test handling of constant term in ODE."""
         text = """
+        species X
         X' = 1.5
         X = 0.0
         """
-        ir = parse_antimony(text)
-        sym = build_sym_system(ir)
+        sym = parse_antimony_via_sbml(text)
         rec = recast_to_ssystem(sym)
 
         # Should create auxiliary for constant
@@ -652,12 +557,13 @@ class TestCompartmentPreservation:
 class TestEpsInitMetadata:
     """Tests for user-configurable EPS_INIT via @SIM metadata."""
 
-    def test_all_sim_metadata_preserved_in_legacy_and_sbml_parsers(self):
-        """Both parser modes should use shared @SIM metadata extraction."""
-        from ssys.recaster import build_sym_system, parse_antimony, parse_antimony_via_sbml
+    def test_all_sim_metadata_preserved(self):
+        """The SBML-first parser uses shared @SIM metadata extraction."""
+        from ssys.recaster import parse_antimony_via_sbml
 
         text = """
         model sim_metadata_test()
+        species X
         X' = -k*X
         k = 0.5
         X = 1.0
@@ -665,22 +571,18 @@ class TestEpsInitMetadata:
         // @SIM T_START=1 T_END=25 N_STEPS=123 EPS_INIT=1e-8 EPS_SLACK=1e-5
         """
 
-        legacy_ir = parse_antimony(text)
-        legacy_sym = build_sym_system(legacy_ir)
         sbml_sym = parse_antimony_via_sbml(text)
 
-        for parsed in (legacy_ir, legacy_sym, sbml_sym):
-            assert parsed.sim_t_start == 1.0
-            assert parsed.sim_t_end == 25.0
-            assert parsed.sim_n_steps == 123
-            assert parsed.eps_init == 1e-8
-            assert parsed.eps_slack == 1e-5
+        assert sbml_sym.sim_t_start == 1.0
+        assert sbml_sym.sim_t_end == 25.0
+        assert sbml_sym.sim_n_steps == 123
+        assert sbml_sym.eps_init == 1e-8
+        assert sbml_sym.eps_slack == 1e-5
 
     def test_cohesive_module_surfaces_preserve_backward_compatible_imports(self):
         """New cohesive modules expose the same public objects as ssys.recaster."""
         from ssys import formatting, lifting, parsing, recaster, recasting
 
-        assert parsing.parse_antimony is recaster.parse_antimony
         assert parsing.parse_antimony_via_sbml is recaster.parse_antimony_via_sbml
         assert lifting.lift_rational_functions is recaster.lift_rational_functions
         assert recasting.recast_to_ssystem is recaster.recast_to_ssystem

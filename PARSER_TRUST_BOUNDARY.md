@@ -17,11 +17,10 @@ Antimony or SBML text in security-sensitive environments.
 
 | Mode | Entry points | Status | Trust boundary |
 | --- | --- | --- | --- |
-| SBML-first Antimony | `ssys.parse_antimony_via_sbml()`, CLI `--parser sbml` | Preferred default | Trusted local Antimony is parsed by the reference Antimony implementation, converted to SBML, read with libSBML, and then checked by ssys formula gates before SymPy conversion. |
+| SBML-first Antimony | `ssys.parse_antimony_via_sbml()`, `ssys-recast` | Only Antimony parser | Trusted local Antimony is parsed by the reference Antimony implementation, converted to SBML, read with libSBML, and then checked by ssys formula gates before SymPy conversion. |
 | Direct SBML | `ssys.parse_sbml()`, `ssys.parse_sbml_from_string()` | Supported Python API | Trusted local SBML is read by libSBML and checked for supported features and formula identifiers/functions before symbolic conversion. |
-| Legacy Antimony | `ssys.parse_antimony()`, CLI `--parser legacy` | Compatibility-only and deprecated | Trusted local Antimony subset parsed by hand-rolled regex helpers. New release evidence should prefer SBML-first parsing. |
 
-No `--parser hardened` or `parser="hardened"` mode exists. If future hosted or
+No hardened parser mode or `parser="hardened"` option exists. If future hosted or
 multi-tenant use is required, it needs a separate design with process isolation,
 resource limits, dependency sandboxing, parser timeouts, and adversarial corpus
 testing.

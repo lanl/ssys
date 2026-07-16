@@ -25,7 +25,7 @@ from ssys.classification import (
     classify_sym_system_solver_requirement,
     classify_system,
 )
-from ssys.parsing import build_sym_system, parse_antimony, parse_antimony_via_sbml
+from ssys.parsing import parse_antimony_via_sbml
 from ssys.types import SBMLParseError, SolverRequirement, SystemClass
 
 _UNSUPPORTED_VALIDATION_PARSER_FUNCTIONS = frozenset({
@@ -189,36 +189,19 @@ class RecastValidator(
         _notify_progress(progress_callback, "validator_parser_original_read")
         orig_text = open(original_file).read()
 
-        # Parse both models using the specified parser
-        if parser == "sbml":
-            # SBML-first parser (reference Antimony implementation)
-            _notify_progress(progress_callback, "validator_parser_original_sbml")
-            self.orig_system = parse_antimony_via_sbml(
-                orig_text,
-                progress_callback=progress_callback,
-                progress_prefix="validator_parser_original_sbml",
-            )
-            _notify_progress(progress_callback, "validator_parser_recast_sbml")
-            self.recast_system = parse_antimony_via_sbml(
-                recast_text,
-                progress_callback=progress_callback,
-                progress_prefix="validator_parser_recast_sbml",
-            )
-        else:
-            # Legacy parser
-            _notify_progress(progress_callback, "validator_parser_original_legacy_parse")
-            orig_ir = parse_antimony(orig_text)
-            _notify_progress(progress_callback, "validator_parser_original_legacy_build")
-            self.orig_system = build_sym_system(orig_ir)
-            # Attach original Antimony text for RoadRunner simulation
-            # Note: roadrunner_backend checks for 'antimony_text' attribute
-            self.orig_system.antimony_text = orig_text
-
-            _notify_progress(progress_callback, "validator_parser_recast_legacy_parse")
-            recast_ir = parse_antimony(recast_text)
-            _notify_progress(progress_callback, "validator_parser_recast_legacy_build")
-            self.recast_system = build_sym_system(recast_ir)
-            self.recast_system.antimony_text = recast_text
+        # Parse both models with the SBML-first parser (reference Antimony impl)
+        _notify_progress(progress_callback, "validator_parser_original_sbml")
+        self.orig_system = parse_antimony_via_sbml(
+            orig_text,
+            progress_callback=progress_callback,
+            progress_prefix="validator_parser_original_sbml",
+        )
+        _notify_progress(progress_callback, "validator_parser_recast_sbml")
+        self.recast_system = parse_antimony_via_sbml(
+            recast_text,
+            progress_callback=progress_callback,
+            progress_prefix="validator_parser_recast_sbml",
+        )
 
         # Create aliases for backward compatibility with code using orig_ir/recast_ir
         # SymSystem has the same key attributes: params, assignment_rules

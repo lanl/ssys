@@ -30,8 +30,7 @@ Antimony in, Antimony out — in Python, using only the stable top‑level API:
 import ssys
 
 text = open("model.ant").read()
-ir = ssys.parse_antimony(text)                    # Antimony -> intermediate model
-sym = ssys.build_sym_system(ir)                   # -> symbolic ODE system
+sym = ssys.parse_antimony_via_sbml(text)          # Antimony -> symbolic ODE system
 result = ssys.recast_to_ssystem(sym, mode="simplified")
 antimony = ssys.ssystem_to_antimony(result, model_name="model_recast", mode="simplified")
 
@@ -39,7 +38,7 @@ open("model_recast.ant", "w").write(antimony)
 print("recast as:", ssys.classify_result(result, mode="simplified").value)
 ```
 
-Already have SBML? Replace the first three lines with
+Already have SBML? Replace the first two lines with
 `sym = ssys.parse_sbml("model.xml")`.
 
 From the command line, the `ssys-recast` tool works on a **manifest** — a text
@@ -163,15 +162,10 @@ see [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) for the procedure.
 - **Missing DAE backend.** DAE‑required trajectory validation needs the `dae`
   extra (`uv sync --extra dev --extra dae`); missing IDA/SUNDIALS is reported as
   `unsupported`.
-- **Parser errors.** The default `--parser sbml` path parses Antimony through the
-  reference implementation and SBML/libSBML; unsupported features (events, delays,
-  unknown functions, malformed input) are rejected before any artifact is written.
-  `--parser legacy` (and a direct `ssys.parse_antimony(...)` call) is
-  compatibility‑only and deprecated: it reads a simplified single‑unit‑compartment
-  subset and now **rejects** — rather than silently mis‑integrates — a non‑unit or
-  multiple compartment, a `conversionFactor`, and variable stoichiometry, with the
-  same structured `unsupported_feature` error. Use the supported `sbml` parser for
-  those models.
+- **Parser errors.** `ssys-recast` parses Antimony through the reference
+  implementation and SBML/libSBML (`ssys.parse_antimony_via_sbml`); unsupported
+  features (events, delays, unknown functions, malformed input) are rejected before
+  any artifact is written.
 - **Numerical sampling failures.** `invalid_sampling_domain` means the model
   metadata gave no usable finite positive domain; `nonfinite_sample` means a
   sampled point hit a singular surface. Reports record the seed, sampled ranges,

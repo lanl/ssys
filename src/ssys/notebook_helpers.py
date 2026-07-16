@@ -558,13 +558,10 @@ def load_and_report(
     ant_text = open(ant_path).read()
     rec_text = open(recast_path).read()
 
-    # Parse original model using SBML-based parser (same as CLI).
+    # Parse original model using the SBML-based parser (same as CLI).
     # parse_antimony_via_sbml caches the original Antimony text and the @SIM
     # metadata on the returned SymSystem, so the same object drives both the
-    # display/analysis and the RoadRunner simulation below. The deprecated legacy
-    # parser (ssys.parse_antimony) is intentionally NOT used here: it fails closed
-    # on non-unit compartment volume / conversionFactor models that RoadRunner
-    # simulates correctly straight from the cached Antimony text.
+    # display/analysis and the RoadRunner simulation below.
     sym = parse_antimony_via_sbml(ant_text)
     sym.antimony_text = ant_text  # RoadRunner re-simulates the original text
 

@@ -229,13 +229,6 @@ def _ode_expressions(model_ir: Any) -> dict[str, str | sp.Expr]:
     if explicit_rates:
         return {str(key): expr for key, expr in dict(explicit_rates).items()}
 
-    reactions = getattr(model_ir, "reactions", None)
-    if reactions:
-        from ..recaster import build_sym_system
-
-        sym = build_sym_system(model_ir)
-        return _ode_expressions(sym)
-
     return {}
 
 

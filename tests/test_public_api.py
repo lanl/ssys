@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import ssys
-from ssys.cli import main, recast_file
+from ssys.cli import main
 
 STABLE_TOP_LEVEL_NAMES = {
     "ModelIR",
@@ -21,9 +21,8 @@ STABLE_TOP_LEVEL_NAMES = {
     "ValidationProfile",
     "VALIDATION_REPORT_SCHEMA_RESOURCE",
     "VALIDATION_REPORT_SCHEMA_VERSION",
-    "parse_antimony",
+    "parse_antimony_via_sbml",
     "parse_sbml",
-    "build_sym_system",
     "recast_to_ssystem",
     "ssystem_to_antimony",
     "canonicalize_aux_names",
@@ -49,9 +48,7 @@ def test_top_level_public_api_is_intentional_and_documented():
         pytest.param(
             "ssys.parsing",
             {
-                "build_sym_system",
                 "expand_antimony_function_templates",
-                "parse_antimony",
                 "parse_antimony_via_sbml",
                 "parse_sbml",
                 "parse_sbml_from_string",
@@ -142,30 +139,7 @@ def test_cli_help_lists_stable_options(monkeypatch, capsys):
         "--validate",
         "--validation-profile",
         "--allow-validation-failures",
-        "--parser",
         "--version",
     ):
         assert option in output
     assert "trusted scientific inputs" in output
-
-
-def test_legacy_parser_helper_use_emits_deprecation_warning(tmp_path: Path):
-    input_ant = tmp_path / "legacy.ant"
-    input_ant.write_text("""
-        X' = -k*X
-        k = 0.5
-        X = 1.0
-    """)
-
-    with pytest.warns(DeprecationWarning, match="legacy Antimony parser mode"):
-        _, _, out, _ = recast_file(
-            str(input_ant),
-            str(tmp_path),
-            parser="legacy",
-            validate=False,
-        )
-
-    public_api_doc = Path("PUBLIC_API.md").read_text(encoding="utf-8")
-    assert 'parser="legacy"' in public_api_doc
-    assert "DeprecationWarning" in public_api_doc
-    assert Path(out).exists()

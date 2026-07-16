@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+- **Breaking:** Removed the deprecated hand-rolled legacy Antimony parser
+  (`ssys.parse_antimony`, `ssys.build_sym_system`) and the `ssys-recast --parser`
+  flag / `recast_file(..., parser="legacy")` mode. The legacy path shipped a
+  `DeprecationWarning` in 0.6.1 and provided no capability the SBML-first parser
+  lacks. The SBML-first parser (`ssys.parse_antimony_via_sbml`), the default every
+  code path already used, is now the only Antimony parser. This removes public API
+  symbols, so it releases as a minor version bump (0.7.0).
+
+### Changed
+- `ssys.parse_antimony_via_sbml` is now exported from the top-level `ssys`
+  namespace as the supported Antimony entry point (replacing `ssys.parse_antimony`
+  / `ssys.build_sym_system`).
+
 ## [0.6.1] - 2026-07-05
 
 ### Release Policy

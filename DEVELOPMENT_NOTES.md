@@ -139,18 +139,16 @@ export JAX_PLATFORMS=cpu
 
 ---
 
-## Planned: Bespoke Parser Removal
+## Done: Bespoke Parser Removal
 
-The hand-rolled Antimony parser (`parse_antimony()`, `build_sym_system()`, 
-`ModelIR`) is retained for backward compatibility. Removal of this parser is planned for a near-term future release.
+The hand-rolled Antimony parser (`parse_antimony()`, `build_sym_system()`) and
+the `--parser` flag have been removed (see CHANGELOG). The SBML-first parser
+(`parse_antimony_via_sbml`) is now the only Antimony parser.
 
-**Files affected:** `src/ssys/recaster.py`
-
-**Lines to remove (estimated):**
-- `parse_antimony()` (~300 lines)
-- `build_sym_system()` (~100 lines)  
-- `ModelIR` dataclass (~30 lines)
-- Helper functions only used by above
+**Follow-up:** `ModelIR` and `Reaction` are still defined in `ssys.types` and
+used as duck-typed annotations across `ssys.ode_backends` (which actually
+receive a `SymSystem`). Retiring those types is a separate refactor of the
+backend signatures.
 
 ---
 

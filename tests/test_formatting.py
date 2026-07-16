@@ -17,14 +17,13 @@ from ssys.recaster import (
     _antimony_to_sympy_syntax,
     _format_sim_metadata_lines,
     _sympy_to_antimony_syntax,
-    build_sym_system,
     classify_result,
     classify_solver_requirement,
     classify_sym_system_solver_requirement,
     classify_system,
     gma_to_antimony,
     latex_ssys,
-    parse_antimony,
+    parse_antimony_via_sbml,
     product_to_antimony,
     recast_to_ssystem,
     ssystem_to_antimony,
@@ -543,12 +542,12 @@ class TestAntimonyExport:
     def test_ssystem_to_antimony_basic(self):
         """Test basic S-system to Antimony export."""
         text = """
+        species X
         X' = -k*X
         k = 0.5
         X = 1.0
         """
-        ir = parse_antimony(text)
-        sym = build_sym_system(ir)
+        sym = parse_antimony_via_sbml(text)
         rec = recast_to_ssystem(sym)
         output = ssystem_to_antimony(rec, model_name="test")
         _assert_antimony_roundtrips(output)
@@ -564,12 +563,12 @@ class TestAntimonyExport:
     def test_ssystem_to_antimony_model_name_prefix(self):
         """Test that numeric model names get prefixed."""
         text = """
+        species X
         X' = -k*X
         k = 0.5
         X = 1.0
         """
-        ir = parse_antimony(text)
-        sym = build_sym_system(ir)
+        sym = parse_antimony_via_sbml(text)
         rec = recast_to_ssystem(sym)
         output = ssystem_to_antimony(rec, model_name="123model")
         _assert_antimony_roundtrips(output)

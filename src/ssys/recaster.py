@@ -102,18 +102,14 @@ from ssys._recaster.parsing import (
     _preprocess_antimony_text,
     _reaction_scope_name,
     _replace_formula_identifiers,
-    _resolve_parameter_dependencies,
     _sanitize_sbml_identifier,
     _sympify_sbml_formula,
     _sympy_to_antimony_syntax,
     _unique_identifier,
     _warn_or_raise_initial_assignment_error,
-    build_sym_system,
-    parse_antimony,
     parse_antimony_via_sbml,
     parse_sbml,
     parse_sbml_from_string,
-    tokenize_species_side,
 )
 from ssys._recaster.templates import (
     _expand_function_calls,

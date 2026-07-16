@@ -19,12 +19,12 @@
     "src/ssys/_recaster/parsing.py": {
       "max_cyclomatic_complexity": 78,
       "max_function_lines": 481,
-      "module_lines": 1293
+      "module_lines": 762
     },
     "src/ssys/_validator/core.py": {
       "max_cyclomatic_complexity": 21,
       "max_function_lines": 187,
-      "module_lines": 790
+      "module_lines": 773
     },
     "src/ssys/_validator/mapping.py": {
       "max_cyclomatic_complexity": 42,
@@ -52,14 +52,14 @@
       "module_lines": 917
     },
     "src/ssys/cli.py": {
-      "max_cyclomatic_complexity": 7,
-      "max_function_lines": 100,
-      "module_lines": 487
+      "max_cyclomatic_complexity": 6,
+      "max_function_lines": 86,
+      "module_lines": 464
     },
     "src/ssys/ode_backends/ida_sundials_backend.py": {
       "max_cyclomatic_complexity": 37,
       "max_function_lines": 175,
-      "module_lines": 763
+      "module_lines": 756
     },
     "src/ssys/ode_backends/roadrunner_backend.py": {
       "max_cyclomatic_complexity": 17,

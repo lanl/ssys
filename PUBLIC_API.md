@@ -34,9 +34,8 @@ Import these from `ssys`:
 
 ### Parsing And Recasting
 
-- `parse_antimony`
+- `parse_antimony_via_sbml`
 - `parse_sbml`
-- `build_sym_system`
 - `recast_to_ssystem`
 - `ssystem_to_antimony`
 - `canonicalize_aux_names`
@@ -60,11 +59,9 @@ Import these from `ssys`:
 
 ### `ssys.parsing`
 
-- `parse_antimony`
 - `parse_antimony_via_sbml`
 - `parse_sbml`
 - `parse_sbml_from_string`
-- `build_sym_system`
 - `expand_antimony_function_templates`
 
 ### `ssys.recasting`
@@ -140,7 +137,6 @@ Supported options:
   profile used with `--validate`; default is `strict`.
 - `--allow-validation-failures`: keep batch behavior when validation reports do
   not pass; without this flag validation failures exit nonzero.
-- `--parser {sbml,legacy}`: parser selection; default is `sbml`.
 - `--version`: print package version.
 
 CLI output contracts:
@@ -153,14 +149,11 @@ CLI output contracts:
 
 ## Deprecated Or Compatibility-Only Behavior
 
-- `ssys-recast --parser legacy`, `ssys.cli.recast_file(..., parser="legacy")`,
-  and a direct `ssys.parse_antimony(...)` call are compatibility-only. They emit
-  `DeprecationWarning` and may be removed after a future stable parser-mode policy
-  is published. `ssys.parse_antimony` reads a simplified single-unit-compartment
-  subset and now fails closed with a structured `unsupported_feature`
-  `SBMLParseError` on a non-unit or multiple compartment, a `conversionFactor`, or
-  a variable stoichiometric coefficient — constructs it cannot correctly interpret
-  and previously mis-integrated. Use the default `sbml` parser for those models.
+- The legacy hand-rolled Antimony parser (`ssys.parse_antimony`,
+  `ssys.build_sym_system`) and the `ssys-recast --parser` flag were removed after
+  shipping a `DeprecationWarning` in 0.6.1. The SBML-first parser
+  (`ssys.parse_antimony_via_sbml`) is now the only Antimony parser; it is the
+  default every code path already used.
 - `ssys.recaster` broad re-exports are compatibility-only. New code should use
   top-level `ssys` imports or focused public modules.
 - Legacy validation boolean flags are compatibility-only when a named validation

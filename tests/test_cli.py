@@ -150,39 +150,10 @@ class TestRecastFile:
         output_content = Path(out).read_text()
         assert "model canonical_recast" in output_content
 
-    def test_recast_file_defaults_to_sbml_parser(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ):
-        """Direct helper calls should match the CLI's SBML parser default."""
-        from ssys.recaster import build_sym_system as legacy_build_sym_system
-        from ssys.recaster import parse_antimony as legacy_parse_antimony
-
-        input_ant = tmp_path / "default_parser.ant"
-        input_ant.write_text("""
-            X' = -k*X
-            k = 0.5
-            X = 1.0
-        """)
-        called = {"sbml": False}
-
-        def fake_sbml_parser(text: str):
-            called["sbml"] = True
-            return legacy_build_sym_system(legacy_parse_antimony(text))
-
-        def fail_legacy_parser(text: str):
-            raise AssertionError("legacy parser should not be the default")
-
-        monkeypatch.setattr("ssys.cli.parse_antimony_via_sbml", fake_sbml_parser)
-        monkeypatch.setattr("ssys.cli.parse_antimony", fail_legacy_parser)
-
-        _, _, out, _ = recast_file(str(input_ant), str(tmp_path), validate=False)
-
-        assert called["sbml"] is True
-        assert Path(out).exists()
-
     def test_recast_file_overwrites_existing_output(self, tmp_path: Path):
         input_ant = tmp_path / "overwrite.ant"
         input_ant.write_text("""
+            species X
             X' = -k*X
             k = 0.5
             X = 1.0
@@ -190,13 +161,11 @@ class TestRecastFile:
         out_path = tmp_path / "overwrite_recast.ant"
         out_path.write_text("stale output")
 
-        with pytest.warns(DeprecationWarning, match="legacy Antimony parser mode"):
-            _, _, out, _ = recast_file(
-                str(input_ant),
-                str(tmp_path),
-                parser="legacy",
-                validate=False,
-            )
+        _, _, out, _ = recast_file(
+            str(input_ant),
+            str(tmp_path),
+            validate=False,
+        )
 
         assert out == str(out_path)
         output_content = out_path.read_text()
@@ -236,13 +205,10 @@ class TestCliContracts:
                 str(manifest),
                 "--outdir",
                 str(outdir),
-                "--parser",
-                "legacy",
             ],
         )
 
-        with pytest.warns(DeprecationWarning, match="legacy Antimony parser mode"):
-            main()
+        main()
         output = capsys.readouterr().out
 
         assert "Processing 1 model(s)" in output
@@ -496,15 +462,12 @@ class TestValidationCliExit:
                 str(manifest),
                 "--outdir",
                 str(outdir),
-                "--parser",
-                "legacy",
                 "--validate",
             ],
         )
 
-        with pytest.warns(DeprecationWarning, match="legacy Antimony parser mode"):
-            with pytest.raises(SystemExit) as exc:
-                main()
+        with pytest.raises(SystemExit) as exc:
+            main()
         stderr = capsys.readouterr().err
 
         assert exc.value.code == 1
@@ -536,15 +499,12 @@ class TestValidationCliExit:
                 str(manifest),
                 "--outdir",
                 str(outdir),
-                "--parser",
-                "legacy",
                 "--validate",
                 "--allow-validation-failures",
             ],
         )
 
-        with pytest.warns(DeprecationWarning, match="legacy Antimony parser mode"):
-            main()
+        main()
 
         report = json.loads((outdir / "best_effort_validation.json").read_text())
         assert report["overall_pass"] is False
@@ -584,16 +544,13 @@ class TestValidationCliExit:
                 str(manifest),
                 "--outdir",
                 str(outdir),
-                "--parser",
-                "legacy",
                 "--validate",
                 "--validation-profile",
                 "structural",
             ],
         )
 
-        with pytest.warns(DeprecationWarning, match="legacy Antimony parser mode"):
-            main()
+        main()
         output = capsys.readouterr().out
 
         assert captured_kwargs["profile"] == "structural"
@@ -619,8 +576,6 @@ class TestValidationCliExit:
                 str(manifest),
                 "--outdir",
                 str(outdir),
-                "--parser",
-                "sbml",
                 "--validate",
             ],
         )

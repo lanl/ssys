@@ -30,7 +30,7 @@ from ssys.ode_backends.roadrunner_backend import (
     _set_initial_conditions,
     simulate_with_roadrunner,
 )
-from ssys.recaster import ModelIR, SolverRequirement, parse_antimony
+from ssys.recaster import ModelIR, SolverRequirement, parse_antimony_via_sbml
 
 
 def test_roadrunner_backend_success_and_initial_condition_override(monkeypatch):
@@ -1027,11 +1027,6 @@ def test_ida_private_helpers_cover_error_and_name_branches(monkeypatch):
 
     assert ida._ode_expressions(SimpleNamespace(odes={sp.Symbol("X"): "-X"})) == {"X": "-X"}
     assert ida._ode_expressions(SimpleNamespace(explicit_rates={"Y": "1"})) == {"Y": "1"}
-    monkeypatch.setattr(
-        "ssys.recaster.build_sym_system",
-        lambda model_ir: SimpleNamespace(odes={sp.Symbol("Z"): "2"}),
-    )
-    assert ida._ode_expressions(SimpleNamespace(reactions=[object()])) == {"Z": "2"}
     assert ida._ode_expressions(SimpleNamespace()) == {}
 
 
@@ -1264,7 +1259,7 @@ def test_simulate_ode_interface():
     end
     """
 
-    model_ir = parse_antimony(antimony_text)
+    model_ir = parse_antimony_via_sbml(antimony_text)
 
     result = simulate_ode(model_ir, t0=0.0, t_end=10.0, n_points=11)
 
@@ -1285,7 +1280,7 @@ def test_roadrunner_not_installed_graceful():
     end
     """
 
-    model_ir = parse_antimony(antimony_text)
+    model_ir = parse_antimony_via_sbml(antimony_text)
 
     # Try simulation - will succeed if roadrunner installed, fail gracefully if not
     result = simulate_ode(model_ir, t0=0.0, t_end=1.0, n_points=2)
@@ -1310,7 +1305,7 @@ def test_roadrunner_exp_decay():
     end
     """
 
-    model_ir = parse_antimony(antimony_text)
+    model_ir = parse_antimony_via_sbml(antimony_text)
 
     result = simulate_ode(model_ir, t0=0.0, t_end=10.0, n_points=11)
 

@@ -104,6 +104,7 @@ def test_emitted_parser_failure_report_matches_schema(tmp_path):
 def test_cli_validation_crash_report_matches_schema(tmp_path, monkeypatch):
     original = tmp_path / "original.ant"
     original.write_text("""
+        species X
         X' = -k*X
         k = 0.5
         X = 1.0
@@ -120,7 +121,6 @@ def test_cli_validation_crash_report_matches_schema(tmp_path, monkeypatch):
         str(original),
         str(outdir),
         validate=True,
-        parser="legacy",
         validation_profile="strict",
     )
     assert validation_path is not None

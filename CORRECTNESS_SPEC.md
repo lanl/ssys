@@ -135,14 +135,9 @@ supporting evidence, not exact proof.
 
 Preconditions:
 
-- Antimony text can be converted through the reference Antimony/SBML stack or
-  parsed by the explicitly selected legacy parser. The legacy parser reads a
-  simplified single-unit-compartment subset and fails closed with a structured
-  `unsupported_feature` error on constructs it cannot correctly interpret — a
-  non-unit or multiple compartment, a `conversionFactor`, or a variable
-  stoichiometric coefficient — which it previously mis-integrated. A trivial unit
-  `compartment cell = 1;` remains accepted; anything else must use the default
-  `sbml` parser.
+- Antimony text is converted through the reference Antimony/SBML stack
+  (`parse_antimony_via_sbml`), the only Antimony parser. SBML inputs are read
+  directly via `parse_sbml`/`parse_sbml_from_string`.
 - SBML formulas use known identifiers and supported function names.
 - Initial assignments needed for parameters, compartments, or initial values can
   be evaluated numerically, unless exploratory warning mode is explicitly used.
