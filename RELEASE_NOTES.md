@@ -1,11 +1,11 @@
-# ssys 0.6.1 Release Notes
-*Version: 0.6.1 | Release date: 2026-07-05*
+# ssys 0.7.0 Release Notes
+*Version: 0.7.0 | Release date: 2026-07-16*
 
 ## Release Status
 
 Release maturity: alpha.
 
-ssys 0.6.1 is supported on Python 3.10, 3.11, and 3.12. Python 3.13 is not advertised while ssys depends on the current NumPy 1.x and RoadRunner 2.7.x compatibility range. Platform matrix automation is deferred until hosted project infrastructure exists.
+ssys 0.7.0 is supported on Python 3.10, 3.11, and 3.12. Python 3.13 is not advertised while ssys depends on the current NumPy 1.x and RoadRunner 2.7.x compatibility range. Platform matrix automation is deferred until hosted project infrastructure exists.
 
 Input trust boundary: ssys treats Antimony and SBML inputs as trusted local scientific model files, not as safe untrusted uploads for multi-tenant or security-sensitive services.
 
@@ -22,7 +22,7 @@ Input trust boundary: ssys treats Antimony and SBML inputs as trusted local scie
 
 ## User-Visible Changes
 
-- SBML parsing now interprets compartment volume, a species/model `conversionFactor`, and constant `stoichiometryMath` correctly, fixing silently wrong ODEs for models that use them (verified against libRoadRunner).
-- The SBML parser fails closed with a structured `unsupported_feature` error on variable reaction stoichiometry and time-varying compartment volume, which are not power-law-recastable, instead of mis-integrating them.
-- The deprecated legacy Antimony parser (`ssys.parse_antimony` / `--parser legacy`) now fails closed on the same constructs and emits a `DeprecationWarning`; the recast notebook no longer depends on it.
-- Refreshed the BioModels benchmark: 848 transformations (86.7%) and 739 numerically validated models across 978 candidates.
+- **Breaking:** Removed the deprecated hand-rolled legacy Antimony parser (`ssys.parse_antimony`, `ssys.build_sym_system`), the `ssys-recast --parser` flag, and the `recast_file(..., parser="legacy")` mode. The SBML-first parser `ssys.parse_antimony_via_sbml` — the default every code path already used — is now the only Antimony parser. Because public API symbols were removed, this ships as a minor version bump.
+- **Breaking:** Removed the now-unused `ModelIR` and `Reaction` dataclasses (`ssys.ModelIR`, `ssys.types.ModelIR`/`Reaction`, and their `ssys.recaster` re-exports). `parse_antimony_via_sbml` returns a `SymSystem`, the only model type the ODE/DAE backends ever received at runtime; the backend signatures now annotate `SymSystem` and read its native `vars`/`odes`/`initials` directly.
+- **Recasting no longer silently corrupts negative initial conditions (GH #6).** S-system pool construction represents each state as a product of strictly-positive power-law auxiliaries, so a negative initial value has no valid representation. The builder previously substituted `0` silently, starting the recast from the wrong point. `recast_to_ssystem` now fails closed with a new `NegativeInitialConditionError` (exported from the top-level `ssys` namespace) that names every offending state. A zero initial value on a degenerate `X' = 0` state is now preserved exactly instead of being promoted to `1.0`.
+- Refreshed the BioModels benchmark: 731 numerically validated models across 978 candidates. This is eight fewer than 0.6.1 — those eight models carry negative initial states (e.g. membrane-voltage models) and are now correctly rejected by the GH #6 fail-closed guard rather than silently recast from a corrupted initial point.

@@ -83,7 +83,7 @@ Run this checklist before tagging a public release.
 
   ```bash
   uv run python tools/run_biomodels_benchmark.py \
-    --artifact release-evidence/artifact-smoke/dist/ssys-0.6.1-py3-none-any.whl \
+    --artifact release-evidence/artifact-smoke/dist/ssys-0.7.0-py3-none-any.whl \
     --evidence-dir release-evidence/biomodels \
     --from-stage filter \
     --force \
