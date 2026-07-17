@@ -1012,6 +1012,62 @@ def test_step3_process_model_preserves_open_phase_on_timeout(
     assert sidecar_data["recast_retry_policy"] == "quick_then_retry_timeouts"
 
 
+def test_step3_process_model_failure_evicts_stale_success(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """A model that now fails closed must not leave a prior run's successful
+    recast/validation artifacts on disk.
+
+    The validate/collect/report stages count files on disk, so a lingering
+    ``.ant`` (and its validation report) from an earlier run would be
+    re-validated and re-counted as a pass -- inflating the totals and hiding
+    the success->failure regression from the benchmark. ``process_model`` must
+    evict the stale outputs on the failure path.
+    """
+    step3_recast = _load_step3_recast_module()
+    recasts_dir = tmp_path / "recasts"
+    validation_dir = tmp_path / "validation"
+    failures_dir = tmp_path / "failures"
+    for directory in (recasts_dir, validation_dir, failures_dir):
+        directory.mkdir()
+    monkeypatch.setattr(step3_recast.config, "RECASTS_DIR", str(recasts_dir))
+    monkeypatch.setattr(step3_recast.config, "VALIDATION_DIR", str(validation_dir))
+    monkeypatch.setattr(step3_recast.config, "FAILURES_DIR", str(failures_dir))
+
+    # Seed artifacts from an earlier run where the model recast successfully.
+    stale_recast = recasts_dir / "MODEL_NEG_simplified.ant"
+    stale_validation = validation_dir / "MODEL_NEG_simplified_numerical.json"
+    stale_recast.write_text("model MODEL_NEG_recast()\nend\n", encoding="utf-8")
+    stale_validation.write_text(json.dumps({"overall_pass": True}), encoding="utf-8")
+
+    # Current code fails closed on this model (e.g. a negative initial value).
+    def fail_closed(model_id, mode, phase_recorder=None):
+        return (
+            False,
+            None,
+            "NegativeInitialConditionError: S-system recasting requires positive "
+            "initial states, but V starts at -60",
+        )
+
+    monkeypatch.setattr(step3_recast, "attempt_recast", fail_closed)
+
+    result = step3_recast.process_model(
+        "MODEL_NEG",
+        "simplified",
+        validate=False,
+        timeout=5,
+    )
+
+    assert result["recast_success"] is False
+    assert "NegativeInitialConditionError" in result["error"]
+    # The stale success is gone, so downstream stages cannot re-count it.
+    assert not stale_recast.exists()
+    assert not stale_validation.exists()
+    # The failure itself is still recorded.
+    assert (failures_dir / "MODEL_NEG_simplified.log").exists()
+
+
 def test_step3_categorizes_unsupported_generated_derivative() -> None:
     step3_recast = _load_step3_recast_module()
 

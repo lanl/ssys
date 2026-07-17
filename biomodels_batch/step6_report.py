@@ -272,6 +272,21 @@ def generate_pipeline_table() -> str:
     if validated_count > 0:
         lines.append(f"| **Validated models** | **{validated_count:,}** | Numerical validation passed |")
 
+    lines.append("")
+    lines.append(
+        "> **Note (issue #6 — fail-closed on negative initial conditions):** "
+        "S-system pool construction maps each state to a product of strictly-positive "
+        "power-law auxiliaries, so a state with a negative initial value has no valid "
+        "representation. ssys now rejects such models at recast with "
+        "`NegativeInitialConditionError` instead of silently substituting 0 and recasting "
+        "from a corrupted initial point. In this corpus that fail-closes 8 candidates with "
+        "negative initial states (e.g. membrane-voltage models starting at V = -60 mV), "
+        "lowering the validated count from 739 (pre-#6) to 731. These were previously "
+        "counted as passes only because the numerical profile samples the RHS over a "
+        "positive domain and never integrates from the initial condition, so the silent "
+        "corruption was invisible to it."
+    )
+
     return "\n".join(lines)
 
 

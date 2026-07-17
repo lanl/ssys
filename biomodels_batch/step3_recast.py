@@ -419,6 +419,27 @@ def save_validation_report(model_id: str, mode: str, report: dict):
         json.dump(report, f, indent=2)
 
 
+def remove_stale_outputs(model_id: str, mode: str) -> None:
+    """Delete any recast/validation artifacts left by a prior successful run.
+
+    When a model that used to recast successfully now fails (e.g. it is
+    fail-closed on a negative initial condition, or a code change breaks it),
+    ``process_model`` must not leave the earlier run's ``.ant`` and validation
+    report on disk. The downstream stages (validate, collect, report) count
+    files on disk, so a lingering success would be re-validated and re-counted
+    as a pass -- inflating the numbers and, worse, hiding the regression from
+    the benchmark entirely. Removing the stale outputs keeps disk state a
+    faithful reflection of what the current code actually produces.
+    """
+    stale_paths = (
+        Path(config.RECASTS_DIR) / f"{model_id}_{mode}.ant",
+        Path(config.VALIDATION_DIR) / f"{model_id}_{mode}_validation.json",
+        Path(config.VALIDATION_DIR) / f"{model_id}_{mode}_numerical.json",
+    )
+    for path in stale_paths:
+        path.unlink(missing_ok=True)
+
+
 def categorize_error(error_msg: str) -> tuple[str, str]:
     """
     Categorize an error message and provide a human-readable explanation.
@@ -682,6 +703,7 @@ def process_model(
     # Check if safe_execute failed (timeout or exception)
     if not success:
         result["error"] = error if error else "Unknown error"
+        remove_stale_outputs(model_id, mode)
         log_failure(
             model_id,
             mode,
@@ -701,6 +723,7 @@ def process_model(
     # Check if recast itself failed
     if not recast_success:
         result["error"] = recast_error if recast_error else "Recast failed"
+        remove_stale_outputs(model_id, mode)
         log_failure(
             model_id,
             mode,
@@ -716,6 +739,7 @@ def process_model(
         save_recast(model_id, mode, recast_text)
     except Exception as e:
         result["error"] = f"Failed to save: {e}"
+        remove_stale_outputs(model_id, mode)
         log_failure(
             model_id,
             mode,
