@@ -13,6 +13,7 @@ from ssys.cli import main
 STABLE_TOP_LEVEL_NAMES = {
     "SymSystem",
     "RecastResult",
+    "NegativeInitialConditionError",
     "SBMLParseError",
     "SSysEquation",
     "SolverRequirement",

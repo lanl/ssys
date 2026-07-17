@@ -26,6 +26,13 @@ Import these from `ssys`:
 - `SymSystem`
 - `RecastResult`
 - `SBMLParseError`
+- `NegativeInitialConditionError` — raised by `recast_to_ssystem` when a state
+  variable's initial value is negative. S-system pool construction represents
+  each variable as a product of strictly-positive power-law auxiliaries, so a
+  negative initial value has no representation; recasting fails closed rather
+  than silently starting the recast from the wrong point. Zero is not rejected
+  (it is representable, using `EPS_INIT` where a negative exponent would
+  otherwise divide by zero).
 - `SSysEquation`
 - `SolverRequirement`
 - `SystemClass`

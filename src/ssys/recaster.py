@@ -28,6 +28,7 @@ from ssys.metadata import (
 )
 from ssys.types import (
     GMAEquation,
+    NegativeInitialConditionError,
     RecastResult,
     RecastStatus,
     SBMLParseError,

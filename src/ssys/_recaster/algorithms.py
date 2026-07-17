@@ -21,6 +21,7 @@ from ssys.math_utils import (
 )
 from ssys.types import (
     GMAEquation,
+    NegativeInitialConditionError,
     RecastResult,
     RecastStatus,
     SSysEquation,
@@ -1154,6 +1155,47 @@ def _direct_ssystem_recast(
     )
 
 
+def _pool_initial_value(sym: "SymSystem", var: sp.Symbol) -> float | None:
+    """Return the numeric initial value pool construction would use for ``var``.
+
+    Mirrors the lookup in :func:`_pool_ssystem_recast`: match ``sym.initials`` by
+    name first, then fall back to ``sym.params`` (the SBML parser may store a
+    species initial condition there). Returns ``None`` when no numeric value is
+    available (pool construction then defaults such a variable to ``1.0``).
+    """
+    for s, v in sym.initials.items():
+        if getattr(s, "name", None) == var.name:
+            try:
+                return float(v)
+            except (TypeError, ValueError):
+                return None
+    if var.name in sym.params:
+        try:
+            return float(sym.params[var.name])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _reject_negative_initial_states(sym: "SymSystem") -> None:
+    """Fail closed when a variable mapped by pool construction starts negative.
+
+    Pool construction represents every original variable as a product of
+    strictly-positive power-law auxiliaries, so a negative initial value is
+    unrepresentable. Historically the builder silently substituted zero, which
+    started the recast from the wrong point and quietly diverged from the
+    original trajectory (GH #6). Detect all offenders up front and raise a
+    single structured error instead. Zero is left to the ``EPS_INIT`` handling.
+    """
+    offenders: list[tuple[str, float]] = []
+    for var in sorted(sym.vars, key=lambda s: s.name):
+        value = _pool_initial_value(sym, var)
+        if value is not None and value < 0.0:
+            offenders.append((var.name, value))
+    if offenders:
+        raise NegativeInitialConditionError(offenders)
+
+
 def _pool_ssystem_recast(sym: "SymSystem", mode: str = "simplified") -> "RecastResult":
     """
     Pool construction S-system recast for pure polynomial systems.
@@ -1165,6 +1207,11 @@ def _pool_ssystem_recast(sym: "SymSystem", mode: str = "simplified") -> "RecastR
         sym: SymSystem to recast
         mode: Output mode ('simplified' or 'canonical')
     """
+    # Pool construction maps each variable to a product of positive auxiliaries;
+    # a negative initial value has no representation, so fail closed rather than
+    # silently emit a model that starts from the wrong point (GH #6).
+    _reject_negative_initial_states(sym)
+
     new_equations: list[SSysEquation] = []
     new_variables: list[sp.Symbol] = []
     new_initials: dict[sp.Symbol, float] = dict(sym.initials)  # keep params and originals
@@ -1185,12 +1232,15 @@ def _pool_ssystem_recast(sym: "SymSystem", mode: str = "simplified") -> "RecastR
             mono_terms.append((coeff, exps))
 
         # Handle degenerate X' == 0
-        # Use original variable's initial condition, not hardcoded 1.0
+        # Preserve the original variable's initial condition exactly. A zero IC
+        # must stay zero (it previously became 1.0, silently corrupting an
+        # unused/constant state, GH #6); step 6 below promotes it to EPS_INIT
+        # only if the auxiliary later appears with a negative exponent.
         if not mono_terms:
             V = sp.symbols(f"{Xi.name}_t1", positive=True)
             new_variables.append(V)
-            xi0 = float(new_initials.get(Xi, 1.0))
-            new_initials[V] = xi0 if xi0 != 0.0 else 1.0  # Preserve non-zero IC
+            xi0 = _pool_initial_value(sym, Xi)
+            new_initials[V] = xi0 if xi0 is not None else 1.0
             new_equations.append(SSysEquation(V, (0.0, {}), (0.0, {})))
             factor_map[Xi] = [V]
             continue

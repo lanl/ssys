@@ -20,6 +20,7 @@ from ssys.formatting import ssystem_to_antimony
 from ssys.parsing import parse_antimony_via_sbml, parse_sbml
 from ssys.recasting import canonicalize_aux_names, recast_to_ssystem
 from ssys.types import (
+    NegativeInitialConditionError,
     RecastResult,
     SBMLParseError,
     SolverRequirement,
@@ -41,6 +42,7 @@ __release_maturity__ = "alpha"
 __all__ = [
     "SymSystem",
     "RecastResult",
+    "NegativeInitialConditionError",
     "SBMLParseError",
     "SSysEquation",
     "SolverRequirement",

@@ -144,6 +144,21 @@ The `ssys` tool supports some automatic transformations for positivity:
 
 **User responsibility**: Translation of non-positive variables to the positive orthant is *not* automatic. If the original model contains variables that can become zero or negative during integration, the user must pre-process the model with appropriate translations. If integration produces non-positive values in auxiliary variables, the recast system will produce incorrect results or fail.
 
+**Negative initial values fail closed** (GH #6). Pool construction maps each
+variable to a product of strictly-positive power-law auxiliaries, so a variable
+whose *initial value* is negative has no representation in that form. Rather than
+silently substitute a wrong value and start the recast from the wrong point,
+`recast_to_ssystem` raises `NegativeInitialConditionError`, naming the offending
+states. Translate or shift these variables onto a positive domain (see
+[Translation to the Positive Orthant](#translation-to-the-positive-orthant))
+before recasting. Note this guard is on the *initial* value only: a variable that
+starts positive but later crosses zero, or that only ever enters the system
+through a lift (e.g. `X` in `dX/dt = exp(X)`, where `X` itself is never a
+power-law base), is not caught here — those cases remain the user's
+responsibility and are surfaced by `--validate`. A zero initial value is *not*
+rejected: it is representable (exactly, or approximated by `EPS_INIT` when a
+negative exponent would otherwise divide by zero).
+
 ### Numerical Drift Warning
 
 The recast system is effectively a **constrained dynamical system**—auxiliary variables must satisfy their defining algebraic relations throughout integration. When integrating the lifted ODE in floating point, numerical errors can cause **drift off the constraint manifold**, leading to divergence between the recast and original systems.

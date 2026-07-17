@@ -283,6 +283,11 @@ Preconditions:
   auxiliaries requiring direct handling.
 - Each ODE is a finite sum of monomial terms over state variables and
   parameters.
+- Every variable mapped by pool construction has a non-negative initial value.
+  A strictly-negative initial value has no representation as a product of
+  positive pool variables, so construction fails closed with
+  `NegativeInitialConditionError` rather than substituting a wrong value
+  (GH #6). Zero is permitted (see the next postcondition).
 - Safety checks accept the term count, dimension expansion, product length, and
   exponent range.
 
@@ -294,7 +299,9 @@ Postconditions:
   term exponents.
 - Initial conditions satisfy the product mapping, except where `EPS_INIT`
   approximates zero for variables that would otherwise appear with negative
-  exponents.
+  exponents. A zero initial value is preserved exactly (including for an
+  unused/degenerate `X' = 0` state); it is never silently promoted to a nonzero
+  value.
 - Generated auxiliary names are canonicalized to `Z_1`, `Z_2`, ...
 
 Representative tests:
@@ -304,6 +311,7 @@ Representative tests:
 - `tests/test_recaster.py::test_canonical_naming`
 - `tests/test_recaster.py::TestEpsInitFactorMapExpansion`
 - `tests/test_recaster.py::TestSymbolicExponents`
+- `tests/test_recaster.py::TestNegativeInitialConditions`
 
 ### GMA Fallback
 
@@ -452,11 +460,21 @@ expanding the final `factor_map`. In that case, zero is replaced by `EPS_INIT`
 to avoid division by zero. This is an approximation and is recorded in output
 metadata when used.
 
+Zero is the only boundary value `EPS_INIT` handles. A strictly-negative initial
+value is not approximated: because pool construction represents each variable as
+a product of positive power-law auxiliaries, a negative starting value has no
+representation at all, and construction fails closed with
+`NegativeInitialConditionError` (GH #6). A variable whose negative initial value
+never enters a pool base — for example `X` in `dX/dt = exp(X)`, where lifting
+introduces `Z := exp(X)` and `X` itself never appears as a power-law base — is
+recast unchanged with its negative initial value preserved.
+
 Tests:
 
 - `tests/test_recaster.py::test_eps_init_used_in_pool_construction`
 - `tests/test_recaster.py::test_canceling_negative_exponents_get_zero_ic`
 - `tests/test_recaster.py::test_true_negative_exponent_gets_eps_init`
+- `tests/test_recaster.py::TestNegativeInitialConditions`
 
 ### Trajectory Tolerance
 

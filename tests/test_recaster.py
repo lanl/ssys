@@ -738,6 +738,135 @@ class TestEpsInitMetadata:
         assert all(abs(value - 1e-6) > 1e-14 for value in result.initials.values())
 
 
+class TestNegativeInitialConditions:
+    """Pool construction must fail closed on negative initial states (GH #6).
+
+    S-system pool construction maps every original variable to a product of
+    strictly-positive power-law auxiliaries, so a negative initial value cannot
+    be represented. It was previously replaced with 0 silently, which started
+    the recast from the wrong point and diverged from the original trajectory.
+    """
+
+    def test_negative_initial_condition_raises_instead_of_corrupting(self):
+        """A negative IC that reaches pool construction fails closed with a clear error."""
+        from ssys import NegativeInitialConditionError
+
+        # Undamped oscillator (linearised Lotka-Volterra style): Q starts negative.
+        text = """
+        model neg_ic_demo
+          species P, Q;
+          P = 0.2;
+          Q = -0.1;
+          J1: -> P; -Q;
+          J2: -> Q;  P;
+        end
+        """
+        sym = parse_antimony_via_sbml(text)
+        # The parser reads the value correctly; corruption happened at recast time.
+        assert sym.initials[sp.Symbol("Q", positive=True)] == -0.1
+
+        with pytest.raises(NegativeInitialConditionError) as exc_info:
+            recast_to_ssystem(sym, mode="simplified")
+
+        err = exc_info.value
+        assert ("Q", -0.1) in err.offenders
+        assert "positive initial states" in str(err)
+
+    def test_negative_ic_reports_every_offending_state(self):
+        """All negative states are reported together, not just the first."""
+        from ssys import NegativeInitialConditionError
+
+        text = """
+        model multi_neg
+          species A, B, C;
+          A = -1.0;
+          B = 0.5;
+          C = -2.0;
+          J1: -> A;  B;
+          J2: -> B;  A;
+          J3: -> C;  B;
+        end
+        """
+        sym = parse_antimony_via_sbml(text)
+        with pytest.raises(NegativeInitialConditionError) as exc_info:
+            recast_to_ssystem(sym, mode="simplified")
+
+        offender_names = {name for name, _ in exc_info.value.offenders}
+        assert offender_names == {"A", "C"}
+
+    def test_negative_ic_stored_in_params_is_detected(self):
+        """A negative IC the SBML parser stored under params is still rejected.
+
+        Pool construction reads a variable's IC from ``initials`` (by name) and
+        falls back to ``params`` (libSBML may route a species IC there). The
+        rejection must mirror that lookup so a params-stored negative value is
+        not missed.
+        """
+        from ssys import NegativeInitialConditionError, SymSystem
+
+        x = sp.Symbol("x", positive=True)
+        y = sp.Symbol("y", positive=True)
+        sym = SymSystem(
+            vars=[x, y],
+            params={"y": -0.7},  # negative IC routed to params, not initials
+            odes={x: -y, y: x},
+            initials={x: 0.3},
+        )
+        with pytest.raises(NegativeInitialConditionError) as exc_info:
+            recast_to_ssystem(sym, mode="simplified")
+        assert any(name == "y" for name, _ in exc_info.value.offenders)
+
+    def test_zero_initial_condition_is_not_rejected(self):
+        """Zero initial states remain supported (exact, or EPS_INIT where needed)."""
+        text = """
+        model zero_ok
+          species A, B;
+          A = 0;
+          B = 0.4;
+          J1: -> A; -B;
+          J2: -> B;  A;
+        end
+        """
+        sym = parse_antimony_via_sbml(text)
+        result = recast_to_ssystem(sym, mode="simplified")
+        # A starts at exactly 0; its pool factor must stay 0, not become nonzero.
+        a_factors = result.factor_map[sp.Symbol("A", positive=True)]
+        assert result.initials[a_factors[0]] == 0.0
+
+    def test_degenerate_zero_state_stays_zero(self):
+        """An unused (X'=0) state with a zero IC must not silently become 1.0."""
+        text = """
+        model degenerate_zero
+          species U, A, B;
+          U = 0;
+          A = 0.5;
+          B = 0.3;
+          J1: -> A; -B;
+          J2: -> B;  A;
+        end
+        """
+        sym = parse_antimony_via_sbml(text)
+        result = recast_to_ssystem(sym, mode="simplified")
+        u_factors = result.factor_map[sp.Symbol("U", positive=True)]
+        # Regression: this previously mapped U(0)=0 to 1.0.
+        assert result.initials[u_factors[0]] == 0.0
+
+    def test_negative_ic_via_lifting_is_preserved_not_rejected(self):
+        """dX/dt = exp(X) keeps X out of any pool base, so X(0) < 0 is valid."""
+        text = """
+        model exp_ode
+          species X;
+          X' = exp(X);
+          X = -2.0;
+        end
+        """
+        sym = parse_antimony_via_sbml(text)
+        # Must NOT raise: X is lifted (Z := exp(X)); its negative IC is exact.
+        result = recast_to_ssystem(sym, mode="simplified")
+        out = ssystem_to_antimony(result, model_name="exp_ode_recast", mode="simplified")
+        assert "X = -2" in out
+
+
 class TestSbmlParserIcHandling:
     """Tests for SBML parser initial condition handling.
 

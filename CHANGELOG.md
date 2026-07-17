@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Recasting no longer silently corrupts negative initial conditions (GH #6).**
+  S-system pool construction represents each variable as a product of
+  strictly-positive power-law auxiliaries, so a state whose initial value is
+  negative has no representation. The builder previously substituted `0`
+  silently, starting the recast from the wrong point and producing a model whose
+  trajectory diverged from the original with no warning. `recast_to_ssystem` now
+  fails closed with a new `NegativeInitialConditionError` (exported from the
+  top-level `ssys` namespace) that names every offending state. Negative initial
+  values that never enter a power-law base (e.g. `X` in `dX/dt = exp(X)`, where
+  lifting handles `exp(X)` and `X` itself is never a base) are unaffected and
+  keep their exact value.
+- Pool construction now preserves a **zero** initial value on an unused or
+  otherwise degenerate `X' = 0` state instead of silently promoting it to `1.0`
+  (GH #6). Zero remains supported (kept exactly, or approximated by `EPS_INIT`
+  where a variable would otherwise appear with a negative exponent).
+
 ### Removed
 - **Breaking:** Removed the deprecated hand-rolled legacy Antimony parser
   (`ssys.parse_antimony`, `ssys.build_sym_system`) and the `ssys-recast --parser`

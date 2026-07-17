@@ -54,6 +54,35 @@ class SBMLParseError(ValueError):
         return f"Failed to parse SBML {target} in {self.source}: formula {formula!r}: {self.message}"
 
 
+class NegativeInitialConditionError(ValueError):
+    """Raised when S-system pool construction meets a negative initial state.
+
+    Pool construction represents each original variable as a product of
+    strictly-positive power-law auxiliaries (``X = prod_j V_j`` with every
+    ``V_j > 0``). A product of positive factors can never equal a negative
+    value, so a state whose initial value is negative has no representation in
+    that form. Rather than silently substitute a wrong initial value — which
+    starts the recast from the wrong point and quietly diverges from the
+    original trajectory — recasting fails closed and names the offending states.
+
+    Zero initial values are *not* rejected: they are representable (exactly, or
+    approximated by ``EPS_INIT`` when a variable would otherwise appear with a
+    negative exponent). Only strictly-negative values raise this error.
+    """
+
+    def __init__(self, offenders: "list[tuple[str, float]]") -> None:
+        self.offenders = [(str(name), float(value)) for name, value in offenders]
+        detail = ", ".join(f"{name} starts at {value:g}" for name, value in self.offenders)
+        super().__init__(
+            "S-system recasting requires positive initial states, but "
+            f"{detail}. Power-law (S-system) form represents each state as a "
+            "product of positive powers, which can never equal a negative value, "
+            "so the recast would silently start from the wrong point. Translate "
+            "or shift these variables onto a positive domain before recasting "
+            "(see RECASTING.md)."
+        )
+
+
 @dataclass
 class SymSystem:
     vars: list[sp.Symbol]
@@ -134,6 +163,7 @@ class RecastResult:
 
 __all__ = [
     "GMAEquation",
+    "NegativeInitialConditionError",
     "RecastResult",
     "RecastStatus",
     "SBMLParseError",
