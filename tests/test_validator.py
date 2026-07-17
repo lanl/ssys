@@ -1964,13 +1964,13 @@ def _make_numerical_harness(*, recast_multiplier: float = 1.0, k_value: float = 
     harness.recast_state_vars = [Z]
     harness.mapping = {X: Z}
     harness.orig_ir = SimpleNamespace(
-        initial={"X": 1.0},
+        initials={X: 1.0},
         sim_t_start=None,
         sim_t_end=None,
     )
     harness.recast_ir = SimpleNamespace(
         params={"k": k_value},
-        initial={"Z": 1.0},
+        initials={Z: 1.0},
         sim_t_start=None,
         sim_t_end=None,
     )
@@ -2022,13 +2022,13 @@ def _make_time_clock_numerical_harness():
     harness.recast_state_vars = [X, T, Y]
     harness.mapping = {X: X}
     harness.orig_ir = SimpleNamespace(
-        initial={"X": 1.0},
+        initials={X: 1.0},
         sim_t_start=None,
         sim_t_end=None,
     )
     harness.recast_ir = SimpleNamespace(
         params={"k": 1.0},
-        initial={"X": 1.0, "T": 1.0, "Y_1": 2.0},
+        initials={X: 1.0, T: 1.0, Y: 2.0},
         sim_t_start=None,
         sim_t_end=None,
     )
@@ -2051,13 +2051,13 @@ def _make_time_auxiliary_numerical_harness():
     harness.recast_state_vars = [X, Y]
     harness.mapping = {X: X}
     harness.orig_ir = SimpleNamespace(
-        initial={"X": 1.0},
+        initials={X: 1.0},
         sim_t_start=None,
         sim_t_end=None,
     )
     harness.recast_ir = SimpleNamespace(
         params={"k": 1.0},
-        initial={"X": 1.0, "Y_1": 2.0},
+        initials={X: 1.0, Y: 2.0},
         sim_t_start=None,
         sim_t_end=None,
     )
@@ -2079,13 +2079,13 @@ def _make_unresolved_auxiliary_numerical_harness():
     harness.recast_state_vars = [X, Y]
     harness.mapping = {X: X}
     harness.orig_ir = SimpleNamespace(
-        initial={"X": 1.0},
+        initials={X: 1.0},
         sim_t_start=None,
         sim_t_end=None,
     )
     harness.recast_ir = SimpleNamespace(
         params={},
-        initial={"X": 1.0, "Y_1": 2.0},
+        initials={X: 1.0, Y: 2.0},
         sim_t_start=None,
         sim_t_end=None,
     )
@@ -2107,13 +2107,13 @@ def _make_nested_auxiliary_numerical_harness():
     harness.recast_state_vars = [X, Y, Z]
     harness.mapping = {X: X}
     harness.orig_ir = SimpleNamespace(
-        initial={"X": 1.0},
+        initials={X: 1.0},
         sim_t_start=None,
         sim_t_end=None,
     )
     harness.recast_ir = SimpleNamespace(
         params={},
-        initial={"X": 1.0, "Y_1": 3.0, "Z_1": 2.0},
+        initials={X: 1.0, Y: 3.0, Z: 2.0},
         assignment_rules={},
         sim_t_start=None,
         sim_t_end=None,
@@ -2135,13 +2135,13 @@ def _make_assignment_rule_state_numerical_harness():
     harness.recast_state_vars = [X, A]
     harness.mapping = {X: X}
     harness.orig_ir = SimpleNamespace(
-        initial={"X": 1.0},
+        initials={X: 1.0},
         sim_t_start=None,
         sim_t_end=None,
     )
     harness.recast_ir = SimpleNamespace(
         params={},
-        initial={"X": 1.0, "A": 2.0},
+        initials={X: 1.0, A: 2.0},
         assignment_rules={"A": "X + 1"},
         sim_t_start=None,
         sim_t_end=None,
@@ -2164,13 +2164,13 @@ def _make_assignment_rule_auxiliary_numerical_harness():
     harness.recast_state_vars = [X, Y]
     harness.mapping = {X: X}
     harness.orig_ir = SimpleNamespace(
-        initial={"X": 1.0},
+        initials={X: 1.0},
         sim_t_start=None,
         sim_t_end=None,
     )
     harness.recast_ir = SimpleNamespace(
         params={"l": 0.0},
-        initial={"X": 1.0, "Y_1": 3.0},
+        initials={X: 1.0, Y: 3.0},
         assignment_rules={"l": "2"},
         sim_t_start=None,
         sim_t_end=None,
@@ -2196,13 +2196,13 @@ def _make_jax_auxiliary_harness():
     harness.recast_state_vars = [X, T, Y]
     harness.mapping = {X: X}
     harness.orig_ir = SimpleNamespace(
-        initial={"X": 1.0},
+        initials={X: 1.0},
         sim_t_start=None,
         sim_t_end=None,
     )
     harness.recast_ir = SimpleNamespace(
         params={"k": 0.5, "u": 0.25},
-        initial={"X": 1.0, "T": 1.0, "Y_1": 2.0},
+        initials={X: 1.0, T: 1.0, Y: 2.0},
         sim_t_start=None,
         sim_t_end=None,
     )
@@ -2324,13 +2324,13 @@ class TestNumericalValidationMixinDirect:
         harness.recast_state_vars = [Z, Y]
         harness.mapping = {X: Z}
         harness.orig_ir = SimpleNamespace(
-            initial={"X": 1.0},
+            initials={X: 1.0},
             sim_t_start=None,
             sim_t_end=None,
         )
         harness.recast_ir = SimpleNamespace(
             params={"k": 0.5},
-            initial={"Z": 1.0, "Y": 1.0},
+            initials={Z: 1.0, Y: 1.0},
             sim_t_start=None,
             sim_t_end=None,
         )
@@ -2345,7 +2345,8 @@ class TestNumericalValidationMixinDirect:
 
     def test_numerical_pointwise_expands_domain_from_model_initials(self):
         harness = _make_numerical_harness()
-        harness.recast_ir.initial["Z"] = 100.0
+        Z = harness.recast_state_vars[0]
+        harness.recast_ir.initials[Z] = 100.0
 
         result = harness.check_numerical_pointwise(n_samples=2, threshold=1.0e-10)
 
@@ -2421,13 +2422,13 @@ class TestNumericalValidationMixinDirect:
         harness.recast_state_vars = [X]
         harness.mapping = {X: X}
         harness.orig_ir = SimpleNamespace(
-            initial={"X": 1.0},
+            initials={X: 1.0},
             sim_t_start=None,
             sim_t_end=None,
         )
         harness.recast_ir = SimpleNamespace(
             params={"k": 1.0, "Time": 0.0},
-            initial={"X": 1.0},
+            initials={X: 1.0},
             sim_t_start=None,
             sim_t_end=None,
         )
@@ -2454,13 +2455,13 @@ class TestNumericalValidationMixinDirect:
         harness.recast_state_vars = [X]
         harness.mapping = {X: X}
         harness.orig_ir = SimpleNamespace(
-            initial={"X": 1.0},
+            initials={X: 1.0},
             sim_t_start=None,
             sim_t_end=None,
         )
         harness.recast_ir = SimpleNamespace(
             params={"k": 1.0, "t": 0.0},
-            initial={"X": 1.0},
+            initials={X: 1.0},
             assignment_rules={"X0": "sin(t)"},
             sim_t_start=None,
             sim_t_end=None,
@@ -2488,13 +2489,13 @@ class TestNumericalValidationMixinDirect:
         harness.mapping = {X: X}
         harness.orig_ir = SimpleNamespace(
             params={"t": 2.0},
-            initial={"X": 1.0},
+            initials={X: 1.0},
             sim_t_start=None,
             sim_t_end=None,
         )
         harness.recast_ir = SimpleNamespace(
             params={"t": 2.0},
-            initial={"X": 1.0},
+            initials={X: 1.0},
             assignment_rules={},
             sim_t_start=None,
             sim_t_end=None,
@@ -2522,13 +2523,13 @@ class TestNumericalValidationMixinDirect:
         harness.mapping = {t: t}
         harness.orig_ir = SimpleNamespace(
             params={"k": 1.0},
-            initial={"t": 1.0},
+            initials={t: 1.0},
             sim_t_start=None,
             sim_t_end=None,
         )
         harness.recast_ir = SimpleNamespace(
             params={"k": 1.0, "t": 0.0},
-            initial={"t": 1.0},
+            initials={t: 1.0},
             assignment_rules={},
             sim_t_start=None,
             sim_t_end=None,
@@ -2648,13 +2649,13 @@ class TestNumericalValidationMixinDirect:
         harness.mapping = {T: T, X: X}
         harness.orig_ir = SimpleNamespace(
             params={"period": 24.0},
-            initial={"T": 1.0, "X": 1.0},
+            initials={T: 1.0, X: 1.0},
             sim_t_start=None,
             sim_t_end=None,
         )
         harness.recast_ir = SimpleNamespace(
             params={"period": 24.0},
-            initial={"T": 1.0, "X": 1.0, "A": 1.25},
+            initials={T: 1.0, X: 1.0, A: 1.25},
             assignment_rules={"A": "1 + sin(2 * pi * T / period)"},
             sim_t_start=None,
             sim_t_end=None,

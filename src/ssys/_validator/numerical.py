@@ -578,14 +578,13 @@ class NumericalValidationMixin(ValidatorState):
         for model in (getattr(self, "orig_ir", None), getattr(self, "recast_ir", None)):
             if model is None:
                 continue
-            for attr in ("initial", "initials"):
-                raw = getattr(model, attr, None)
-                if not isinstance(raw, dict):
-                    continue
-                for name, value in raw.items():
-                    number = _finite_float(value)
-                    if number is not None:
-                        values[str(name)] = number
+            raw = getattr(model, "initials", None)
+            if not isinstance(raw, dict):
+                continue
+            for name, value in raw.items():
+                number = _finite_float(value)
+                if number is not None:
+                    values[str(name)] = number
         return values
 
     def _simulation_time_range(self) -> dict[str, float | str]:
