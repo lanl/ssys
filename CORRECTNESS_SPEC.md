@@ -32,8 +32,7 @@ objects:
 
 | Object | Contract |
 | --- | --- |
-| `ModelIR` | Parsed Antimony/SBML model: species, parameters, reactions, rate rules, assignment rules, algebraic constraints, compartments, initial values, simulation metadata, and solver requirement. |
-| `SymSystem` | Symbolic ODE system over positive SymPy symbols with numeric parameters, initial conditions, optional assignment rules, algebraic constraints, and simulation metadata. |
+| `SymSystem` | Symbolic ODE system over positive SymPy symbols with numeric parameters, initial conditions, optional assignment rules, algebraic constraints, and simulation metadata. The single model type produced by the parser and consumed by recasting, validation, and the ODE/DAE backends. |
 | `RecastResult` | Generated recast model, including output status, S-system or GMA equations, generated state variables, initial values, `factor_map`, `auxiliary_defs`, assignment rules, algebraic constraints, solver requirement, and metadata. |
 | `ValidationReport` | Fail-closed validation evidence: generated-artifact roundtrip, parser check, mapping check, symbolic check, numerical pointwise check, trajectory check, algebraic residual check, auxiliary identity checks, solver requirements, and overall verdict. |
 

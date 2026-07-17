@@ -14,39 +14,6 @@ class SolverRequirement(Enum):
     DAE_REQUIRED = "dae_required"
 
 
-@dataclass
-class Reaction:
-    name: str | None
-    lhs: list[tuple[int, str]]
-    rhs: list[tuple[int, str]]
-    rate_expr: str
-
-
-@dataclass
-class ModelIR:
-    species: set[str] = field(default_factory=set)
-    boundary: set[str] = field(default_factory=set)
-    params: dict[str, float] = field(default_factory=dict)
-    initial: dict[str, float] = field(default_factory=dict)
-    reactions: list[Reaction] = field(default_factory=list)
-    explicit_rates: dict[str, str] = field(default_factory=dict)
-    assignment_rules: dict[str, str] = field(default_factory=dict)
-    algebraic_constraints: list[str] = field(default_factory=list)
-    raw_lines: list[str] = field(default_factory=list)
-    param_exprs: dict[str, str] = field(default_factory=dict)
-    initial_exprs: dict[str, str] = field(default_factory=dict)
-    antimony_text: str = ""
-    compartments: dict[str, float] = field(default_factory=dict)
-    species_compartment: dict[str, str] = field(default_factory=dict)
-    sim_t_start: float | None = None
-    sim_t_end: float | None = None
-    sim_n_steps: int | None = None
-    eps_init: float | None = None
-    eps_slack: float | None = None
-    function_templates: dict[str, tuple[list[str], str]] = field(default_factory=dict)
-    solver_requirement: SolverRequirement = SolverRequirement.ODE_ONLY
-
-
 class SBMLParseError(ValueError):
     """Structured SBML math parse/evaluation error."""
 
@@ -167,8 +134,6 @@ class RecastResult:
 
 __all__ = [
     "GMAEquation",
-    "ModelIR",
-    "Reaction",
     "RecastResult",
     "RecastStatus",
     "SBMLParseError",

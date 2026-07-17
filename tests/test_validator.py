@@ -1643,8 +1643,8 @@ class TestSolverAwareValidation:
         Q = sp.Symbol("Q", positive=True)
         k = sp.Symbol("k", positive=True)
 
-        validator.orig_ir.initial = {}
-        validator.recast_ir.initial = {"Y": 7.0}
+        validator.orig_ir.initials = {}
+        validator.recast_ir.initials = {Y: 7.0}
         validator.auxiliary_defs = {Z: X + k, W: sp.Symbol("missing")}
 
         y0 = validator._compute_recast_initial_conditions([X, Y, Z, W, Q], [X], {"k": 4.0})

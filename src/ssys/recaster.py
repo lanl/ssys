@@ -28,8 +28,6 @@ from ssys.metadata import (
 )
 from ssys.types import (
     GMAEquation,
-    ModelIR,
-    Reaction,
     RecastResult,
     RecastStatus,
     SBMLParseError,

@@ -716,9 +716,7 @@ def load_and_report(
 
     # Simulate original model (RoadRunner backend reads sym.antimony_text and
     # re-simulates the original Antimony → SBML, interpreting volume correctly).
-    # The backend duck-types on antimony_text/initials, so a SymSystem is accepted
-    # in place of a ModelIR here (same seam the validator crosses).
-    result_orig = simulate_ode(sym, T_start, T, steps + 1)  # type: ignore[arg-type]
+    result_orig = simulate_ode(sym, T_start, T, steps + 1)
     if not result_orig["success"]:
         display(
             Markdown(
@@ -736,7 +734,7 @@ def load_and_report(
     # Simulate the recast system. rec_sym was parsed via SBML above; it carries
     # rec_text as its cached Antimony source for the RoadRunner backend.
     rec_sym.antimony_text = rec_text
-    result_rec = simulate_ode(rec_sym, T_start, T, steps + 1)  # type: ignore[arg-type]
+    result_rec = simulate_ode(rec_sym, T_start, T, steps + 1)
     if not result_rec["success"]:
         display(
             Markdown(f"**❌ Recast simulation failed:** {result_rec['message']}")

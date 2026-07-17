@@ -2,6 +2,7 @@
 Tests for ODE solver backends.
 """
 
+import re
 import sys
 import types
 from types import SimpleNamespace
@@ -30,23 +31,74 @@ from ssys.ode_backends.roadrunner_backend import (
     _set_initial_conditions,
     simulate_with_roadrunner,
 )
-from ssys.recaster import ModelIR, SolverRequirement, parse_antimony_via_sbml
+from ssys.recaster import SolverRequirement, SymSystem, parse_antimony_via_sbml
+
+
+def _sympify_rate(expr, symbols):
+    """Sympify an ODE right-hand side with explicit symbol locals.
+
+    Passing locals keeps single-letter variable names such as ``S`` from
+    resolving to SymPy singletons (``sympy.S``), matching how the parser and the
+    backends build expressions.
+    """
+    if isinstance(expr, sp.Expr):
+        return expr
+    text = str(expr).replace("^", "**")
+    names = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", text))
+    locals_map = {name: symbols.get(name, sp.Symbol(name)) for name in names}
+    return sp.sympify(text, locals=locals_map)
+
+
+def _sym_system(
+    *,
+    state_vars=(),
+    params=None,
+    odes=None,
+    initials=None,
+    assignment_rules=None,
+    algebraic_constraints=(),
+    antimony_text="",
+    solver_requirement=SolverRequirement.ODE_ONLY,
+):
+    """Build a SymSystem fixture from convenient string-keyed inputs.
+
+    ``state_vars``/``odes``/``initials`` are given by variable name; symbols and
+    SymPy expressions are constructed here so the fixture mirrors what the parser
+    produces. ``odes`` values may be strings (``^`` is normalized to ``**``).
+    """
+    odes = dict(odes or {})
+    initials = dict(initials or {})
+    names = sorted(dict.fromkeys([*state_vars, *odes, *initials]))
+    symbols = {name: sp.Symbol(name) for name in names}
+    return SymSystem(
+        vars=list(symbols.values()),
+        params=dict(params or {}),
+        odes={symbols[name]: _sympify_rate(expr, symbols) for name, expr in odes.items()},
+        initials={symbols[name]: value for name, value in initials.items()},
+        assignment_rules=dict(assignment_rules or {}),
+        algebraic_constraints=list(algebraic_constraints),
+        antimony_text=antimony_text,
+        solver_requirement=solver_requirement,
+    )
 
 
 def test_roadrunner_backend_success_and_initial_condition_override(monkeypatch):
     """RoadRunner backend parses, simulates, and applies state IC overrides."""
-    model_ir = ModelIR()
-    model_ir.species = {"X"}
-    model_ir.explicit_rates = {"X": "-k*X"}
-    model_ir.params = {"k": 0.5}
-    model_ir.antimony_text = """
+    model_ir = _sym_system(
+        state_vars=["X"],
+        odes={"X": "-k*X"},
+        params={"k": 0.5},
+        antimony_text="""
         model test()
             species X;
             X' = -k*X;
             k = 0.5;
             X = 1;
         end
-    """
+    """,
+    )
+    # RoadRunner's IC setter tolerates string keys, non-species params, and tuple
+    # compartment metadata; keep that mix to exercise all three skip branches.
     model_ir.initials = {"X": 1.0, "k": 0.5, ("compartment", "cell"): 1.0}
 
     class FakeAntimony:
@@ -133,17 +185,18 @@ def test_roadrunner_backend_success_and_initial_condition_override(monkeypatch):
 
 def test_roadrunner_backend_non_cvode_records_initial_condition_warnings(monkeypatch, capsys):
     """Non-CVODE runs skip CVODE stats and still surface IC assignment warnings."""
-    model_ir = ModelIR()
-    model_ir.species = {"X"}
-    model_ir.explicit_rates = {"X": "-X"}
-    model_ir.antimony_text = """
+    model_ir = _sym_system(
+        state_vars=["X"],
+        odes={"X": "-X"},
+        initials={"X": 1.0},
+        antimony_text="""
         model test()
             species X;
             X' = -X;
             X = 1;
         end
-    """
-    model_ir.initials = {"X": 1.0}
+    """,
+    )
 
     class FakeAntimony:
         def clearPreviousLoads(self):
@@ -215,10 +268,9 @@ def test_roadrunner_backend_non_cvode_records_initial_condition_warnings(monkeyp
 
 def test_roadrunner_backend_reports_antimony_parser_failure(monkeypatch):
     """Antimony parser failures are returned as structured backend failures."""
-    model_ir = ModelIR()
-    model_ir.species = {"X"}
-    model_ir.explicit_rates = {"X": "-k*X"}
-    model_ir.antimony_text = "model bad("
+    model_ir = _sym_system(
+        state_vars=["X"], odes={"X": "-k*X"}, antimony_text="model bad("
+    )
 
     class FakeAntimony:
         def clearPreviousLoads(self):
@@ -251,7 +303,7 @@ def test_roadrunner_backend_reports_antimony_parser_failure(monkeypatch):
 
 def test_roadrunner_backend_reports_missing_antimony(monkeypatch):
     """Missing Antimony raises a clear dependency error after RoadRunner imports."""
-    model_ir = ModelIR()
+    model_ir = _sym_system()
     monkeypatch.setitem(sys.modules, "roadrunner", SimpleNamespace(RoadRunner=object))
     monkeypatch.setitem(sys.modules, "antimony", None)
 
@@ -270,8 +322,7 @@ def test_roadrunner_backend_reports_antimony_conversion_failures(
     monkeypatch, module_name, sbml, message
 ):
     """Empty module names and SBML conversion failures are structured backend failures."""
-    model_ir = ModelIR()
-    model_ir.antimony_text = "model test() end"
+    model_ir = _sym_system(antimony_text="model test() end")
 
     class FakeAntimony:
         def clearPreviousLoads(self):
@@ -304,14 +355,15 @@ def test_roadrunner_backend_reports_antimony_conversion_failures(
 
 def test_roadrunner_antimony_text_preprocessing_multiline_gamma_and_numeric_model():
     """RoadRunner preprocessing fixes numeric model names, continuations, and gamma constants."""
-    model_ir = ModelIR()
-    model_ir.antimony_text = """
+    model_ir = _sym_system(
+        antimony_text="""
 model 24_decay()
   X' = -k*X // keep the next term
        + gamma(1/2); // comment supplies semicolon
   k = 1;
 end
 """
+    )
 
     text = _get_antimony_text(model_ir)
 
@@ -321,26 +373,25 @@ end
 
 
 def test_roadrunner_reconstructs_antimony_when_cached_text_missing():
-    """ModelIR reconstruction includes species, parameters, reactions, and explicit rates."""
-    model_ir = ModelIR()
-    model_ir.species = {"S", "P"}
-    model_ir.params = {"k": 0.5}
-    model_ir.reactions = [SimpleNamespace(name="J0", lhs=[(1, "S")], rhs=[(1, "P")], rate_expr="k*S")]
-    model_ir.explicit_rates = {"S": "-k*S"}
+    """SymSystem reconstruction includes species, parameters, and rate rules."""
+    model_ir = _sym_system(
+        state_vars=["S", "P"],
+        params={"k": 0.5},
+        odes={"S": "-k*S"},
+    )
 
     text = _get_antimony_text(model_ir)
 
     assert "model recast_model()" in text
     assert "species S;" in text
+    assert "species P;" in text
     assert "k = 0.5;" in text
-    assert "J0: S -> P; k*S;" in text
-    assert "S' = -k*S;" in text
+    assert "S' = -S*k;" in text
 
 
 def test_roadrunner_initial_condition_warnings_cover_backend_failures():
     """Initial condition setup reports floating-species and assignment failures."""
-    model_ir = ModelIR()
-    model_ir.initials = {"X": 1.0}
+    model_ir = _sym_system(state_vars=["X"], initials={"X": 1.0})
 
     class FailingRoadRunner:
         def getFloatingSpeciesIds(self):
@@ -395,9 +446,7 @@ def test_roadrunner_gamma_rewrite_rejects_malformed_or_unsafe(expr):
 
 def test_simulate_ode_reports_missing_roadrunner_as_backend_failure(monkeypatch):
     """Missing RoadRunner is reported as a failed ODE backend, not an exception."""
-    model_ir = ModelIR()
-    model_ir.species = {"X"}
-    model_ir.explicit_rates = {"X": "-X"}
+    model_ir = _sym_system(state_vars=["X"], odes={"X": "-X"})
 
     monkeypatch.setitem(sys.modules, "roadrunner", None)
 
@@ -410,16 +459,10 @@ def test_simulate_ode_reports_missing_roadrunner_as_backend_failure(monkeypatch)
 
 def test_solver_requirement_inference_uses_metadata_then_model_structure():
     """Backend selection inference follows metadata, DAE, assignment, then ODE-only order."""
-    configured = ModelIR()
-    configured.solver_requirement = SolverRequirement.DAE_REQUIRED.value
-    algebraic = ModelIR()
-    algebraic.solver_requirement = None
-    algebraic.algebraic_constraints = ["X - 1"]
-    assigned = ModelIR()
-    assigned.solver_requirement = None
-    assigned.assignment_rules = {"Y": "X + 1"}
-    ode_only = ModelIR()
-    ode_only.solver_requirement = None
+    configured = _sym_system(solver_requirement=SolverRequirement.DAE_REQUIRED.value)
+    algebraic = _sym_system(solver_requirement=None, algebraic_constraints=["X - 1"])
+    assigned = _sym_system(solver_requirement=None, assignment_rules={"Y": "X + 1"})
+    ode_only = _sym_system(solver_requirement=None)
 
     assert _infer_solver_requirement(configured) == SolverRequirement.DAE_REQUIRED
     assert _infer_solver_requirement(algebraic) == SolverRequirement.DAE_REQUIRED
@@ -429,7 +472,7 @@ def test_solver_requirement_inference_uses_metadata_then_model_structure():
 
 def test_simulate_ode_passes_default_options_to_roadrunner(monkeypatch):
     """simulate_ode normalizes missing options and annotates successful ODE results."""
-    model_ir = ModelIR()
+    model_ir = _sym_system()
     captured = {}
 
     def fake_roadrunner(model, t0, t_end, n_points, y0_override, options):
@@ -470,7 +513,7 @@ def test_simulate_ode_passes_default_options_to_roadrunner(monkeypatch):
 def test_simulate_dae_rejects_unknown_backend():
     """Unknown DAE backend names are structured unsupported results."""
     result = simulate_dae(
-        ModelIR(),
+        _sym_system(),
         t0=0.0,
         t_end=1.0,
         n_points=2,
@@ -487,7 +530,7 @@ def test_simulate_dae_projection_reports_import_failure(monkeypatch):
     """Projection backend import failures are unsupported solver results."""
     monkeypatch.setitem(sys.modules, "ssys.ode_backends.dae_backend", None)
 
-    result = simulate_dae_projection(ModelIR(), t0=0.0, t_end=1.0, n_points=2)
+    result = simulate_dae_projection(_sym_system(), t0=0.0, t_end=1.0, n_points=2)
 
     assert result["success"] is False
     assert result["unsupported_solver_requirement"] is True
@@ -497,8 +540,7 @@ def test_simulate_dae_projection_reports_import_failure(monkeypatch):
 
 def test_simulate_model_explicit_ode_only_override_ignores_dae_metadata(monkeypatch):
     """An explicit ODE-only request overrides model-level DAE metadata."""
-    model_ir = ModelIR()
-    model_ir.algebraic_constraints = ["X - 1"]
+    model_ir = _sym_system(algebraic_constraints=["X - 1"])
 
     def fake_simulate_ode(*args, **kwargs):
         return {
@@ -528,9 +570,10 @@ def test_simulate_model_explicit_ode_only_override_ignores_dae_metadata(monkeypa
 
 def test_simulate_model_selects_assignment_rule_backend(monkeypatch):
     """ODE-with-assignment models use the ODE backend with explicit metadata."""
-    model_ir = ModelIR()
-    model_ir.solver_requirement = SolverRequirement.ODE_WITH_ASSIGNMENT_RULES
-    model_ir.assignment_rules = {"A": "S + 1"}
+    model_ir = _sym_system(
+        solver_requirement=SolverRequirement.ODE_WITH_ASSIGNMENT_RULES,
+        assignment_rules={"A": "S + 1"},
+    )
 
     def fake_simulate_ode(*args, **kwargs):
         return {
@@ -553,9 +596,10 @@ def test_simulate_model_selects_assignment_rule_backend(monkeypatch):
 
 def test_dae_required_without_ida_dependency_fails_unsupported(monkeypatch):
     """DAE-required models fail unsupported when optional IDA bindings are absent."""
-    model_ir = ModelIR()
-    model_ir.solver_requirement = SolverRequirement.DAE_REQUIRED
-    model_ir.algebraic_constraints = ["X - 1"]
+    model_ir = _sym_system(
+        solver_requirement=SolverRequirement.DAE_REQUIRED,
+        algebraic_constraints=["X - 1"],
+    )
 
     def missing_ida():
         raise IDASundialsUnavailable("scikit-SUNDAE is not installed. uv sync --extra dae")
@@ -576,9 +620,10 @@ def test_dae_required_without_ida_dependency_fails_unsupported(monkeypatch):
 
 def test_projection_backend_is_explicit_dae_fallback():
     """The projection backend remains available only when explicitly requested."""
-    model_ir = ModelIR()
-    model_ir.solver_requirement = SolverRequirement.DAE_REQUIRED
-    model_ir.algebraic_constraints = ["X - 1"]
+    model_ir = _sym_system(
+        solver_requirement=SolverRequirement.DAE_REQUIRED,
+        algebraic_constraints=["X - 1"],
+    )
 
     result = simulate_model(
         model_ir,
@@ -687,10 +732,10 @@ def test_dae_projection_projects_existing_and_new_variables():
 
 def test_dae_projection_skips_auxiliary_already_covered_by_assignment_rule(monkeypatch):
     """Assignment rules own duplicate auxiliary names during projection."""
-    model_ir = ModelIR()
-    model_ir.params = {}
-    model_ir.assignment_rules = {"Y": "X + 1"}
-    model_ir.solver_requirement = SolverRequirement.DAE_REQUIRED
+    model_ir = _sym_system(
+        assignment_rules={"Y": "X + 1"},
+        solver_requirement=SolverRequirement.DAE_REQUIRED,
+    )
 
     def fake_roadrunner(*args, **kwargs):
         return {
@@ -721,10 +766,11 @@ def test_dae_projection_skips_auxiliary_already_covered_by_assignment_rule(monke
 
 def test_dae_projection_applies_assignment_rules_and_auxiliary_defs(monkeypatch):
     """Projection backend records residuals for assignment and auxiliary definitions."""
-    model_ir = ModelIR()
-    model_ir.params = {"K": 1.0}
-    model_ir.assignment_rules = {"Y": "X + K"}
-    model_ir.solver_requirement = SolverRequirement.DAE_REQUIRED
+    model_ir = _sym_system(
+        params={"K": 1.0},
+        assignment_rules={"Y": "X + K"},
+        solver_requirement=SolverRequirement.DAE_REQUIRED,
+    )
 
     def fake_roadrunner(*args, **kwargs):
         return {
@@ -757,9 +803,10 @@ def test_dae_projection_applies_assignment_rules_and_auxiliary_defs(monkeypatch)
 
 def test_dae_projection_preserves_base_failure_metadata(monkeypatch):
     """Projection backend reclassifies base ODE failures without hiding diagnostics."""
-    model_ir = ModelIR()
-    model_ir.assignment_rules = {"Y": "X + 1"}
-    model_ir.solver_requirement = SolverRequirement.DAE_REQUIRED
+    model_ir = _sym_system(
+        assignment_rules={"Y": "X + 1"},
+        solver_requirement=SolverRequirement.DAE_REQUIRED,
+    )
 
     def fake_roadrunner(*args, **kwargs):
         return {
@@ -780,13 +827,14 @@ def test_dae_projection_preserves_base_failure_metadata(monkeypatch):
 
 def test_ida_backend_enforces_explicit_assignment_auxiliary(monkeypatch):
     """IDA residuals include explicit assignment auxiliaries as algebraic states."""
-    model_ir = ModelIR()
-    model_ir.species = {"X"}
-    model_ir.params = {"K": 1.0, "k": 0.5}
-    model_ir.initial = {"X": 1.0}
-    model_ir.explicit_rates = {"X": "-k*X"}
-    model_ir.assignment_rules = {"Y_1": "K + X"}
-    model_ir.solver_requirement = SolverRequirement.DAE_REQUIRED
+    model_ir = _sym_system(
+        state_vars=["X"],
+        params={"K": 1.0, "k": 0.5},
+        initials={"X": 1.0},
+        odes={"X": "-k*X"},
+        assignment_rules={"Y_1": "K + X"},
+        solver_requirement=SolverRequirement.DAE_REQUIRED,
+    )
 
     class FakeIDA:
         kwargs = {}
@@ -829,12 +877,13 @@ def test_ida_backend_enforces_explicit_assignment_auxiliary(monkeypatch):
 
 def test_ida_backend_enforces_ode_mode_lifted_auxiliary(monkeypatch):
     """ODE-mode lifted auxiliaries are treated as algebraic in IDA validation."""
-    model_ir = ModelIR()
-    model_ir.species = {"X", "Y_1"}
-    model_ir.params = {"K": 1.0}
-    model_ir.initial = {"X": 1.0, "Y_1": 2.0}
-    model_ir.explicit_rates = {"X": "-X/Y_1", "Y_1": "-X/Y_1"}
-    model_ir.solver_requirement = SolverRequirement.DAE_REQUIRED
+    model_ir = _sym_system(
+        state_vars=["X", "Y_1"],
+        params={"K": 1.0},
+        initials={"X": 1.0, "Y_1": 2.0},
+        odes={"X": "-X/Y_1", "Y_1": "-X/Y_1"},
+        solver_requirement=SolverRequirement.DAE_REQUIRED,
+    )
 
     class FakeIDA:
         kwargs = {}
@@ -877,12 +926,13 @@ def test_ida_backend_enforces_ode_mode_lifted_auxiliary(monkeypatch):
 
 def test_ida_backend_handles_implicit_algebraic_constraint(monkeypatch):
     """IDA residuals include implicit algebraic constraints for algebraic slots."""
-    model_ir = ModelIR()
-    model_ir.species = {"X", "Z"}
-    model_ir.initial = {"X": 1.0, "Z": 1.0}
-    model_ir.explicit_rates = {"X": "-X + Z"}
-    model_ir.algebraic_constraints = ["Z - X^2"]
-    model_ir.solver_requirement = SolverRequirement.DAE_REQUIRED
+    model_ir = _sym_system(
+        state_vars=["X", "Z"],
+        initials={"X": 1.0, "Z": 1.0},
+        odes={"X": "-X + Z"},
+        algebraic_constraints=["Z - X^2"],
+        solver_requirement=SolverRequirement.DAE_REQUIRED,
+    )
 
     class FakeIDA:
         kwargs = {}
@@ -921,13 +971,14 @@ def test_ida_backend_handles_implicit_algebraic_constraint(monkeypatch):
 
 def test_ida_backend_rejects_inconsistent_user_algebraic_ic(monkeypatch):
     """User-provided algebraic ICs fail closed unless explicit repair is requested."""
-    model_ir = ModelIR()
-    model_ir.species = {"X"}
-    model_ir.params = {"K": 1.0}
-    model_ir.initial = {"X": 1.0}
-    model_ir.explicit_rates = {"X": "-X"}
-    model_ir.assignment_rules = {"Y_1": "K + X"}
-    model_ir.solver_requirement = SolverRequirement.DAE_REQUIRED
+    model_ir = _sym_system(
+        state_vars=["X"],
+        params={"K": 1.0},
+        initials={"X": 1.0},
+        odes={"X": "-X"},
+        assignment_rules={"Y_1": "K + X"},
+        solver_requirement=SolverRequirement.DAE_REQUIRED,
+    )
 
     class FakeIDA:
         def __init__(self, *args, **kwargs):
@@ -958,13 +1009,14 @@ def test_ida_backend_rejects_inconsistent_user_algebraic_ic(monkeypatch):
 
 def test_ida_backend_repairs_user_algebraic_ic_when_requested(monkeypatch):
     """Explicit repair allows inconsistent assignment-rule IC overrides."""
-    model_ir = ModelIR()
-    model_ir.species = {"X"}
-    model_ir.params = {"K": 1.0}
-    model_ir.initial = {"X": 1.0}
-    model_ir.explicit_rates = {"X": "-X"}
-    model_ir.assignment_rules = {"Y_1": "K + X"}
-    model_ir.solver_requirement = SolverRequirement.DAE_REQUIRED
+    model_ir = _sym_system(
+        state_vars=["X"],
+        params={"K": 1.0},
+        initials={"X": 1.0},
+        odes={"X": "-X"},
+        assignment_rules={"Y_1": "K + X"},
+        solver_requirement=SolverRequirement.DAE_REQUIRED,
+    )
 
     class FakeIDA:
         y0 = None
@@ -1013,7 +1065,7 @@ def test_ida_private_helpers_cover_error_and_name_branches(monkeypatch):
     assert ida._sympify(sp.Symbol("X")) == sp.Symbol("X")
     assert ida._definition_mentions_state(object(), {"X"}) is True
 
-    model_ir = SimpleNamespace(vars=[sp.Symbol("A")], species={"B"})
+    model_ir = SimpleNamespace(vars=[sp.Symbol("A")])
     names = ida._model_variable_names(
         model_ir,
         {"C": "1"},
@@ -1023,11 +1075,10 @@ def test_ida_private_helpers_cover_error_and_name_branches(monkeypatch):
         {"k": 1.0},
     )
 
-    assert names == ["A", "B", "C", "D", "E", "F", "G", "H"]
+    assert names == ["A", "C", "D", "E", "F", "G", "H"]
 
     assert ida._ode_expressions(SimpleNamespace(odes={sp.Symbol("X"): "-X"})) == {"X": "-X"}
-    assert ida._ode_expressions(SimpleNamespace(explicit_rates={"Y": "1"})) == {"Y": "1"}
-    assert ida._ode_expressions(SimpleNamespace()) == {}
+    assert ida._ode_expressions(SimpleNamespace(odes={})) == {}
 
 
 def test_ida_binding_loader_reports_missing_and_unknown_version(monkeypatch):
@@ -1091,12 +1142,13 @@ def test_ida_implicit_slot_selection_branches():
 def test_ida_residual_system_helpers_cover_output_and_reconstructed_ydot():
     import ssys.ode_backends.ida_sundials_backend as ida
 
-    model_ir = ModelIR()
-    model_ir.species = {"X"}
-    model_ir.params = {"K": 1.0}
-    model_ir.initial = {"X": 1.0}
-    model_ir.explicit_rates = {"X": "-X"}
-    model_ir.assignment_rules = {"Y": "X + K"}
+    model_ir = _sym_system(
+        state_vars=["X"],
+        params={"K": 1.0},
+        initials={"X": 1.0},
+        odes={"X": "-X"},
+        assignment_rules={"Y": "X + K"},
+    )
 
     system = ida._build_residual_system(model_ir, None, {})
     residual = ida._make_sksundae_residual(system)
@@ -1114,7 +1166,7 @@ def test_ida_residual_system_helpers_cover_output_and_reconstructed_ydot():
     assert residuals["Y"] == pytest.approx(0.0)
 
     ode_only = ida._build_residual_system(
-        SimpleNamespace(species={"X"}, initial={"X": 1.0}, explicit_rates={"X": "-X"}),
+        _sym_system(state_vars=["X"], initials={"X": 1.0}, odes={"X": "-X"}),
         None,
         {},
     )
@@ -1181,7 +1233,7 @@ def test_ida_simulate_failure_paths_and_solver_options(monkeypatch):
             raise AssertionError("solver should not be constructed")
 
     monkeypatch.setattr(ida, "_load_ida_binding", lambda: binding_for(UnusedIDA))
-    unsupported = ida.simulate_with_ida_sundials(ModelIR(), 0.0, 1.0, 2)
+    unsupported = ida.simulate_with_ida_sundials(_sym_system(), 0.0, 1.0, 2)
 
     assert unsupported["success"] is False
     assert unsupported["unsupported_solver_requirement"] is True
@@ -1193,7 +1245,7 @@ def test_ida_simulate_failure_paths_and_solver_options(monkeypatch):
         raise RuntimeError("bad setup")
 
     monkeypatch.setattr(ida, "_build_residual_system", bad_setup)
-    setup_failed = ida.simulate_with_ida_sundials(ModelIR(), 0.0, 1.0, 2)
+    setup_failed = ida.simulate_with_ida_sundials(_sym_system(), 0.0, 1.0, 2)
 
     assert setup_failed["success"] is False
     assert setup_failed["unsupported_solver_requirement"] is False
@@ -1201,10 +1253,7 @@ def test_ida_simulate_failure_paths_and_solver_options(monkeypatch):
 
     monkeypatch.setattr(ida, "_build_residual_system", real_build_residual_system)
 
-    model_ir = ModelIR()
-    model_ir.species = {"X"}
-    model_ir.initial = {"X": 1.0}
-    model_ir.explicit_rates = {"X": "-X"}
+    model_ir = _sym_system(state_vars=["X"], initials={"X": 1.0}, odes={"X": "-X"})
 
     class FailingIDA:
         kwargs = {}

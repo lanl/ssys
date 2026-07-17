@@ -11,7 +11,7 @@ from typing import Any
 import numpy as np
 import sympy as sp
 
-from ..recaster import ModelIR, SolverRequirement
+from ..recaster import SolverRequirement, SymSystem
 
 _INSTALL_HINT = (
     "Install optional DAE dependencies with `uv sync --extra dae` "
@@ -186,7 +186,7 @@ def _append_unique(names: list[str], additions: list[str] | set[str]) -> None:
 
 
 def _model_variable_names(
-    model_ir: ModelIR,
+    model_ir: SymSystem,
     ode_exprs: dict[str, str | sp.Expr],
     assignment_rules: dict[str, str | sp.Expr],
     auxiliary_defs: dict[str, str | sp.Expr],
@@ -195,13 +195,11 @@ def _model_variable_names(
 ) -> list[str]:
     names: list[str] = []
 
-    vars_attr = getattr(model_ir, "vars", None)
-    if vars_attr:
-        _append_unique(names, [sym.name if hasattr(sym, "name") else str(sym) for sym in vars_attr])
-
-    species_attr = getattr(model_ir, "species", None)
-    if species_attr:
-        _append_unique(names, sorted(str(name) for name in species_attr))
+    if model_ir.vars:
+        _append_unique(
+            names,
+            [sym.name if hasattr(sym, "name") else str(sym) for sym in model_ir.vars],
+        )
 
     _append_unique(names, list(ode_exprs.keys()))
     _append_unique(names, list(assignment_rules.keys()))
@@ -217,30 +215,21 @@ def _model_variable_names(
     return names
 
 
-def _ode_expressions(model_ir: Any) -> dict[str, str | sp.Expr]:
-    odes = getattr(model_ir, "odes", None)
-    if odes:
-        return {
-            key.name if hasattr(key, "name") else str(key): expr
-            for key, expr in dict(odes).items()
-        }
-
-    explicit_rates = getattr(model_ir, "explicit_rates", None)
-    if explicit_rates:
-        return {str(key): expr for key, expr in dict(explicit_rates).items()}
-
-    return {}
-
-
-def _initial_values(model_ir: ModelIR) -> dict[str, float]:
-    raw_initials = getattr(model_ir, "initial", None) or getattr(model_ir, "initials", None) or {}
+def _ode_expressions(model_ir: SymSystem) -> dict[str, str | sp.Expr]:
     return {
-        key.name if hasattr(key, "name") else str(key): _as_float(value)
-        for key, value in dict(raw_initials).items()
+        key.name if hasattr(key, "name") else str(key): expr
+        for key, expr in dict(model_ir.odes or {}).items()
     }
 
 
-def _parameter_values(model_ir: ModelIR) -> dict[str, float]:
+def _initial_values(model_ir: SymSystem) -> dict[str, float]:
+    return {
+        key.name if hasattr(key, "name") else str(key): _as_float(value)
+        for key, value in dict(model_ir.initials or {}).items()
+    }
+
+
+def _parameter_values(model_ir: SymSystem) -> dict[str, float]:
     return {
         str(key): _as_float(value)
         for key, value in dict(getattr(model_ir, "params", {}) or {}).items()
@@ -355,7 +344,7 @@ def _initial_residuals(
 
 
 def _build_residual_system(
-    model_ir: ModelIR,
+    model_ir: SymSystem,
     y0_override: dict[str, float] | None,
     options: dict[str, Any],
 ) -> _ResidualSystem:
@@ -647,7 +636,7 @@ def _trajectory_algebraic_residuals(
 
 
 def simulate_with_ida_sundials(
-    model_ir: ModelIR,
+    model_ir: SymSystem,
     t0: float,
     t_end: float,
     n_points: int,

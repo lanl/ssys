@@ -484,7 +484,7 @@ class TrajectoryValidationMixin(ValidatorState):
         Compute initial conditions for recast model.
 
         Priority order:
-        1. Explicit initial conditions from recast file (recast_ir.initial)
+        1. Explicit initial conditions from recast file (recast SymSystem initials)
         2. For original variables: use original model ICs
         3. For auxiliaries: compute from definitions
         4. Fallback: 1.0
@@ -494,12 +494,16 @@ class TrajectoryValidationMixin(ValidatorState):
         y0 = {}
         orig_var_names = {str(v) for v in orig_vars}
 
+        # SymSystem.initials is keyed by SymPy symbols; use string-keyed views here.
+        orig_initial = {str(k): v for k, v in self.orig_ir.initials.items()}
+        recast_initial = {str(k): v for k, v in self.recast_ir.initials.items()}
+
         # Get original initial values
         orig_initials: dict[str, float] = {}
         for var in orig_vars:
             var_name = str(var)
-            if var_name in self.orig_ir.initial:  # type: ignore[attr-defined]
-                orig_initials[var_name] = self.orig_ir.initial[var_name]  # type: ignore[attr-defined]
+            if var_name in orig_initial:
+                orig_initials[var_name] = orig_initial[var_name]
             else:
                 orig_initials[var_name] = 1.0  # Default
 
@@ -508,8 +512,8 @@ class TrajectoryValidationMixin(ValidatorState):
 
             # PRIORITY 1: Check if recast file has explicit IC for this variable
             # This handles clock variables (T=0) and any other explicit ICs
-            if var_name in self.recast_ir.initial:  # type: ignore[attr-defined]
-                y0[var_name] = self.recast_ir.initial[var_name]  # type: ignore[attr-defined]
+            if var_name in recast_initial:
+                y0[var_name] = recast_initial[var_name]
             elif var_name in orig_var_names:
                 # PRIORITY 2: Original variable - use original IC
                 y0[var_name] = orig_initials.get(var_name, 1.0)

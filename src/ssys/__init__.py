@@ -20,7 +20,6 @@ from ssys.formatting import ssystem_to_antimony
 from ssys.parsing import parse_antimony_via_sbml, parse_sbml
 from ssys.recasting import canonicalize_aux_names, recast_to_ssystem
 from ssys.types import (
-    ModelIR,
     RecastResult,
     SBMLParseError,
     SolverRequirement,
@@ -40,7 +39,6 @@ __release_date__ = "2026-07-05"
 __release_maturity__ = "alpha"
 
 __all__ = [
-    "ModelIR",
     "SymSystem",
     "RecastResult",
     "SBMLParseError",

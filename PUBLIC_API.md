@@ -23,7 +23,6 @@ Import these from `ssys`:
 
 ### Data Types
 
-- `ModelIR`
 - `SymSystem`
 - `RecastResult`
 - `SBMLParseError`

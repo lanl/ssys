@@ -10,7 +10,8 @@ from typing import Any
 
 import numpy as np
 
-from ..recaster import ModelIR, expand_antimony_function_templates
+from ..recaster import expand_antimony_function_templates
+from ..types import SymSystem
 
 _GAMMA_BINOPS: dict[type[ast.operator], Callable[[float, float], float]] = {
     ast.Add: operator.add,
@@ -30,7 +31,7 @@ class _UnresolvedGammaArgument(ValueError):
 
 
 def simulate_with_roadrunner(
-    model_ir: ModelIR,
+    model_ir: SymSystem,
     t0: float,
     t_end: float,
     n_points: int,
@@ -41,7 +42,7 @@ def simulate_with_roadrunner(
     Simulate using libRoadRunner (CVODE integrator).
 
     Args:
-        model_ir: Model intermediate representation
+        model_ir: Parsed symbolic ODE system (SymSystem)
         t0: Start time
         t_end: End time
         n_points: Number of time points
@@ -185,9 +186,9 @@ def _expand_parametric_functions(text: str) -> str:
     return expand_antimony_function_templates(text)
 
 
-def _get_antimony_text(model_ir: ModelIR) -> str:
+def _get_antimony_text(model_ir: SymSystem) -> str:
     """
-    Get Antimony text from ModelIR.
+    Get Antimony text from a SymSystem.
 
     Prefers cached text if available, otherwise reconstructs.
     Applies fixes for Antimony/RoadRunner compatibility:
@@ -199,7 +200,7 @@ def _get_antimony_text(model_ir: ModelIR) -> str:
     import re
 
     # Check if antimony_text was cached during parsing
-    if hasattr(model_ir, "antimony_text") and model_ir.antimony_text:
+    if model_ir.antimony_text:
         text = model_ir.antimony_text
 
         # CRITICAL: Expand parametric functions FIRST, before other fixes
@@ -268,7 +269,7 @@ def _get_antimony_text(model_ir: ModelIR) -> str:
 
         return text
 
-    # Otherwise, reconstruct from IR
+    # Otherwise, reconstruct from the symbolic system
     return _reconstruct_antimony(model_ir)
 
 
@@ -366,21 +367,21 @@ def _eval_gamma_ast(node: ast.AST) -> float:
     raise ValueError(f"unsupported syntax {type(node).__name__}")
 
 
-def _reconstruct_antimony(model_ir: ModelIR) -> str:
+def _reconstruct_antimony(model_ir: SymSystem) -> str:
     """
-    Reconstruct Antimony text from ModelIR.
+    Reconstruct Antimony text from a SymSystem.
 
-    Note: This is a basic reconstruction. For production use,
-    consider caching the original Antimony text in ModelIR.
+    Note: This is a basic reconstruction from the symbolic ODEs. For production
+    use, prefer the Antimony text cached on the SymSystem during parsing.
     """
     lines = []
     lines.append("model recast_model()")
     lines.append("")
 
-    # Species
-    if model_ir.species:
+    # Species (state variables)
+    if model_ir.vars:
         lines.append("  // Species")
-        for species in model_ir.species:
+        for species in model_ir.vars:
             lines.append(f"  species {species};")
         lines.append("")
 
@@ -391,24 +392,11 @@ def _reconstruct_antimony(model_ir: ModelIR) -> str:
             lines.append(f"  {param} = {value};")
         lines.append("")
 
-    # Reactions
-    if model_ir.reactions:
-        lines.append("  // Reactions")
-        for rxn in model_ir.reactions:
-            # lhs and rhs are lists of (coeff, species_name) tuples
-            lhs_str = " + ".join(name for _coeff, name in rxn.lhs) if rxn.lhs else ""
-            rhs_str = " + ".join(name for _coeff, name in rxn.rhs) if rxn.rhs else ""
-            arrow = "->" if not lhs_str else "-> " if not rhs_str else " -> "
-            rxn_name = rxn.name if rxn.name else ""
-            rxn_prefix = f"{rxn_name}: " if rxn_name else ""
-            lines.append(f"  {rxn_prefix}{lhs_str}{arrow}{rhs_str}; {rxn.rate_expr};")
-        lines.append("")
-
-    # Explicit rate rules (ODEs)
-    if model_ir.explicit_rates:
+    # Rate rules (ODEs). SymPy renders `**`; Antimony uses `^`.
+    if model_ir.odes:
         lines.append("  // ODEs")
-        for species, rate_expr in model_ir.explicit_rates.items():
-            lines.append(f"  {species}' = {rate_expr};")
+        for species, rate_expr in model_ir.odes.items():
+            lines.append(f"  {species}' = {str(rate_expr).replace('**', '^')};")
         lines.append("")
 
     lines.append("end")
@@ -416,7 +404,7 @@ def _reconstruct_antimony(model_ir: ModelIR) -> str:
 
 
 def _set_initial_conditions(
-    r, model_ir: ModelIR, y0_override: dict[str, float] | None
+    r, model_ir: SymSystem, y0_override: dict[str, float] | None
 ) -> list[dict[str, str]]:
     """
     Set initial conditions in RoadRunner model.
@@ -444,7 +432,7 @@ def _set_initial_conditions(
         floating_species = None
 
     # Apply model_ir initials (only for floating species)
-    if hasattr(model_ir, "initials") and model_ir.initials:
+    if model_ir.initials:
         for species, value in model_ir.initials.items():
             # Skip tuple keys (compartment metadata like (compartment, plasma))
             if isinstance(species, tuple):

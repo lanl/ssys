@@ -203,50 +203,10 @@ class RecastValidator(
             progress_prefix="validator_parser_recast_sbml",
         )
 
-        # Create aliases for backward compatibility with code using orig_ir/recast_ir
-        # SymSystem has the same key attributes: params, assignment_rules
-        # Add compatibility attributes for ModelIR interface
-        _notify_progress(progress_callback, "validator_parser_compatibility_aliases")
+        # orig_ir/recast_ir name the parsed SymSystem objects consumed throughout the
+        # validation mixins and passed straight to the ODE/DAE backends.
         self.orig_ir = self.orig_system
         self.recast_ir = self.recast_system
-
-        # Add 'initial' alias for 'initials' (ModelIR uses 'initial', SymSystem uses 'initials')
-        if not hasattr(self.orig_ir, "initial"):
-            # Convert initials dict to have string keys for ModelIR compatibility
-            self.orig_ir.initial = {str(k): v for k, v in self.orig_system.initials.items()}  # type: ignore[attr-defined]
-        if not hasattr(self.recast_ir, "initial"):
-            self.recast_ir.initial = {str(k): v for k, v in self.recast_system.initials.items()}  # type: ignore[attr-defined]
-
-        # Add @SIM metadata compatibility (SymSystem doesn't have these by default)
-        if not hasattr(self.orig_ir, "sim_t_start"):
-            self.orig_ir.sim_t_start = None
-        if not hasattr(self.orig_ir, "sim_t_end"):
-            self.orig_ir.sim_t_end = None
-        if not hasattr(self.orig_ir, "sim_n_steps"):
-            self.orig_ir.sim_n_steps = None
-
-        # Add 'species' alias for 'vars' (ModelIR uses 'species', SymSystem uses 'vars')
-        if not hasattr(self.orig_ir, "species"):
-            self.orig_ir.species = [str(v) for v in self.orig_system.vars]  # type: ignore[attr-defined]
-        if not hasattr(self.recast_ir, "species"):
-            self.recast_ir.species = [str(v) for v in self.recast_system.vars]  # type: ignore[attr-defined]
-
-        # Add 'reactions' attribute (SymSystem uses ODEs directly, no reactions)
-        if not hasattr(self.orig_ir, "reactions"):
-            self.orig_ir.reactions = []  # type: ignore[attr-defined]
-        if not hasattr(self.recast_ir, "reactions"):
-            self.recast_ir.reactions = []  # type: ignore[attr-defined]
-
-        # Add 'explicit_rates' alias for 'odes' (for roadrunner backend)
-        # Convert Python ** to Antimony ^ for exponentiation
-        if not hasattr(self.orig_ir, "explicit_rates"):
-            self.orig_ir.explicit_rates = {  # type: ignore[attr-defined]
-                str(k): str(v).replace("**", "^") for k, v in self.orig_system.odes.items()
-            }
-        if not hasattr(self.recast_ir, "explicit_rates"):
-            self.recast_ir.explicit_rates = {  # type: ignore[attr-defined]
-                str(k): str(v).replace("**", "^") for k, v in self.recast_system.odes.items()
-            }
 
         # Extract ODE dictionaries
         _notify_progress(progress_callback, "validator_parser_solver_requirement")

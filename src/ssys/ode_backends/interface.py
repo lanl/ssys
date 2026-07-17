@@ -12,10 +12,10 @@ from typing import Any
 import numpy as np
 
 from ssys.metadata import normalize_solver_requirement
-from ssys.types import ModelIR, SolverRequirement
+from ssys.types import SolverRequirement, SymSystem
 
 
-def _infer_solver_requirement(model_ir: ModelIR) -> SolverRequirement:
+def _infer_solver_requirement(model_ir: SymSystem) -> SolverRequirement:
     configured = normalize_solver_requirement(getattr(model_ir, "solver_requirement", None))
     if configured is not None:
         return configured
@@ -56,7 +56,7 @@ def _failure_result(
 
 
 def simulate_ode(
-    model_ir: ModelIR,
+    model_ir: SymSystem,
     t0: float,
     t_end: float,
     n_points: int,
@@ -107,7 +107,7 @@ def simulate_ode(
 
 
 def simulate_dae(
-    model_ir: ModelIR,
+    model_ir: SymSystem,
     t0: float,
     t_end: float,
     n_points: int,
@@ -151,7 +151,7 @@ def simulate_dae(
 
 
 def simulate_dae_projection(
-    model_ir: ModelIR,
+    model_ir: SymSystem,
     t0: float,
     t_end: float,
     n_points: int,
@@ -177,7 +177,7 @@ def simulate_dae_projection(
 
 
 def simulate_model(
-    model_ir: ModelIR,
+    model_ir: SymSystem,
     t0: float,
     t_end: float,
     n_points: int,

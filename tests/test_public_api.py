@@ -11,7 +11,6 @@ import ssys
 from ssys.cli import main
 
 STABLE_TOP_LEVEL_NAMES = {
-    "ModelIR",
     "SymSystem",
     "RecastResult",
     "SBMLParseError",

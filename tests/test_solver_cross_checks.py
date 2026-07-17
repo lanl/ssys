@@ -7,10 +7,11 @@ from importlib.util import find_spec
 
 import numpy as np
 import pytest
+import sympy as sp
 from numpy.testing import assert_allclose
 
 from ssys.ode_backends import simulate_model
-from ssys.types import ModelIR, SolverRequirement
+from ssys.types import SolverRequirement, SymSystem
 
 
 def _require_solver_crosscheck_dependencies() -> None:
@@ -30,44 +31,47 @@ def _require_solver_crosscheck_dependencies() -> None:
     pytest.skip(message)
 
 
-def _ode_reference_model() -> ModelIR:
-    model = ModelIR()
-    model.species = {"X"}
-    model.params = {"k": 0.3}
-    model.initial = {"X": 2.0}
-    model.explicit_rates = {"X": "-k*X"}
-    model.solver_requirement = SolverRequirement.ODE_ONLY
-    model.antimony_text = """
+def _ode_reference_model() -> SymSystem:
+    x, k = sp.symbols("X k")
+    return SymSystem(
+        vars=[x],
+        params={"k": 0.3},
+        odes={x: -k * x},
+        initials={x: 2.0},
+        solver_requirement=SolverRequirement.ODE_ONLY,
+        antimony_text="""
         model ode_reference()
           species X;
           X' = -k*X;
           k = 0.3;
           X = 2.0;
         end
-    """
-    return model
+    """,
+    )
 
 
-def _assignment_dae_model() -> ModelIR:
-    model = ModelIR()
-    model.species = {"X"}
-    model.params = {"k": 0.3}
-    model.initial = {"X": 2.0}
-    model.explicit_rates = {"X": "-k*X"}
-    model.assignment_rules = {"Y": "X"}
-    model.solver_requirement = SolverRequirement.DAE_REQUIRED
-    return model
+def _assignment_dae_model() -> SymSystem:
+    x, k = sp.symbols("X k")
+    return SymSystem(
+        vars=[x],
+        params={"k": 0.3},
+        odes={x: -k * x},
+        initials={x: 2.0},
+        assignment_rules={"Y": "X"},
+        solver_requirement=SolverRequirement.DAE_REQUIRED,
+    )
 
 
-def _implicit_constraint_dae_model() -> ModelIR:
-    model = ModelIR()
-    model.species = {"X", "Y"}
-    model.params = {"k": 0.3}
-    model.initial = {"X": 2.0, "Y": 2.0}
-    model.explicit_rates = {"X": "-k*X"}
-    model.algebraic_constraints = ["Y - X"]
-    model.solver_requirement = SolverRequirement.DAE_REQUIRED
-    return model
+def _implicit_constraint_dae_model() -> SymSystem:
+    x, y, k = sp.symbols("X Y k")
+    return SymSystem(
+        vars=[x, y],
+        params={"k": 0.3},
+        odes={x: -k * x},
+        initials={x: 2.0, y: 2.0},
+        algebraic_constraints=["Y - X"],
+        solver_requirement=SolverRequirement.DAE_REQUIRED,
+    )
 
 
 def _state_column(result: dict, name: str) -> np.ndarray:

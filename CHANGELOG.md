@@ -15,6 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lacks. The SBML-first parser (`ssys.parse_antimony_via_sbml`), the default every
   code path already used, is now the only Antimony parser. This removes public API
   symbols, so it releases as a minor version bump (0.7.0).
+- **Breaking:** Removed the now-unused `ModelIR` and `Reaction` dataclasses
+  (`ssys.ModelIR`, `ssys.types.ModelIR`/`Reaction`, and their `ssys.recaster`
+  re-exports). After the legacy parser was removed nothing produced a `ModelIR`:
+  `parse_antimony_via_sbml` returns a `SymSystem`, which is the only model type
+  the ODE/DAE backends ever received at runtime. The `ssys.ode_backends`
+  signatures now annotate `SymSystem` and read its native attributes
+  (`vars`/`odes`/`initials`) directly, and the validator no longer bolts
+  `ModelIR`-style compatibility aliases onto the parsed `SymSystem`. Removing the
+  public `ssys.ModelIR` symbol rides along with the 0.7.0 minor bump.
 
 ### Changed
 - `ssys.parse_antimony_via_sbml` is now exported from the top-level `ssys`

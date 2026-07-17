@@ -145,10 +145,10 @@ The hand-rolled Antimony parser (`parse_antimony()`, `build_sym_system()`) and
 the `--parser` flag have been removed (see CHANGELOG). The SBML-first parser
 (`parse_antimony_via_sbml`) is now the only Antimony parser.
 
-**Follow-up:** `ModelIR` and `Reaction` are still defined in `ssys.types` and
-used as duck-typed annotations across `ssys.ode_backends` (which actually
-receive a `SymSystem`). Retiring those types is a separate refactor of the
-backend signatures.
+**Follow-up (done):** `ModelIR` and `Reaction` have been retired (see CHANGELOG).
+The `ssys.ode_backends` signatures now annotate `SymSystem` and read its native
+attributes (`vars`/`odes`/`initials`) directly, and the validator no longer bolts
+`ModelIR`-style compatibility aliases onto the parsed `SymSystem`.
 
 ---
 

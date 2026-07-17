@@ -14,7 +14,7 @@ from typing import Any
 import numpy as np
 import sympy as sp
 
-from ..recaster import ModelIR, SolverRequirement
+from ..recaster import SolverRequirement, SymSystem
 from .roadrunner_backend import simulate_with_roadrunner
 
 
@@ -124,7 +124,7 @@ def _project_variable(
 
 
 def simulate_with_dae_projection(
-    model_ir: ModelIR,
+    model_ir: SymSystem,
     t0: float,
     t_end: float,
     n_points: int,

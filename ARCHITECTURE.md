@@ -5,7 +5,7 @@ describes current implementation boundaries, not a future hosted service.
 
 ## Top-Level Flow
 
-1. Input Antimony or SBML is parsed into `ModelIR` or directly into `SymSystem`.
+1. Input Antimony or SBML is parsed directly into `SymSystem`.
 2. `SymSystem` stores symbolic state variables, parameters, ODEs, initial
    values, assignment rules, algebraic constraints, compartments, simulation
    metadata, and solver requirements.
@@ -50,8 +50,8 @@ Unsupported input ownership:
 
 Core data types live in `src/ssys/types.py`.
 
-- `ModelIR`: parsed textual model information before full symbolic assembly.
-- `SymSystem`: symbolic ODE model used by recasting and validation.
+- `SymSystem`: symbolic ODE model used by recasting and validation; the single
+  model type produced by the parser and consumed by the ODE/DAE backends.
 - `RecastResult`: generated recast model plus mapping and solver metadata.
 - `SystemClass`: user-facing model classification.
 - `SolverRequirement`: numerical backend class required for simulation or
