@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`test_models4/Bergman1989.ant` now implements Bergman's minimal model (GH #9).**
+  The glucose equation was `G' = -(p_1 + X)*(G - G_b)`, which makes `G_b` an
+  attractor regardless of insulin. It is now `G' = -(p_1 + X)*G + p_1*G_b`, so
+  remote insulin action acts on `G` itself, as in Bergman (1989). Header comments
+  and the combined `all_test_models.ant` / `all_recast_models.ant` artifacts are
+  updated to match.
+
 ## [0.7.0] - 2026-07-16
 
 ### Release Policy

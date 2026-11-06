@@ -4706,10 +4706,11 @@ end
 //   G_b   : basal glucose
 //   I_b   : basal insulin
 //
-//   dG/dt = - (p_1 + X) * (G - G_b)
+//   dG/dt = - (p_1 + X) * G + p_1 * G_b
 //   dX/dt = - p_2 * X + p_3 * (I - I_b)
-//   (classic Bergman minimal model form; I(t) is treated as
-//    measured input in the original work)
+//   (Bergman minimal model; remote insulin action X acts on G
+//    itself, so high insulin can drive G below G_b. I(t) is
+//    treated as measured input in the original work)
 //
 // Parameters chosen here:
 //   p_1 = S_G = 0.021 min^-1 (mean glucose effectiveness in humans)
@@ -4722,7 +4723,7 @@ end
 //
 // Initial conditions used here:
 //   G(0) = 180 mg/dL   (IV glucose bolus; ~90 mg/dL above basal)
-//   X(0) = 0 min^-1    (no initial remote insulin effect)
+//   X(0) = 0.01 min^-1 (small initial remote insulin effect)
 //   I(0) = I_b          (start at basal insulin)
 //
 // Note:
@@ -4752,8 +4753,8 @@ model Bergman1989_MinimalGlucoseModel
   const p_3 = 1.25e-5;
 
   // ODEs
-  // Glucose dynamics: deviation from basal (G - G_b)
-  G' = - (p_1 + X) * (G - G_b);
+  // Glucose dynamics: production p_1*G_b, uptake (p_1 + X)*G
+  G' = - (p_1 + X) * G + p_1 * G_b;
 
   // Remote insulin effect dynamics
   X' = - p_2 * X + p_3 * (I - I_b);
